@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -127,7 +128,7 @@ class RosImagePreviewWorker(QObject):
 
             def on_image(msg: Image) -> None:
                 now = time.time()
-                if now - self._last_emit_at < 0.1:
+                if now - self._last_emit_at < 0.2:
                     return
                 self._last_emit_at = now
                 frame = self._image_to_rgb(msg)
@@ -328,29 +329,42 @@ class InspectorPage(QWidget):
         self.ctx = ctx
         self.topic = QComboBox()
         self.topic.setEditable(True)
+        self.image_topic = QComboBox()
+        self.image_topic.setEditable(True)
         self.node = QComboBox()
         self.node.setEditable(True)
         self.type_label = QLabel("type: -")
+        self.image_type_label = QLabel("image type: -")
         self.preview_status = QLabel("preview: stopped")
         self._topic_types: dict[str, str] = {}
+        self._inspector_processes: dict[str, str] = {}
         self._preview_thread: QThread | None = None
         self._preview_worker: RosImagePreviewWorker | None = None
         refresh_choices = QPushButton("Refresh from Discovery")
-        node_info = QPushButton("Start node info")
-        echo = QPushButton("Start topic echo")
-        hz = QPushButton("Start topic hz")
-        preview = QPushButton("Start image preview")
+        start_node_info = QPushButton("Start node info")
+        stop_node_info = QPushButton("Stop node info")
+        start_echo = QPushButton("Start topic echo")
+        stop_echo = QPushButton("Stop topic echo")
+        start_hz = QPushButton("Start topic hz")
+        stop_hz = QPushButton("Stop topic hz")
+        start_preview = QPushButton("Start image preview")
         stop_preview = QPushButton("Stop image preview")
         refresh_choices.clicked.connect(self.refresh_choices)
-        node_info.clicked.connect(self.start_node_info)
-        echo.clicked.connect(lambda: self.start_probe("echo"))
-        hz.clicked.connect(lambda: self.start_probe("hz"))
-        preview.clicked.connect(self.start_image_preview)
+        start_node_info.clicked.connect(self.start_node_info)
+        stop_node_info.clicked.connect(lambda: self.stop_inspector_process("node_info"))
+        start_echo.clicked.connect(lambda: self.start_probe("echo"))
+        stop_echo.clicked.connect(lambda: self.stop_inspector_process("echo"))
+        start_hz.clicked.connect(lambda: self.start_probe("hz"))
+        stop_hz.clicked.connect(lambda: self.stop_inspector_process("hz"))
+        start_preview.clicked.connect(self.start_image_preview)
         stop_preview.clicked.connect(self.stop_image_preview)
         self.topic.currentTextChanged.connect(self.update_topic_type)
+        self.image_topic.currentTextChanged.connect(self.update_image_topic_type)
         self.node.currentTextChanged.connect(self.update_selected_node)
-        self.output = QPlainTextEdit()
-        self.output.setReadOnly(True)
+        self.node_log = self._terminal()
+        self.echo_log = self._terminal()
+        self.hz_log = self._terminal()
+        self.preview_log = self._terminal()
         self.preview = ImagePreviewLabel()
         self.preview.sampled.connect(self.update_sample)
         self.sample = QLabel("sample: x=- y=- rgb=(-, -, -)")
@@ -364,14 +378,25 @@ class InspectorPage(QWidget):
         layout.addWidget(QLabel("Topic"))
         layout.addWidget(self.topic)
         layout.addWidget(self.type_label)
-        row = QHBoxLayout()
-        row.addWidget(node_info)
-        row.addWidget(echo)
-        row.addWidget(hz)
-        row.addWidget(preview)
-        row.addWidget(stop_preview)
-        layout.addLayout(row)
-        layout.addWidget(QLabel("Probe output is tracked in Process page."))
+        layout.addWidget(QLabel("Image topic"))
+        layout.addWidget(self.image_topic)
+        layout.addWidget(self.image_type_label)
+        node_row = QHBoxLayout()
+        node_row.addWidget(start_node_info)
+        node_row.addWidget(stop_node_info)
+        echo_row = QHBoxLayout()
+        echo_row.addWidget(start_echo)
+        echo_row.addWidget(stop_echo)
+        hz_row = QHBoxLayout()
+        hz_row.addWidget(start_hz)
+        hz_row.addWidget(stop_hz)
+        preview_buttons = QHBoxLayout()
+        preview_buttons.addWidget(start_preview)
+        preview_buttons.addWidget(stop_preview)
+        layout.addLayout(node_row)
+        layout.addLayout(echo_row)
+        layout.addLayout(hz_row)
+        layout.addLayout(preview_buttons)
         preview_row = QHBoxLayout()
         preview_row.addWidget(self.preview, 3)
         info_col = QVBoxLayout()
@@ -382,35 +407,57 @@ class InspectorPage(QWidget):
         info_col.addStretch(1)
         preview_row.addLayout(info_col, 1)
         layout.addLayout(preview_row)
-        layout.addWidget(self.output)
+        terminals = QTabWidget()
+        terminals.addTab(self.node_log, "Node Info")
+        terminals.addTab(self.echo_log, "Topic Echo")
+        terminals.addTab(self.hz_log, "Topic Hz")
+        terminals.addTab(self.preview_log, "Preview Log")
+        layout.addWidget(terminals)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh_output)
         self.timer.start(1000)
         self.refresh_choices()
 
+    def _terminal(self) -> QPlainTextEdit:
+        terminal = QPlainTextEdit()
+        terminal.setReadOnly(True)
+        terminal.setMaximumBlockCount(1200)
+        return terminal
+
     def start_probe(self, mode: str) -> None:
         topic = self._selected_topic_name()
         if not topic:
             return
+        self.stop_inspector_process(mode)
         command = ["ros2", "topic", mode, topic]
-        if mode == "echo":
-            command = ["ros2", "topic", "echo", topic, "--once"]
-        self.ctx.process_manager.start(command, f"topic_{mode}", "InspectorPage")
+        record = self.ctx.process_manager.start(command, f"topic_{mode}", "InspectorPage")
+        self._inspector_processes[mode] = record.process_id
+        self._append_log(mode, f"$ {record.command_text()}")
 
     def start_node_info(self) -> None:
         node = self.node.currentText().strip()
         if not node:
             return
-        self.ctx.process_manager.start(["ros2", "node", "info", node], "node_info", "InspectorPage")
+        self.stop_inspector_process("node_info")
+        record = self.ctx.process_manager.start(["ros2", "node", "info", node], "node_info", "InspectorPage")
+        self._inspector_processes["node_info"] = record.process_id
+        self._append_log("node_info", f"$ {record.command_text()}")
+
+    def stop_inspector_process(self, role: str) -> None:
+        process_id = self._inspector_processes.pop(role, None)
+        if process_id:
+            self.ctx.process_manager.stop(process_id)
+            self._append_log(role, f"[stopped] {process_id}")
 
     def refresh_output(self) -> None:
-        lines: list[str] = []
-        for record in self.ctx.process_manager.records():
-            if record.owner_page == "InspectorPage":
-                lines.append(f"{record.process_id} [{record.status}] {record.command_text()}")
-                lines.extend(record.stdout_tail[-8:])
-                lines.extend(record.stderr_tail[-4:])
-        self.output.setPlainText("\n".join(lines))
+        records = {record.process_id: record for record in self.ctx.process_manager.records()}
+        for role, process_id in list(self._inspector_processes.items()):
+            record = records.get(process_id)
+            if not record:
+                continue
+            self._set_log(role, self._format_record(record))
+            if record.status in {"exited", "failed"}:
+                self._inspector_processes.pop(role, None)
 
     def refresh_choices(self) -> None:
         if not self.ctx.last_graph.get("topics") and not self.ctx.last_graph.get("nodes"):
@@ -422,11 +469,16 @@ class InspectorPage(QWidget):
         self.topic.blockSignals(True)
         self.node.clear()
         self.topic.clear()
+        self.image_topic.clear()
         self.node.addItems([node.get("name", "") for node in self.ctx.last_graph.get("nodes", [])])
+        image_topics: list[dict[str, str]] = []
         for topic in self.ctx.last_graph.get("topics", []):
             name = topic.get("name", "")
             typ = topic.get("type", "")
             self.topic.addItem(f"{name} [{typ}]" if typ else name, name)
+            if typ == "sensor_msgs/msg/Image":
+                image_topics.append(topic)
+                self.image_topic.addItem(f"{name} [{typ}]", name)
         if selected_node:
             index = self.node.findText(selected_node)
             if index >= 0:
@@ -439,9 +491,15 @@ class InspectorPage(QWidget):
                 self.topic.setCurrentIndex(index)
             else:
                 self.topic.setEditText(selected_topic)
+            image_index = self.image_topic.findData(selected_topic)
+            if image_index >= 0:
+                self.image_topic.setCurrentIndex(image_index)
+        elif image_topics:
+            self.image_topic.setCurrentIndex(0)
         self.node.blockSignals(False)
         self.topic.blockSignals(False)
         self.update_topic_type(self.topic.currentText())
+        self.update_image_topic_type(self.image_topic.currentText())
 
     def _selected_topic_name(self) -> str:
         data = self.topic.currentData()
@@ -457,13 +515,25 @@ class InspectorPage(QWidget):
         if topic:
             self.ctx.state.selected_streams = [{"name": topic, "type": typ}]
 
+    def _selected_image_topic_name(self) -> str:
+        data = self.image_topic.currentData()
+        current_text = self.image_topic.currentText().strip()
+        if data and self.image_topic.currentIndex() >= 0 and current_text == self.image_topic.itemText(self.image_topic.currentIndex()):
+            return str(data)
+        return current_text.split(" [", 1)[0].strip()
+
+    def update_image_topic_type(self, _text: str) -> None:
+        topic = self._selected_image_topic_name()
+        typ = self._topic_types.get(topic, "")
+        self.image_type_label.setText(f"image type: {typ or '-'}")
+
     def update_selected_node(self, text: str) -> None:
         node = text.strip()
         if node:
             self.ctx.state.selected_nodes = [node]
 
     def start_image_preview(self) -> None:
-        topic = self._selected_topic_name()
+        topic = self._selected_image_topic_name()
         topic_type = self._topic_types.get(topic, "")
         if not topic:
             return
@@ -479,11 +549,13 @@ class InspectorPage(QWidget):
         self._preview_thread.started.connect(self._preview_worker.run)
         self._preview_worker.frame_ready.connect(self.update_preview_frame)
         self._preview_worker.status_changed.connect(self.preview_status.setText)
+        self._preview_worker.status_changed.connect(lambda text: self._append_log("preview", text))
         self._preview_worker.finished.connect(self._preview_thread.quit)
         self._preview_worker.finished.connect(self._preview_worker.deleteLater)
         self._preview_thread.finished.connect(self._preview_thread.deleteLater)
         self._preview_thread.finished.connect(self._preview_finished)
         self._preview_thread.start()
+        self._append_log("preview", f"$ subscribe {topic}")
 
     def stop_image_preview(self) -> None:
         if self._preview_worker is not None:
@@ -494,6 +566,7 @@ class InspectorPage(QWidget):
         self._preview_worker = None
         self._preview_thread = None
         self.preview_status.setText("preview: stopped")
+        self._append_log("preview", "[stopped] image preview")
 
     def _preview_finished(self) -> None:
         self._preview_worker = None
@@ -515,8 +588,42 @@ class InspectorPage(QWidget):
     def update_sample(self, x: int, y: int, r: int, g: int, b: int) -> None:
         self.sample.setText(f"sample: x={x} y={y} rgb=({r}, {g}, {b})")
 
-    def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
+    def _format_record(self, record: ProcessRecord) -> str:
+        lines = [
+            f"$ {record.command_text()}",
+            f"[{record.status}] pid={record.pid or '-'} id={record.process_id}",
+            "",
+            *record.stdout_tail,
+        ]
+        if record.stderr_tail:
+            lines.extend(["", "stderr:", *record.stderr_tail])
+        return "\n".join(lines)
+
+    def _log_widget(self, role: str) -> QPlainTextEdit:
+        return {
+            "node_info": self.node_log,
+            "echo": self.echo_log,
+            "hz": self.hz_log,
+            "preview": self.preview_log,
+        }[role]
+
+    def _set_log(self, role: str, text: str) -> None:
+        widget = self._log_widget(role)
+        widget.setPlainText(text)
+        widget.verticalScrollBar().setValue(widget.verticalScrollBar().maximum())
+
+    def _append_log(self, role: str, text: str) -> None:
+        widget = self._log_widget(role)
+        widget.appendPlainText(text)
+        widget.verticalScrollBar().setValue(widget.verticalScrollBar().maximum())
+
+    def stop_all_inspector_tasks(self) -> None:
+        for role in list(self._inspector_processes):
+            self.stop_inspector_process(role)
         self.stop_image_preview()
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        self.stop_all_inspector_tasks()
         super().closeEvent(event)
 
 

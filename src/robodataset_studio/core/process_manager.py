@@ -6,6 +6,7 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable
+from datetime import datetime
 
 from .models import ProcessRecord, now_id
 
@@ -69,7 +70,7 @@ class ProcessManager:
         record = self._records.get(process_id)
         if record:
             record.status = "exited" if return_code == 0 else "failed"
-            record.ended_at = record.ended_at or __import__("datetime").datetime.now()
+            record.ended_at = record.ended_at or datetime.now()
         self._notify()
 
     def stop(self, process_id: str, timeout_sec: float = 3.0) -> None:
@@ -85,16 +86,25 @@ class ProcessManager:
         self._notify()
         try:
             os.killpg(proc.pid, signal.SIGINT)
-            deadline = time.time() + timeout_sec
-            while time.time() < deadline and proc.poll() is None:
-                time.sleep(0.05)
+            self._wait_for_exit(proc, timeout_sec)
             if proc.poll() is None:
                 os.killpg(proc.pid, signal.SIGTERM)
+                self._wait_for_exit(proc, timeout_sec)
+            if proc.poll() is None:
+                os.killpg(proc.pid, signal.SIGKILL)
+                self._wait_for_exit(proc, 1.0)
         except ProcessLookupError:
             pass
+        if record:
+            record.ended_at = record.ended_at or datetime.now()
+            record.status = "exited" if proc.poll() == 0 else "stopped"
         self._notify()
 
     def stop_all(self) -> None:
         for process_id in list(self._processes):
             self.stop(process_id)
 
+    def _wait_for_exit(self, proc: subprocess.Popen[str], timeout_sec: float) -> None:
+        deadline = time.time() + timeout_sec
+        while time.time() < deadline and proc.poll() is None:
+            time.sleep(0.05)

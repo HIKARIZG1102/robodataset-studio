@@ -339,7 +339,11 @@ RoboDataset Studio
 - topic echo。
 - topic hz。
 - node info。
+- node info、topic echo、topic hz、preview log 必须分开显示为独立终端式面板，实时滚动，不混在同一个输出框。
+- 每个 Start 操作必须有对应 Stop 操作。
+- Stop 后需要安全退出对应 ROS2 CLI / worker，不残留多余进程。
 - `sensor_msgs/msg/Image` 实时 image viewer。
+- 图像预览只能默认列出 `sensor_msgs/msg/Image` topic，避免误选 `/parameter_events` 这类非图像 topic。
 - 常见图像 encoding 预览：`rgb8`、`bgr8`、`rgba8`、`bgra8`、`mono8`、`mono16`。
 - 鼠标采样图像坐标和 RGB 值。
 - depth viewer。

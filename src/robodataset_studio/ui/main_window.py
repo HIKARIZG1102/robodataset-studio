@@ -34,6 +34,7 @@ class MainWindow(QMainWindow):
         self.resize(1280, 820)
         self.ctx = AppContext()
         self._tool_windows: list[QMainWindow] = []
+        self.inspector_page: InspectorPage | None = None
 
         self.nav = QListWidget()
         self.stack = QStackedWidget()
@@ -68,10 +69,11 @@ class MainWindow(QMainWindow):
 
     def _config_workspace(self) -> QTabWidget:
         tabs = QTabWidget()
+        self.inspector_page = InspectorPage(self.ctx)
         tabs.addTab(ProjectPage(self.ctx), "Project")
         tabs.addTab(EnvironmentPage(self.ctx), "Environment")
         tabs.addTab(DiscoveryPage(self.ctx), "Discovery")
-        tabs.addTab(InspectorPage(self.ctx), "Inspector")
+        tabs.addTab(self.inspector_page, "Inspector")
         tabs.addTab(ConfigPage(self.ctx), "Config")
         return tabs
 
@@ -100,5 +102,7 @@ class MainWindow(QMainWindow):
         window.show()
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if self.inspector_page is not None:
+            self.inspector_page.stop_all_inspector_tasks()
         self.ctx.process_manager.stop_all()
         super().closeEvent(event)
