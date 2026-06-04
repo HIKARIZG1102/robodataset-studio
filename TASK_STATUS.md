@@ -1,6 +1,6 @@
 # RoboDataset Studio Task Status
 
-更新时间：2026-06-05 05:45 Asia/Shanghai
+更新时间：2026-06-05 06:04 Asia/Shanghai
 
 ## 当前任务清单
 
@@ -32,6 +32,7 @@
 - [x] Inspector 拆分 Node Info / Topic Echo / Topic Hz / Preview Log 终端面板，并为每个 Start 增加 Stop 和安全退出。
 - [x] Inspector 图像预览增加播放 FPS、暂停冻结真实帧和基于真实帧的亮度/RGB/曝光风险统计；日志面板上限调整为 2000 行。
 - [x] 修复 image preview 使用固定 ROS node 名导致旧订阅残留/误判的问题，Preview Log 增加真实 frame 计数、encoding、size。
+- [x] Image preview 改为 latest-frame single-slot buffer，自动显示真实 width/height/encoding/step/FPS，并扩展深度图 encoding 显示。
 - [ ] 创建或连接 GitHub 仓库并推送阶段成果。
 
 ## 已完成项目
@@ -62,6 +63,7 @@
 - Inspector 图像预览改为专用 image topic 下拉框，只列出 `sensor_msgs/msg/Image`，避免误选 `/parameter_events` 等非图像 topic；ProcessManager 停止流程增强为 SIGINT -> SIGTERM -> SIGKILL。
 - Inspector 暂停后的 Frame Stats 明确只展示从当前真实图像像素检测出的统计，不伪造 `sensor_msgs/Image` 未提供的曝光时间或白平衡增益。
 - 当前项目外真实摄像头测试节点：`/real_usb_camera_node` 发布 `/usb_camera/image_raw [sensor_msgs/msg/Image]`，encoding=`rgb8`，size=`640x480`，实测约 9-11 FPS；Qt worker 已验证可收到真实帧。
+- 已验证 Inspector UI display loop 可以实时显示真实相机帧：`640x480 rgb8 step=1920`，4.5 秒内显示序列推进到 37，QLabel pixmap 非空。
 - 已再次运行 `.venv/bin/python -m compileall src` 和 PySide6 offscreen 主窗口检查，均通过。
 
 ## 遇到的问题

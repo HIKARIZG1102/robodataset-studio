@@ -343,6 +343,8 @@ RoboDataset Studio
 - 每个 Start 操作必须有对应 Stop 操作。
 - Stop 后需要安全退出对应 ROS2 CLI / worker，不残留多余进程。
 - `sensor_msgs/msg/Image` 实时 image viewer，预览显示必须来自当前真实 ROS image topic 最新帧。
+- 预览 buffer 必须采用 latest-frame single-slot 策略：订阅线程只保留最新帧，UI 定时器只显示最新帧，不排队积压大图。
+- Display 应自动适配 ROS image message 的 width、height、encoding、step 和实际接收 FPS，并在侧栏显示这些真实检测到的特征。
 - 每次启动 image preview 应创建唯一 ROS preview node 名称，避免旧订阅节点残留导致用户误判当前预览状态。
 - Preview Log 应实时显示实际收到的 frame 计数、encoding 和 size，便于确认显示的是当前真实相机流。
 - 预览应支持播放 FPS 设置，并根据已观测到的相机 ROS topic 最大接收 FPS 自动抬高最小播放 FPS。
@@ -350,6 +352,7 @@ RoboDataset Studio
 - 暂停时显示基于当前真实帧像素计算的亮度 / 欠曝 / 过曝 / RGB 均值 / 3x3 亮度分布。除非 ROS topic 或相机 metadata 明确提供，不允许伪造曝光时间、白平衡增益等相机参数。
 - 图像预览只能默认列出 `sensor_msgs/msg/Image` topic，避免误选 `/parameter_events` 这类非图像 topic。
 - 常见图像 encoding 预览：`rgb8`、`bgr8`、`rgba8`、`bgra8`、`mono8`、`mono16`。
+- 深度图像应支持 `16UC1` / `32FC1` 等 encoding 的归一化灰度显示，后续可升级为伪彩色。
 - 鼠标采样图像坐标和 RGB 值。
 - depth viewer。
 - lidar/event/tactile renderer。

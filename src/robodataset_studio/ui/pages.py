@@ -101,8 +101,7 @@ class ImagePreviewLabel(QLabel):
 
 
 class RosImagePreviewWorker(QObject):
-    frame_ready = Signal(object)
-    frame_received = Signal(object)
+    frame_tick = Signal()
     status_changed = Signal(str)
     finished = Signal()
 
@@ -112,6 +111,8 @@ class RosImagePreviewWorker(QObject):
         self._running = True
         self._received = 0
         self._last_status_at = 0.0
+        self.latest_frame: np.ndarray | None = None
+        self.latest_meta: dict[str, object] = {}
 
     @Slot()
     def run(self) -> None:
@@ -134,8 +135,15 @@ class RosImagePreviewWorker(QObject):
                 frame = self._image_to_rgb(msg)
                 if frame is not None:
                     self._received += 1
-                    self.frame_received.emit(frame)
-                    self.frame_ready.emit(frame)
+                    self.latest_frame = frame
+                    self.latest_meta = {
+                        "encoding": msg.encoding,
+                        "width": int(msg.width),
+                        "height": int(msg.height),
+                        "step": int(msg.step),
+                        "received": self._received,
+                    }
+                    self.frame_tick.emit()
                     now = time.time()
                     if now - self._last_status_at >= 1.0:
                         self._last_status_at = now
@@ -192,10 +200,22 @@ class RosImagePreviewWorker(QObject):
         if encoding in {"mono8", "8uc1"}:
             gray = rows[:, :width].reshape((height, width)).copy()
             return np.repeat(gray[:, :, None], 3, axis=2)
-        if encoding in {"mono16", "16uc1"}:
+        if encoding in {"mono16", "16uc1", "16uc1; compresseddepth"}:
             depth = np.frombuffer(bytes(msg.data), dtype=np.uint16).reshape((height, step // 2))[:, :width]
             max_value = int(depth.max()) or 1
             gray = np.clip(depth.astype(np.float32) * 255.0 / max_value, 0, 255).astype(np.uint8)
+            return np.repeat(gray[:, :, None], 3, axis=2)
+        if encoding in {"32fc1"}:
+            depth = np.frombuffer(bytes(msg.data), dtype=np.float32).reshape((height, step // 4))[:, :width]
+            finite = depth[np.isfinite(depth)]
+            if finite.size == 0:
+                return np.zeros((height, width, 3), dtype=np.uint8)
+            low = float(np.percentile(finite, 1))
+            high = float(np.percentile(finite, 99))
+            if high <= low:
+                high = low + 1.0
+            gray = np.clip((depth - low) * 255.0 / (high - low), 0, 255)
+            gray = np.nan_to_num(gray, nan=0.0, posinf=255.0, neginf=0.0).astype(np.uint8)
             return np.repeat(gray[:, :, None], 3, axis=2)
         self.status_changed.emit(f"unsupported encoding: {msg.encoding}")
         return None
@@ -344,6 +364,7 @@ class InspectorPage(QWidget):
         self.type_label = QLabel("type: -")
         self.image_type_label = QLabel("image type: -")
         self.preview_status = QLabel("preview: stopped")
+        self.image_meta = QLabel("image: -")
         self._topic_types: dict[str, str] = {}
         self._inspector_processes: dict[str, str] = {}
         self._preview_thread: QThread | None = None
@@ -393,6 +414,9 @@ class InspectorPage(QWidget):
         self._max_camera_fps = 0.0
         self.playback_fps.setMinimum(1)
         self._latest_frame: np.ndarray | None = None
+        self._latest_meta: dict[str, object] = {}
+        self._latest_sequence = 0
+        self._displayed_sequence = -1
         self._paused_frame: np.ndarray | None = None
         self._preview_paused = False
         layout = QVBoxLayout(self)
@@ -428,6 +452,7 @@ class InspectorPage(QWidget):
         info_col = QVBoxLayout()
         info_col.addWidget(QLabel("Image Topic Preview"))
         info_col.addWidget(self.preview_status)
+        info_col.addWidget(self.image_meta)
         info_col.addWidget(self.fps)
         info_col.addWidget(self.camera_fps)
         info_col.addWidget(self.sample)
@@ -581,7 +606,7 @@ class InspectorPage(QWidget):
         self._preview_worker = RosImagePreviewWorker(topic)
         self._preview_worker.moveToThread(self._preview_thread)
         self._preview_thread.started.connect(self._preview_worker.run)
-        self._preview_worker.frame_ready.connect(self.store_preview_frame)
+        self._preview_worker.frame_tick.connect(self.store_preview_frame)
         self._preview_worker.status_changed.connect(self.preview_status.setText)
         self._preview_worker.status_changed.connect(lambda text: self._append_log("preview", text))
         self._preview_worker.finished.connect(self._preview_thread.quit)
@@ -589,6 +614,9 @@ class InspectorPage(QWidget):
         self._preview_thread.finished.connect(self._preview_thread.deleteLater)
         self._preview_thread.finished.connect(self._preview_finished)
         self._latest_frame = None
+        self._latest_meta = {}
+        self._latest_sequence = 0
+        self._displayed_sequence = -1
         self._paused_frame = None
         self._preview_paused = False
         self.pause_preview_button.setText("Pause preview")
@@ -614,10 +642,13 @@ class InspectorPage(QWidget):
         if self.preview_status.text().startswith("subscribed"):
             self.preview_status.setText("preview: stopped")
 
-    def store_preview_frame(self, frame: object) -> None:
-        if not isinstance(frame, np.ndarray):
+    def store_preview_frame(self) -> None:
+        if self._preview_worker is None or self._preview_worker.latest_frame is None:
             return
+        frame = self._preview_worker.latest_frame
         self._latest_frame = frame
+        self._latest_meta = dict(self._preview_worker.latest_meta)
+        self._latest_sequence += 1
         self._received_frames += 1
         now = time.time()
         if now - self._last_camera_fps_at >= 1.0:
@@ -629,6 +660,12 @@ class InspectorPage(QWidget):
             if self.playback_fps.value() < minimum_playback_fps:
                 self.playback_fps.setValue(minimum_playback_fps)
             self.camera_fps.setText(f"camera fps: {observed_fps:.1f} max: {self._max_camera_fps:.1f}")
+            if self._latest_meta:
+                self.image_meta.setText(
+                    "image: "
+                    f"{self._latest_meta.get('width')}x{self._latest_meta.get('height')} "
+                    f"encoding={self._latest_meta.get('encoding')} step={self._latest_meta.get('step')}"
+                )
             self._received_frames = 0
             self._last_camera_fps_at = now
 
@@ -637,7 +674,10 @@ class InspectorPage(QWidget):
             return
         if self._latest_frame is None:
             return
+        if self._displayed_sequence == self._latest_sequence:
+            return
         self.update_preview_frame(self._latest_frame)
+        self._displayed_sequence = self._latest_sequence
 
     def update_preview_frame(self, frame: np.ndarray) -> None:
         self.preview.set_frame(frame)
