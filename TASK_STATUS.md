@@ -1,6 +1,6 @@
 # RoboDataset Studio Task Status
 
-更新时间：2026-06-05 06:28 Asia/Shanghai
+更新时间：2026-06-05 06:52 Asia/Shanghai
 
 ## 当前任务清单
 
@@ -34,6 +34,7 @@
 - [x] 修复 image preview 使用固定 ROS node 名导致旧订阅残留/误判的问题，Preview Log 增加真实 frame 计数、encoding、size。
 - [x] Image preview 改为 latest-frame single-slot buffer，自动显示真实 width/height/encoding/step/FPS，并扩展深度图 encoding 显示。
 - [x] Image preview 改为 RViz 风格 pull-based latest-frame 渲染：订阅线程不按帧发 Qt signal，Stop 后清空 worker/UI buffer 和 pixmap。
+- [x] Image preview 显示面板改为 paintEvent 自绘 QImage，Stop/close 时断开 worker signal，降低闪退和 QLabel pixmap 缓存问题。
 - [ ] 创建或连接 GitHub 仓库并推送阶段成果。
 
 ## 已完成项目
@@ -66,6 +67,7 @@
 - 当前项目外真实摄像头测试节点：`/real_usb_camera_node` 发布 `/usb_camera/image_raw [sensor_msgs/msg/Image]`，encoding=`rgb8`，size=`640x480`，实测约 9-11 FPS；Qt worker 已验证可收到真实帧。
 - 已验证 Inspector UI display loop 可以实时显示真实相机帧：`640x480 rgb8 step=1920`，4.5 秒内显示序列推进到 37，QLabel pixmap 非空。
 - 已验证 pull-based 预览：真实相机帧可显示，Stop 后 `_latest_frame`、display sequence 和 pixmap 均清空。
+- 已验证自绘 preview loop：真实相机显示序列可推进，Stop 后 preview widget frame 清空；额外验证 stop cleanup 后 worker/thread/latest frame 均为空。
 - 已再次运行 `.venv/bin/python -m compileall src` 和 PySide6 offscreen 主窗口检查，均通过。
 
 ## 遇到的问题

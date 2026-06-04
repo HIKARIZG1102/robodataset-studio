@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import numpy as np
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
-from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtGui import QImage, QPainter
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -68,37 +68,51 @@ class AppContext:
         return any(path.exists() for path in self.state.conversion_outputs) or (self.state.merged_dir / "calvin.hdf5").exists()
 
 
-class ImagePreviewLabel(QLabel):
+class ImagePreviewWidget(QWidget):
     sampled = Signal(int, int, int, int, int)
 
     def __init__(self) -> None:
         super().__init__()
         self.setMinimumSize(448, 448)
-        self.setAlignment(Qt.AlignCenter)
         self.setMouseTracking(True)
         self._frame: np.ndarray | None = None
-        self._display_size = (448, 448)
+        self._image: QImage | None = None
+        self._target_rect = None
 
     def set_frame(self, frame: np.ndarray) -> None:
         self._frame = frame
         h, w, _ = frame.shape
         image = QImage(frame.data, w, h, 3 * w, QImage.Format_RGB888)
-        pixmap = QPixmap.fromImage(image).scaled(self.width(), self.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        self._display_size = (pixmap.width(), pixmap.height())
-        self.setPixmap(pixmap)
+        self._image = image.copy()
+        self.update()
 
     def clear_frame(self) -> None:
         self._frame = None
-        self._display_size = (0, 0)
-        self.setPixmap(QPixmap())
+        self._image = None
+        self._target_rect = None
+        self.update()
+
+    def has_frame(self) -> bool:
+        return self._image is not None and not self._image.isNull()
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt API
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), Qt.black)
+        if self._image is None or self._image.isNull():
+            painter.end()
+            return
+        scaled = self._image.scaled(self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        x = int((self.width() - scaled.width()) / 2)
+        y = int((self.height() - scaled.height()) / 2)
+        self._target_rect = (x, y, scaled.width(), scaled.height())
+        painter.drawImage(x, y, scaled)
+        painter.end()
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt API
-        if self._frame is None or self.pixmap() is None:
+        if self._frame is None or self._target_rect is None:
             return
         frame_h, frame_w, _ = self._frame.shape
-        pix_w, pix_h = self._display_size
-        x0 = (self.width() - pix_w) / 2
-        y0 = (self.height() - pix_h) / 2
+        x0, y0, pix_w, pix_h = self._target_rect
         px = int((event.position().x() - x0) * frame_w / max(pix_w, 1))
         py = int((event.position().y() - y0) * frame_h / max(pix_h, 1))
         if 0 <= px < frame_w and 0 <= py < frame_h:
@@ -417,7 +431,7 @@ class InspectorPage(QWidget):
         self.hz_log = self._terminal()
         self.preview_log = self._terminal()
         self.frame_stats = self._terminal()
-        self.preview = ImagePreviewLabel()
+        self.preview = ImagePreviewWidget()
         self.preview.sampled.connect(self.update_sample)
         self.sample = QLabel("sample: x=- y=- rgb=(-, -, -)")
         self.fps = QLabel("preview fps: 0.0")
@@ -646,6 +660,10 @@ class InspectorPage(QWidget):
     def stop_image_preview(self) -> None:
         if self._preview_worker is not None:
             self._preview_worker.stop()
+            try:
+                self._preview_worker.status_changed.disconnect()
+            except Exception:
+                pass
         if self._preview_thread is not None:
             self._preview_thread.quit()
             self._preview_thread.wait(1500)
