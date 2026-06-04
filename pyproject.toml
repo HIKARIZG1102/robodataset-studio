@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "robodataset-studio"
+version = "0.1.0"
+description = "PySide6 desktop workbench for ROS2 robot dataset collection, review, conversion, and upload."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "PySide6>=6.6",
+  "numpy>=1.24",
+  "h5py>=3.8",
+  "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+upload = ["paramiko>=3.4", "huggingface_hub>=0.23"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+robodataset-studio = "robodataset_studio.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+

@@ -1,0 +1,16 @@
+.git_local/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+raw_sessions/
+merged_calvin/
+*.npz
+*.hdf5
+*.h5
+
