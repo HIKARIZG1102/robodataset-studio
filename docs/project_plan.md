@@ -344,6 +344,7 @@ RoboDataset Studio
 - Stop 后需要安全退出对应 ROS2 CLI / worker，不残留多余进程。
 - `sensor_msgs/msg/Image` 实时 image viewer，预览显示必须来自当前真实 ROS image topic 最新帧。
 - 预览 buffer 必须采用 latest-frame single-slot 策略：订阅线程只保留最新帧，UI 定时器主动拉取并显示最新帧，不按帧发送 Qt signal，不排队积压大图。
+- ROS image callback 不应做昂贵的 RGB/depth 转换；回调只保存最新 raw bytes 和 metadata，UI display timer 在需要显示时转换最新帧。
 - 停止预览或关闭页面时必须清空 worker latest frame、UI latest frame、paused frame 和显示 pixmap。
 - 图像显示面板应使用自绘 `paintEvent` 或等价机制绘制最新 `QImage`，不要依赖 `QLabel.setPixmap()` 作为高频视频刷新核心。
 - Stop / close 时应先停止 worker，再断开 worker 到 UI 的 signal，避免关闭窗口后异步 signal 访问已销毁控件。

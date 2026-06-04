@@ -131,7 +131,7 @@ class RosImagePreviewWorker(QObject):
         self._lock = threading.Lock()
         self._received = 0
         self._last_status_at = 0.0
-        self.latest_frame: np.ndarray | None = None
+        self.latest_data: bytes | None = None
         self.latest_meta: dict[str, object] = {}
 
     @Slot()
@@ -152,24 +152,22 @@ class RosImagePreviewWorker(QObject):
             executor.add_node(node)
 
             def on_image(msg: Image) -> None:
-                frame = self._image_to_rgb(msg)
-                if frame is not None:
-                    with self._lock:
-                        self._received += 1
-                        self.latest_frame = frame
-                        self.latest_meta = {
-                            "encoding": msg.encoding,
-                            "width": int(msg.width),
-                            "height": int(msg.height),
-                            "step": int(msg.step),
-                            "received": self._received,
-                        }
-                    now = time.time()
-                    if now - self._last_status_at >= 1.0:
-                        self._last_status_at = now
-                        self.status_changed.emit(
-                            f"receiving: {self.topic} frames={self.frames_received()} encoding={msg.encoding} size={msg.width}x{msg.height}"
-                        )
+                with self._lock:
+                    self._received += 1
+                    self.latest_data = bytes(msg.data)
+                    self.latest_meta = {
+                        "encoding": msg.encoding,
+                        "width": int(msg.width),
+                        "height": int(msg.height),
+                        "step": int(msg.step),
+                        "received": self._received,
+                    }
+                now = time.time()
+                if now - self._last_status_at >= 1.0:
+                    self._last_status_at = now
+                    self.status_changed.emit(
+                        f"receiving: {self.topic} frames={self.frames_received()} encoding={msg.encoding} size={msg.width}x{msg.height}"
+                    )
 
             node.create_subscription(Image, self.topic, on_image, qos_profile_sensor_data)
             self.status_changed.emit(f"subscribed: {self.topic}")
@@ -199,9 +197,9 @@ class RosImagePreviewWorker(QObject):
         self._running = False
         self.clear_buffer()
 
-    def snapshot(self) -> tuple[np.ndarray | None, dict[str, object]]:
+    def snapshot(self) -> tuple[bytes | None, dict[str, object]]:
         with self._lock:
-            return self.latest_frame, dict(self.latest_meta)
+            return self.latest_data, dict(self.latest_meta)
 
     def frames_received(self) -> int:
         with self._lock:
@@ -209,15 +207,16 @@ class RosImagePreviewWorker(QObject):
 
     def clear_buffer(self) -> None:
         with self._lock:
-            self.latest_frame = None
+            self.latest_data = None
             self.latest_meta = {}
 
-    def _image_to_rgb(self, msg) -> np.ndarray | None:
-        encoding = msg.encoding.lower()
-        height = int(msg.height)
-        width = int(msg.width)
-        step = int(msg.step)
-        raw = np.frombuffer(bytes(msg.data), dtype=np.uint8)
+    @staticmethod
+    def image_bytes_to_rgb(data: bytes, meta: dict[str, object]) -> np.ndarray | None:
+        encoding = str(meta.get("encoding", "")).lower()
+        height = int(meta.get("height", 0) or 0)
+        width = int(meta.get("width", 0) or 0)
+        step = int(meta.get("step", 0) or 0)
+        raw = np.frombuffer(data, dtype=np.uint8)
         if height <= 0 or width <= 0 or step <= 0:
             return None
         rows = raw.reshape((height, step))
@@ -251,7 +250,6 @@ class RosImagePreviewWorker(QObject):
             gray = np.clip((depth - low) * 255.0 / (high - low), 0, 255)
             gray = np.nan_to_num(gray, nan=0.0, posinf=255.0, neginf=0.0).astype(np.uint8)
             return np.repeat(gray[:, :, None], 3, axis=2)
-        self.status_changed.emit(f"unsupported encoding: {msg.encoding}")
         return None
 
 
@@ -438,7 +436,7 @@ class InspectorPage(QWidget):
         self.camera_fps = QLabel("camera fps: 0.0")
         self.playback_fps = QSpinBox()
         self.playback_fps.setRange(1, 480)
-        self.playback_fps.setValue(30)
+        self.playback_fps.setValue(10)
         self.playback_fps.setSuffix(" fps")
         self.playback_fps.valueChanged.connect(self.update_playback_timer)
         self._frames = 0
@@ -683,14 +681,19 @@ class InspectorPage(QWidget):
     def store_preview_frame(self) -> None:
         if self._preview_worker is None:
             return
-        frame, meta = self._preview_worker.snapshot()
-        if frame is None:
+        data, meta = self._preview_worker.snapshot()
+        if data is None:
             return
-        self._latest_frame = frame
-        self._latest_meta = meta
         received = int(meta.get("received", 0) or 0)
         if received <= self._latest_sequence:
             return
+        frame = RosImagePreviewWorker.image_bytes_to_rgb(data, meta)
+        if frame is None:
+            self._append_log("preview", f"unsupported image encoding: {meta.get('encoding')}")
+            self._latest_sequence = received
+            return
+        self._latest_frame = frame
+        self._latest_meta = meta
         delta = received - self._latest_sequence
         self._latest_sequence = received
         self._received_frames += delta
