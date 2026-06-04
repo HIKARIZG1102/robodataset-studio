@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 
 from robodataset_studio.core.config_manager import ConfigManager
 from robodataset_studio.core.environment import EnvironmentService
-from robodataset_studio.core.models import ProjectState
+from robodataset_studio.core.models import ProcessRecord, ProjectState
 from robodataset_studio.core.process_manager import ProcessManager
 from robodataset_studio.dataset.converter import Hdf5Converter
 from robodataset_studio.dataset.layout import CalvinLayoutScanner
@@ -546,13 +546,18 @@ class ProcessPage(QWidget):
     def __init__(self, ctx: AppContext) -> None:
         super().__init__()
         self.ctx = ctx
+        self._records_by_id: dict[str, ProcessRecord] = {}
         self.table = QTableWidget(0, 7)
         self.table.setHorizontalHeaderLabels(["ID", "Type", "PID", "Status", "Owner", "Command", "Tail"])
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.currentCellChanged.connect(self.show_selected_log)
+        self.log = QPlainTextEdit()
+        self.log.setReadOnly(True)
         stop = QPushButton("Stop Selected")
         stop_all = QPushButton("Stop All")
         refresh = QPushButton("Refresh")
         stop.clicked.connect(self.stop_selected)
-        stop_all.clicked.connect(self.ctx.process_manager.stop_all)
+        stop_all.clicked.connect(self.stop_all)
         refresh.clicked.connect(self.refresh)
         layout = QVBoxLayout(self)
         row = QHBoxLayout()
@@ -561,6 +566,8 @@ class ProcessPage(QWidget):
         row.addWidget(stop_all)
         layout.addLayout(row)
         layout.addWidget(self.table)
+        layout.addWidget(QLabel("Selected Process Log"))
+        layout.addWidget(self.log)
         self.ctx.process_manager.add_listener(self.refresh)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh)
@@ -568,20 +575,68 @@ class ProcessPage(QWidget):
 
     def refresh(self) -> None:
         records = self.ctx.process_manager.records()
+        self._records_by_id = {record.process_id: record for record in records}
+        selected_id = self._selected_process_id()
         self.table.setRowCount(len(records))
         for row, record in enumerate(records):
             tail = "\n".join((record.stdout_tail + record.stderr_tail)[-3:])
             values = [record.process_id, record.type, record.pid or "", record.status, record.owner_page, record.command_text(), tail]
             for col, value in enumerate(values):
                 self.table.setItem(row, col, QTableWidgetItem(str(value)))
+            if record.process_id == selected_id:
+                self.table.selectRow(row)
+        self.show_selected_log(self.table.currentRow(), 0, -1, -1)
 
-    def stop_selected(self) -> None:
+    def _selected_process_id(self) -> str | None:
         row = self.table.currentRow()
         if row < 0:
-            return
+            return None
         item = self.table.item(row, 0)
-        if item:
-            self.ctx.process_manager.stop(item.text())
+        return item.text() if item else None
+
+    def show_selected_log(self, current_row: int, _current_col: int, _previous_row: int, _previous_col: int) -> None:
+        if current_row < 0:
+            self.log.clear()
+            return
+        item = self.table.item(current_row, 0)
+        if not item:
+            self.log.clear()
+            return
+        record = self._records_by_id.get(item.text())
+        if not record:
+            self.log.clear()
+            return
+        lines = [
+            f"id: {record.process_id}",
+            f"type: {record.type}",
+            f"pid: {record.pid or '-'}",
+            f"status: {record.status}",
+            f"owner: {record.owner_page}",
+            f"command: {record.command_text()}",
+            "",
+            "stdout tail:",
+            *(record.stdout_tail or ["-"]),
+            "",
+            "stderr tail:",
+            *(record.stderr_tail or ["-"]),
+        ]
+        self.log.setPlainText("\n".join(lines))
+
+    def stop_selected(self) -> None:
+        process_id = self._selected_process_id()
+        if not process_id:
+            return
+        if QMessageBox.question(self, "Stop process", f"Stop process {process_id}?") != QMessageBox.Yes:
+            return
+        self.ctx.process_manager.stop(process_id)
+
+    def stop_all(self) -> None:
+        records = [record for record in self.ctx.process_manager.records() if record.status in {"running", "stopping"}]
+        if not records:
+            return
+        if QMessageBox.question(self, "Stop all processes", f"Stop {len(records)} running process(es)?") != QMessageBox.Yes:
+            return
+        self.ctx.process_manager.stop_all()
 
 
 class SettingsPage(QWidget):
