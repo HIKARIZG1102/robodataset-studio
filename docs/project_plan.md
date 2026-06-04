@@ -335,10 +335,13 @@ RoboDataset Studio
 
 内容：
 
+- 从 Discovery 已发现的 node/topic 中选择，也允许手动输入临时 topic。
 - topic echo。
 - topic hz。
 - node info。
-- image viewer。
+- `sensor_msgs/msg/Image` 实时 image viewer。
+- 常见图像 encoding 预览：`rgb8`、`bgr8`、`rgba8`、`bgra8`、`mono8`、`mono16`。
+- 鼠标采样图像坐标和 RGB 值。
 - depth viewer。
 - lidar/event/tactile renderer。
 - logs。

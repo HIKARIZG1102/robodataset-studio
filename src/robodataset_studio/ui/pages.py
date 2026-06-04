@@ -5,7 +5,7 @@ from pathlib import Path
 import time
 
 import numpy as np
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -97,6 +97,101 @@ class ImagePreviewLabel(QLabel):
             self.sampled.emit(px, py, r, g, b)
 
 
+class RosImagePreviewWorker(QObject):
+    frame_ready = Signal(object)
+    status_changed = Signal(str)
+    finished = Signal()
+
+    def __init__(self, topic: str) -> None:
+        super().__init__()
+        self.topic = topic
+        self._running = True
+        self._last_emit_at = 0.0
+
+    @Slot()
+    def run(self) -> None:
+        context = None
+        executor = None
+        node = None
+        try:
+            import rclpy
+            from rclpy.executors import SingleThreadedExecutor
+            from rclpy.qos import qos_profile_sensor_data
+            from sensor_msgs.msg import Image
+
+            context = rclpy.Context()
+            rclpy.init(context=context)
+            node = rclpy.create_node("robodataset_image_preview", context=context)
+            executor = SingleThreadedExecutor(context=context)
+            executor.add_node(node)
+
+            def on_image(msg: Image) -> None:
+                now = time.time()
+                if now - self._last_emit_at < 0.1:
+                    return
+                self._last_emit_at = now
+                frame = self._image_to_rgb(msg)
+                if frame is not None:
+                    self.frame_ready.emit(frame)
+
+            node.create_subscription(Image, self.topic, on_image, qos_profile_sensor_data)
+            self.status_changed.emit(f"subscribed: {self.topic}")
+            while self._running and context.ok():
+                executor.spin_once(timeout_sec=0.1)
+        except Exception as exc:
+            self.status_changed.emit(f"preview error: {exc}")
+        finally:
+            if executor is not None and node is not None:
+                try:
+                    executor.remove_node(node)
+                except Exception:
+                    pass
+            if node is not None:
+                try:
+                    node.destroy_node()
+                except Exception:
+                    pass
+            if context is not None:
+                try:
+                    context.try_shutdown()
+                except Exception:
+                    pass
+            self.finished.emit()
+
+    def stop(self) -> None:
+        self._running = False
+
+    def _image_to_rgb(self, msg) -> np.ndarray | None:
+        encoding = msg.encoding.lower()
+        height = int(msg.height)
+        width = int(msg.width)
+        step = int(msg.step)
+        raw = np.frombuffer(bytes(msg.data), dtype=np.uint8)
+        if height <= 0 or width <= 0 or step <= 0:
+            return None
+        rows = raw.reshape((height, step))
+        if encoding in {"rgb8", "bgr8"}:
+            frame = rows[:, : width * 3].reshape((height, width, 3)).copy()
+            if encoding == "bgr8":
+                frame = frame[:, :, ::-1].copy()
+            return frame
+        if encoding in {"rgba8", "bgra8"}:
+            frame = rows[:, : width * 4].reshape((height, width, 4))[:, :, :3].copy()
+            if encoding == "bgra8":
+                frame = frame[:, :, ::-1].copy()
+            return frame
+        if encoding in {"mono8", "8uc1"}:
+            gray = rows[:, :width].reshape((height, width)).copy()
+            return np.repeat(gray[:, :, None], 3, axis=2)
+        if encoding in {"mono16", "16uc1"}:
+            depth = np.frombuffer(bytes(msg.data), dtype=np.uint16).reshape((height, step // 2))[:, :width]
+            max_value = int(depth.max()) or 1
+            gray = np.clip(depth.astype(np.float32) * 255.0 / max_value, 0, 255).astype(np.uint8)
+            return np.repeat(gray[:, :, None], 3, axis=2)
+        self.status_changed.emit(f"unsupported encoding: {msg.encoding}")
+        return None
+
+
 class ProjectPage(QWidget):
     def __init__(self, ctx: AppContext) -> None:
         super().__init__()
@@ -177,9 +272,11 @@ class DiscoveryPage(QWidget):
         super().__init__()
         self.ctx = ctx
         self.nodes = QListWidget()
+        self.nodes.currentRowChanged.connect(self.select_node)
         self.topics = QTableWidget(0, 2)
         self.topics.setHorizontalHeaderLabels(["Topic", "Type"])
         self.topics.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.topics.currentCellChanged.connect(self.select_topic)
         refresh = QPushButton("Discover ROS2 Graph")
         refresh.clicked.connect(self.refresh)
         generate = QPushButton("Generate Config From Topics")
@@ -203,6 +300,10 @@ class DiscoveryPage(QWidget):
         for row, topic in enumerate(topics):
             self.topics.setItem(row, 0, QTableWidgetItem(topic.get("name", "")))
             self.topics.setItem(row, 1, QTableWidgetItem(topic.get("type", "")))
+        if graph.get("nodes"):
+            self.nodes.setCurrentRow(0)
+        if topics:
+            self.topics.selectRow(0)
 
     def generate_config(self) -> None:
         self.ctx.state.collection_config = self.ctx.config_manager.build_default_config(
@@ -210,16 +311,44 @@ class DiscoveryPage(QWidget):
         )
         QMessageBox.information(self, "Config", "collection_config.yaml generated in memory. Open Config page to edit/save.")
 
+    def select_node(self, row: int) -> None:
+        nodes = self.ctx.last_graph.get("nodes", [])
+        if 0 <= row < len(nodes):
+            self.ctx.state.selected_nodes = [nodes[row].get("name", "")]
+
+    def select_topic(self, row: int, _current_col: int, _previous_row: int, _previous_col: int) -> None:
+        topics = self.ctx.last_graph.get("topics", [])
+        if 0 <= row < len(topics):
+            self.ctx.state.selected_streams = [topics[row]]
+
 
 class InspectorPage(QWidget):
     def __init__(self, ctx: AppContext) -> None:
         super().__init__()
         self.ctx = ctx
-        self.topic = QLineEdit("/wx250s/joint_states")
+        self.topic = QComboBox()
+        self.topic.setEditable(True)
+        self.node = QComboBox()
+        self.node.setEditable(True)
+        self.type_label = QLabel("type: -")
+        self.preview_status = QLabel("preview: stopped")
+        self._topic_types: dict[str, str] = {}
+        self._preview_thread: QThread | None = None
+        self._preview_worker: RosImagePreviewWorker | None = None
+        refresh_choices = QPushButton("Refresh from Discovery")
+        node_info = QPushButton("Start node info")
         echo = QPushButton("Start topic echo")
         hz = QPushButton("Start topic hz")
+        preview = QPushButton("Start image preview")
+        stop_preview = QPushButton("Stop image preview")
+        refresh_choices.clicked.connect(self.refresh_choices)
+        node_info.clicked.connect(self.start_node_info)
         echo.clicked.connect(lambda: self.start_probe("echo"))
         hz.clicked.connect(lambda: self.start_probe("hz"))
+        preview.clicked.connect(self.start_image_preview)
+        stop_preview.clicked.connect(self.stop_image_preview)
+        self.topic.currentTextChanged.connect(self.update_topic_type)
+        self.node.currentTextChanged.connect(self.update_selected_node)
         self.output = QPlainTextEdit()
         self.output.setReadOnly(True)
         self.preview = ImagePreviewLabel()
@@ -229,17 +358,25 @@ class InspectorPage(QWidget):
         self._frames = 0
         self._last_fps_at = time.time()
         layout = QVBoxLayout(self)
+        layout.addWidget(refresh_choices)
+        layout.addWidget(QLabel("Node"))
+        layout.addWidget(self.node)
         layout.addWidget(QLabel("Topic"))
         layout.addWidget(self.topic)
+        layout.addWidget(self.type_label)
         row = QHBoxLayout()
+        row.addWidget(node_info)
         row.addWidget(echo)
         row.addWidget(hz)
+        row.addWidget(preview)
+        row.addWidget(stop_preview)
         layout.addLayout(row)
         layout.addWidget(QLabel("Probe output is tracked in Process page."))
         preview_row = QHBoxLayout()
         preview_row.addWidget(self.preview, 3)
         info_col = QVBoxLayout()
         info_col.addWidget(QLabel("Image Topic Preview"))
+        info_col.addWidget(self.preview_status)
         info_col.addWidget(self.fps)
         info_col.addWidget(self.sample)
         info_col.addStretch(1)
@@ -249,18 +386,22 @@ class InspectorPage(QWidget):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh_output)
         self.timer.start(1000)
-        self.preview_timer = QTimer(self)
-        self.preview_timer.timeout.connect(self.mock_preview_frame)
-        self.preview_timer.start(150)
+        self.refresh_choices()
 
     def start_probe(self, mode: str) -> None:
-        topic = self.topic.text().strip()
+        topic = self._selected_topic_name()
         if not topic:
             return
         command = ["ros2", "topic", mode, topic]
         if mode == "echo":
-            command = ["ros2", "topic", "echo", topic]
+            command = ["ros2", "topic", "echo", topic, "--once"]
         self.ctx.process_manager.start(command, f"topic_{mode}", "InspectorPage")
+
+    def start_node_info(self) -> None:
+        node = self.node.currentText().strip()
+        if not node:
+            return
+        self.ctx.process_manager.start(["ros2", "node", "info", node], "node_info", "InspectorPage")
 
     def refresh_output(self) -> None:
         lines: list[str] = []
@@ -271,14 +412,98 @@ class InspectorPage(QWidget):
                 lines.extend(record.stderr_tail[-4:])
         self.output.setPlainText("\n".join(lines))
 
-    def mock_preview_frame(self) -> None:
-        h, w = 224, 224
-        x = np.linspace(0, 255, w, dtype=np.uint8)
-        y = np.linspace(0, 255, h, dtype=np.uint8)[:, None]
-        frame = np.zeros((h, w, 3), dtype=np.uint8)
-        frame[:, :, 0] = x
-        frame[:, :, 1] = y[:, 0:1]
-        frame[:, :, 2] = (int(time.time() * 40) % 255)
+    def refresh_choices(self) -> None:
+        if not self.ctx.last_graph.get("topics") and not self.ctx.last_graph.get("nodes"):
+            self.ctx.last_graph = self.ctx.discovery.discover()
+        selected_topic = self.ctx.state.selected_streams[0].get("name", "") if self.ctx.state.selected_streams else ""
+        selected_node = self.ctx.state.selected_nodes[0] if self.ctx.state.selected_nodes else ""
+        self._topic_types = {topic.get("name", ""): topic.get("type", "") for topic in self.ctx.last_graph.get("topics", [])}
+        self.node.blockSignals(True)
+        self.topic.blockSignals(True)
+        self.node.clear()
+        self.topic.clear()
+        self.node.addItems([node.get("name", "") for node in self.ctx.last_graph.get("nodes", [])])
+        for topic in self.ctx.last_graph.get("topics", []):
+            name = topic.get("name", "")
+            typ = topic.get("type", "")
+            self.topic.addItem(f"{name} [{typ}]" if typ else name, name)
+        if selected_node:
+            index = self.node.findText(selected_node)
+            if index >= 0:
+                self.node.setCurrentIndex(index)
+            else:
+                self.node.setEditText(selected_node)
+        if selected_topic:
+            index = self.topic.findData(selected_topic)
+            if index >= 0:
+                self.topic.setCurrentIndex(index)
+            else:
+                self.topic.setEditText(selected_topic)
+        self.node.blockSignals(False)
+        self.topic.blockSignals(False)
+        self.update_topic_type(self.topic.currentText())
+
+    def _selected_topic_name(self) -> str:
+        data = self.topic.currentData()
+        current_text = self.topic.currentText().strip()
+        if data and self.topic.currentIndex() >= 0 and current_text == self.topic.itemText(self.topic.currentIndex()):
+            return str(data)
+        return current_text.split(" [", 1)[0].strip()
+
+    def update_topic_type(self, _text: str) -> None:
+        topic = self._selected_topic_name()
+        typ = self._topic_types.get(topic, "")
+        self.type_label.setText(f"type: {typ or '-'}")
+        if topic:
+            self.ctx.state.selected_streams = [{"name": topic, "type": typ}]
+
+    def update_selected_node(self, text: str) -> None:
+        node = text.strip()
+        if node:
+            self.ctx.state.selected_nodes = [node]
+
+    def start_image_preview(self) -> None:
+        topic = self._selected_topic_name()
+        topic_type = self._topic_types.get(topic, "")
+        if not topic:
+            return
+        if topic_type and topic_type != "sensor_msgs/msg/Image":
+            QMessageBox.warning(self, "Topic type", f"Image preview expects sensor_msgs/msg/Image.\nSelected type: {topic_type}")
+            return
+        self.stop_image_preview()
+        self._frames = 0
+        self._last_fps_at = time.time()
+        self._preview_thread = QThread(self)
+        self._preview_worker = RosImagePreviewWorker(topic)
+        self._preview_worker.moveToThread(self._preview_thread)
+        self._preview_thread.started.connect(self._preview_worker.run)
+        self._preview_worker.frame_ready.connect(self.update_preview_frame)
+        self._preview_worker.status_changed.connect(self.preview_status.setText)
+        self._preview_worker.finished.connect(self._preview_thread.quit)
+        self._preview_worker.finished.connect(self._preview_worker.deleteLater)
+        self._preview_thread.finished.connect(self._preview_thread.deleteLater)
+        self._preview_thread.finished.connect(self._preview_finished)
+        self._preview_thread.start()
+
+    def stop_image_preview(self) -> None:
+        if self._preview_worker is not None:
+            self._preview_worker.stop()
+        if self._preview_thread is not None:
+            self._preview_thread.quit()
+            self._preview_thread.wait(1500)
+        self._preview_worker = None
+        self._preview_thread = None
+        self.preview_status.setText("preview: stopped")
+
+    def _preview_finished(self) -> None:
+        self._preview_worker = None
+        self._preview_thread = None
+        if self.preview_status.text().startswith("subscribed"):
+            self.preview_status.setText("preview: stopped")
+
+    def update_preview_frame(self, frame: object) -> None:
+        if not isinstance(frame, np.ndarray):
+            return
         self.preview.set_frame(frame)
         self._frames += 1
         now = time.time()
@@ -289,6 +514,10 @@ class InspectorPage(QWidget):
 
     def update_sample(self, x: int, y: int, r: int, g: int, b: int) -> None:
         self.sample.setText(f"sample: x={x} y={y} rgb=({r}, {g}, {b})")
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        self.stop_image_preview()
+        super().closeEvent(event)
 
 
 class ConfigPage(QWidget):

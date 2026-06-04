@@ -1,6 +1,6 @@
 # RoboDataset Studio Task Status
 
-更新时间：2026-06-05 03:05 Asia/Shanghai
+更新时间：2026-06-05 03:55 Asia/Shanghai
 
 ## 当前任务清单
 
@@ -28,6 +28,7 @@
 - [x] Process 页面增加选中进程日志详情和停止确认。
 - [x] Upload 页面增加上传前 manifest/hash 生成和本地校验。
 - [x] 根据新引导要求将 UI 调整为四个主板块：配置与 ROS Topic、采集、数据转换、上传；Process/Settings 移到角落工具。
+- [x] Inspector 支持从 Discovery 选择 node/topic，并对图像 topic 做真实 ROS2 实时预览。
 - [ ] 创建或连接 GitHub 仓库并推送阶段成果。
 
 ## 已完成项目
@@ -37,12 +38,12 @@
 - UI 层只负责工作台页面和用户交互。
 - ROS2 发现、进程管理、数据生成、校验、转换、上传分别放在独立服务模块。
 - 没有 ROS2 环境时，仍可以用模拟 episode 测试配置、采集、Review 和 Convert 流程。
-- Inspector 页面新增前端模拟图像预览，包含 FPS 显示和鼠标坐标 RGB 采样。
+- Inspector 页面可从 Discovery 结果选择 node/topic，支持 node info、topic echo、topic hz；对 `sensor_msgs/msg/Image` 支持真实 ROS2 订阅预览、FPS 显示和鼠标坐标 RGB 采样。
 - Recording、Review、Convert、Upload 页面增加了基础前置条件检查。
 - 已运行 `python3 -m compileall src`，语法编译通过。
 - 已完成本地 git 提交，当前使用 `.git_local` 作为分离 git 仓库目录。
 - 已创建 `.venv` 并安装项目依赖。
-- 已用 `QT_QPA_PLATFORM=offscreen` 验证 PySide6 主窗口可创建，当前包含 11 个页面。
+- 已用 `QT_QPA_PLATFORM=offscreen` 验证 PySide6 主窗口可创建，当前包含 4 个主板块，配置区和采集区保留子页面 tabs。
 - 已验证最小数据流程：默认配置 -> mock NPZ episode -> Review scan -> HDF5 convert。
 - 已确认 `gello_widowx` 数据集在 Spaceman_Server 的 `/data/dataset/calvin/robot_datasets/gello_widowx`。
 - 已新增 [docs/data_format_notes.md](docs/data_format_notes.md)，记录远端数据格式和对当前项目的影响。
@@ -54,6 +55,7 @@
 - Process 页面新增选中进程 stdout/stderr tail 详情，并在停止单个或全部运行中进程前弹出确认。
 - Upload 页面新增 `upload_manifest.json` 生成和本地 hash 校验，上传前会自动刷新 manifest。
 - `docs/project_plan.md` 已更新为四段式主工作区信息架构；实际主窗口同步改为四个主导航项，原有 Project / Environment / Discovery / Inspector / Config / Recording / Review / Convert / Upload 功能均保留为板块内页面。
+- 已用 `/usb_camera_test_node` 发布的 `/usb_camera/image_raw` 验证真实 ROS2 图像 topic 可被发现和解析为 RGB frame。
 - 已再次运行 `.venv/bin/python -m compileall src` 和 PySide6 offscreen 主窗口检查，均通过。
 
 ## 遇到的问题
@@ -73,7 +75,6 @@
   - 页面间状态流继续增强：Project -> Environment -> Discovery -> Config -> Recording -> Review -> Convert -> Upload。
 
 - 后端能力：
-  - 真实 ROS2 image preview worker。
   - 真实监听式 ROS2 recorder。
   - 真正执行 NPZ merge，兼容 `merge_calvin_sessions.py`。
   - SSH 上传连接测试和远端 manifest/hash 校验。
