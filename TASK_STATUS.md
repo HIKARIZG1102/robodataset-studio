@@ -1,6 +1,6 @@
 # RoboDataset Studio Task Status
 
-更新时间：2026-06-05 01:28 Asia/Shanghai
+更新时间：2026-06-05 02:05 Asia/Shanghai
 
 ## 当前任务清单
 
@@ -24,6 +24,7 @@
 - [x] 将前端 Recording 页面改为监听式采集控制台，不涉及机器人控制。
 - [x] 增加 CALVIN 数据集布局扫描前端逻辑。
 - [x] 增加 Convert 页面 merge dry-run 计划表。
+- [x] Review 页面增加单个 NPZ 字段详情和 HDF5 概览。
 - [ ] 创建或连接 GitHub 仓库并推送阶段成果。
 
 ## 已完成项目
@@ -46,6 +47,7 @@
 - Recording 页面新增监听 stream 表格，明确只监听数据源并写 episode，不发送控制命令。
 - Review 页面新增 CALVIN layout 扫描表，支持查看 raw/merged 任务版本、NPZ 数、HDF5 和 manifest 状态。
 - Convert 页面新增 merge dry-run 表，按 `raw_sessions/<task>/<version>/<session>/training` 扫描 episode 和 `auto_lang_ann.npy`。
+- Review 页面新增选中 NPZ 字段详情，包括 shape、dtype、缺失必需字段；新增当前 HDF5 概览，包括 episode 数、metadata attrs 和首个 episode 字段。
 - 已再次运行 `.venv/bin/python -m compileall src` 和 PySide6 offscreen 主窗口检查，均通过。
 
 ## 遇到的问题
@@ -64,7 +66,6 @@
 - 前端逻辑：
   - 页面间状态流继续增强：Project -> Environment -> Discovery -> Config -> Recording -> Review -> Convert -> Upload。
   - Process 页面日志查看和停止确认。
-  - Review 页面增加单个 NPZ 字段详情和 HDF5 概览。
 
 - 后端能力：
   - 真实 ROS2 image preview worker。

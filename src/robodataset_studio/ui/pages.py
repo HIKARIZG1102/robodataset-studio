@@ -385,17 +385,35 @@ class ReviewPage(QWidget):
     def __init__(self, ctx: AppContext) -> None:
         super().__init__()
         self.ctx = ctx
+        self._episode_paths: list[Path] = []
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(["Episode", "Status", "Steps", "Size MB", "Missing", "Fields"])
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.currentCellChanged.connect(self.show_episode_detail)
         self.layout_table = QTableWidget(0, 6)
         self.layout_table.setHorizontalHeaderLabels(["Area", "Task", "Version", "NPZ", "HDF5", "Manifest"])
+        self.detail = QPlainTextEdit()
+        self.detail.setReadOnly(True)
+        self.hdf5_summary = QPlainTextEdit()
+        self.hdf5_summary.setReadOnly(True)
         scan = QPushButton("Scan Episodes")
         scan.clicked.connect(self.scan)
+        inspect_hdf5 = QPushButton("Inspect Current HDF5")
+        inspect_hdf5.clicked.connect(self.inspect_hdf5)
         scan_layout = QPushButton("Scan CALVIN Layout")
         scan_layout.clicked.connect(self.scan_layout)
         layout = QVBoxLayout(self)
         layout.addWidget(scan)
-        layout.addWidget(self.table)
+        episode_row = QHBoxLayout()
+        episode_row.addWidget(self.table, 3)
+        detail_col = QVBoxLayout()
+        detail_col.addWidget(QLabel("Selected NPZ Details"))
+        detail_col.addWidget(self.detail)
+        episode_row.addLayout(detail_col, 2)
+        layout.addLayout(episode_row)
+        layout.addWidget(QLabel("Current HDF5 Overview"))
+        layout.addWidget(inspect_hdf5)
+        layout.addWidget(self.hdf5_summary)
         layout.addWidget(QLabel("CALVIN Dataset Layout"))
         layout.addWidget(scan_layout)
         layout.addWidget(self.layout_table)
@@ -405,11 +423,15 @@ class ReviewPage(QWidget):
             QMessageBox.warning(self, "No episodes", "Record at least one episode before review.")
             return
         rows = self.ctx.validator.scan_npz(self.ctx.state.episodes_dir)
+        self._episode_paths = [Path(str(row["path"])) for row in rows]
         self.table.setRowCount(len(rows))
         for row_idx, row in enumerate(rows):
             values = [row["name"], row["status"], row["steps"], row["size_mb"], row["missing"], row["fields"]]
             for col, value in enumerate(values):
                 self.table.setItem(row_idx, col, QTableWidgetItem(str(value)))
+        if rows:
+            self.table.selectRow(0)
+            self.show_episode_detail(0, 0, -1, -1)
 
     def scan_layout(self) -> None:
         layout = self.ctx.layout_scanner.scan(self.ctx.state.dataset_root)
@@ -430,6 +452,17 @@ class ReviewPage(QWidget):
             ]
             for col, value in enumerate(values):
                 self.layout_table.setItem(row_idx, col, QTableWidgetItem(str(value)))
+
+    def show_episode_detail(self, current_row: int, _current_col: int, _previous_row: int, _previous_col: int) -> None:
+        if current_row < 0 or current_row >= len(self._episode_paths):
+            return
+        self.detail.setPlainText(self.ctx.validator.describe_npz(self._episode_paths[current_row]))
+
+    def inspect_hdf5(self) -> None:
+        candidates = [path for path in self.ctx.state.conversion_outputs if path.exists()]
+        default_path = self.ctx.state.merged_dir / "calvin.hdf5"
+        path = candidates[-1] if candidates else default_path
+        self.hdf5_summary.setPlainText(self.ctx.validator.describe_hdf5(path))
 
 
 class ConvertPage(QWidget):
