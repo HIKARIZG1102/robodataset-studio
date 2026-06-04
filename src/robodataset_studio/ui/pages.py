@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QPlainTextEdit,
     QTableWidget,
     QTableWidgetItem,
@@ -100,6 +101,7 @@ class ImagePreviewLabel(QLabel):
 
 class RosImagePreviewWorker(QObject):
     frame_ready = Signal(object)
+    frame_received = Signal(object)
     status_changed = Signal(str)
     finished = Signal()
 
@@ -107,7 +109,6 @@ class RosImagePreviewWorker(QObject):
         super().__init__()
         self.topic = topic
         self._running = True
-        self._last_emit_at = 0.0
 
     @Slot()
     def run(self) -> None:
@@ -127,12 +128,9 @@ class RosImagePreviewWorker(QObject):
             executor.add_node(node)
 
             def on_image(msg: Image) -> None:
-                now = time.time()
-                if now - self._last_emit_at < 0.2:
-                    return
-                self._last_emit_at = now
                 frame = self._image_to_rgb(msg)
                 if frame is not None:
+                    self.frame_received.emit(frame)
                     self.frame_ready.emit(frame)
 
             node.create_subscription(Image, self.topic, on_image, qos_profile_sensor_data)
@@ -349,6 +347,8 @@ class InspectorPage(QWidget):
         stop_hz = QPushButton("Stop topic hz")
         start_preview = QPushButton("Start image preview")
         stop_preview = QPushButton("Stop image preview")
+        self.pause_preview_button = QPushButton("Pause preview")
+        self.pause_preview_button.clicked.connect(self.toggle_preview_pause)
         refresh_choices.clicked.connect(self.refresh_choices)
         start_node_info.clicked.connect(self.start_node_info)
         stop_node_info.clicked.connect(lambda: self.stop_inspector_process("node_info"))
@@ -365,12 +365,26 @@ class InspectorPage(QWidget):
         self.echo_log = self._terminal()
         self.hz_log = self._terminal()
         self.preview_log = self._terminal()
+        self.frame_stats = self._terminal()
         self.preview = ImagePreviewLabel()
         self.preview.sampled.connect(self.update_sample)
         self.sample = QLabel("sample: x=- y=- rgb=(-, -, -)")
         self.fps = QLabel("preview fps: 0.0")
+        self.camera_fps = QLabel("camera fps: 0.0")
+        self.playback_fps = QSpinBox()
+        self.playback_fps.setRange(1, 480)
+        self.playback_fps.setValue(30)
+        self.playback_fps.setSuffix(" fps")
+        self.playback_fps.valueChanged.connect(self.update_playback_timer)
         self._frames = 0
-        self._last_fps_at = time.time()
+        self._received_frames = 0
+        self._last_display_fps_at = time.time()
+        self._last_camera_fps_at = time.time()
+        self._max_camera_fps = 0.0
+        self.playback_fps.setMinimum(1)
+        self._latest_frame: np.ndarray | None = None
+        self._paused_frame: np.ndarray | None = None
+        self._preview_paused = False
         layout = QVBoxLayout(self)
         layout.addWidget(refresh_choices)
         layout.addWidget(QLabel("Node"))
@@ -393,6 +407,8 @@ class InspectorPage(QWidget):
         preview_buttons = QHBoxLayout()
         preview_buttons.addWidget(start_preview)
         preview_buttons.addWidget(stop_preview)
+        preview_buttons.addWidget(self.pause_preview_button)
+        preview_buttons.addWidget(self.playback_fps)
         layout.addLayout(node_row)
         layout.addLayout(echo_row)
         layout.addLayout(hz_row)
@@ -403,6 +419,7 @@ class InspectorPage(QWidget):
         info_col.addWidget(QLabel("Image Topic Preview"))
         info_col.addWidget(self.preview_status)
         info_col.addWidget(self.fps)
+        info_col.addWidget(self.camera_fps)
         info_col.addWidget(self.sample)
         info_col.addStretch(1)
         preview_row.addLayout(info_col, 1)
@@ -412,16 +429,20 @@ class InspectorPage(QWidget):
         terminals.addTab(self.echo_log, "Topic Echo")
         terminals.addTab(self.hz_log, "Topic Hz")
         terminals.addTab(self.preview_log, "Preview Log")
+        terminals.addTab(self.frame_stats, "Frame Stats")
         layout.addWidget(terminals)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh_output)
         self.timer.start(1000)
+        self.playback_timer = QTimer(self)
+        self.playback_timer.timeout.connect(self.display_latest_frame)
+        self.update_playback_timer()
         self.refresh_choices()
 
     def _terminal(self) -> QPlainTextEdit:
         terminal = QPlainTextEdit()
         terminal.setReadOnly(True)
-        terminal.setMaximumBlockCount(1200)
+        terminal.setMaximumBlockCount(2000)
         return terminal
 
     def start_probe(self, mode: str) -> None:
@@ -542,18 +563,26 @@ class InspectorPage(QWidget):
             return
         self.stop_image_preview()
         self._frames = 0
-        self._last_fps_at = time.time()
+        self._received_frames = 0
+        self._last_display_fps_at = time.time()
+        self._last_camera_fps_at = time.time()
+        self._max_camera_fps = 0.0
         self._preview_thread = QThread(self)
         self._preview_worker = RosImagePreviewWorker(topic)
         self._preview_worker.moveToThread(self._preview_thread)
         self._preview_thread.started.connect(self._preview_worker.run)
-        self._preview_worker.frame_ready.connect(self.update_preview_frame)
+        self._preview_worker.frame_ready.connect(self.store_preview_frame)
         self._preview_worker.status_changed.connect(self.preview_status.setText)
         self._preview_worker.status_changed.connect(lambda text: self._append_log("preview", text))
         self._preview_worker.finished.connect(self._preview_thread.quit)
         self._preview_worker.finished.connect(self._preview_worker.deleteLater)
         self._preview_thread.finished.connect(self._preview_thread.deleteLater)
         self._preview_thread.finished.connect(self._preview_finished)
+        self._latest_frame = None
+        self._paused_frame = None
+        self._preview_paused = False
+        self.pause_preview_button.setText("Pause preview")
+        self.playback_timer.start()
         self._preview_thread.start()
         self._append_log("preview", f"$ subscribe {topic}")
 
@@ -565,6 +594,7 @@ class InspectorPage(QWidget):
             self._preview_thread.wait(1500)
         self._preview_worker = None
         self._preview_thread = None
+        self.playback_timer.stop()
         self.preview_status.setText("preview: stopped")
         self._append_log("preview", "[stopped] image preview")
 
@@ -574,19 +604,102 @@ class InspectorPage(QWidget):
         if self.preview_status.text().startswith("subscribed"):
             self.preview_status.setText("preview: stopped")
 
-    def update_preview_frame(self, frame: object) -> None:
+    def store_preview_frame(self, frame: object) -> None:
         if not isinstance(frame, np.ndarray):
             return
+        self._latest_frame = frame
+        self._received_frames += 1
+        now = time.time()
+        if now - self._last_camera_fps_at >= 1.0:
+            observed_fps = self._received_frames / (now - self._last_camera_fps_at)
+            self._max_camera_fps = max(self._max_camera_fps, observed_fps)
+            minimum_playback_fps = max(1, int(np.ceil(self._max_camera_fps)))
+            if self.playback_fps.minimum() < minimum_playback_fps:
+                self.playback_fps.setMinimum(minimum_playback_fps)
+            if self.playback_fps.value() < minimum_playback_fps:
+                self.playback_fps.setValue(minimum_playback_fps)
+            self.camera_fps.setText(f"camera fps: {observed_fps:.1f} max: {self._max_camera_fps:.1f}")
+            self._received_frames = 0
+            self._last_camera_fps_at = now
+
+    def display_latest_frame(self) -> None:
+        if self._preview_paused:
+            return
+        if self._latest_frame is None:
+            return
+        self.update_preview_frame(self._latest_frame)
+
+    def update_preview_frame(self, frame: np.ndarray) -> None:
         self.preview.set_frame(frame)
         self._frames += 1
         now = time.time()
-        if now - self._last_fps_at >= 1.0:
-            self.fps.setText(f"preview fps: {self._frames / (now - self._last_fps_at):.1f}")
+        if now - self._last_display_fps_at >= 1.0:
+            self.fps.setText(f"preview fps: {self._frames / (now - self._last_display_fps_at):.1f}")
             self._frames = 0
-            self._last_fps_at = now
+            self._last_display_fps_at = now
+
+    def update_playback_timer(self) -> None:
+        interval_ms = max(1, int(1000 / max(self.playback_fps.value(), 1)))
+        self.playback_timer.setInterval(interval_ms)
+
+    def toggle_preview_pause(self) -> None:
+        if self._preview_paused:
+            self._preview_paused = False
+            self._paused_frame = None
+            self.pause_preview_button.setText("Pause preview")
+            self.preview_status.setText("preview: playing")
+            return
+        frame = self._latest_frame
+        if frame is None:
+            return
+        self._preview_paused = True
+        self._paused_frame = frame.copy()
+        self.pause_preview_button.setText("Resume preview")
+        self.preview_status.setText("preview: paused")
+        self.update_preview_frame(self._paused_frame)
+        self.update_frame_stats(self._paused_frame)
 
     def update_sample(self, x: int, y: int, r: int, g: int, b: int) -> None:
         self.sample.setText(f"sample: x={x} y={y} rgb=({r}, {g}, {b})")
+
+    def update_frame_stats(self, frame: np.ndarray) -> None:
+        stats = self._frame_stats_text(frame)
+        self.frame_stats.setPlainText(stats)
+        self._append_log("preview", "[paused] frame stats refreshed from current real image")
+
+    def _frame_stats_text(self, frame: np.ndarray) -> str:
+        rgb = frame.astype(np.float32)
+        luminance = 0.2126 * rgb[:, :, 0] + 0.7152 * rgb[:, :, 1] + 0.0722 * rgb[:, :, 2]
+        under = float((luminance <= 5).mean() * 100.0)
+        over = float((luminance >= 250).mean() * 100.0)
+        means = rgb.mean(axis=(0, 1))
+        stds = rgb.std(axis=(0, 1))
+        mins = rgb.min(axis=(0, 1))
+        maxs = rgb.max(axis=(0, 1))
+        h, w, _ = frame.shape
+        rows = []
+        grid_h = max(h // 3, 1)
+        grid_w = max(w // 3, 1)
+        for gy in range(3):
+            values = []
+            for gx in range(3):
+                tile = luminance[gy * grid_h : h if gy == 2 else (gy + 1) * grid_h, gx * grid_w : w if gx == 2 else (gx + 1) * grid_w]
+                values.append(f"{tile.mean():6.1f}")
+            rows.append(" ".join(values))
+        return (
+            "source: current paused real ROS image frame\n"
+            "note: sensor_msgs/Image does not include camera exposure time or white-balance gains; values below are measured from pixels.\n"
+            f"shape: {h}x{w} rgb8\n"
+            f"luminance mean/std/min/max: {luminance.mean():.2f} / {luminance.std():.2f} / {luminance.min():.0f} / {luminance.max():.0f}\n"
+            f"underexposed pixels <=5: {under:.2f}%\n"
+            f"overexposed pixels >=250: {over:.2f}%\n"
+            f"rgb mean: R={means[0]:.2f} G={means[1]:.2f} B={means[2]:.2f}\n"
+            f"rgb std:  R={stds[0]:.2f} G={stds[1]:.2f} B={stds[2]:.2f}\n"
+            f"rgb min:  R={mins[0]:.0f} G={mins[1]:.0f} B={mins[2]:.0f}\n"
+            f"rgb max:  R={maxs[0]:.0f} G={maxs[1]:.0f} B={maxs[2]:.0f}\n"
+            "\n3x3 luminance map:\n"
+            + "\n".join(rows)
+        )
 
     def _format_record(self, record: ProcessRecord) -> str:
         lines = [

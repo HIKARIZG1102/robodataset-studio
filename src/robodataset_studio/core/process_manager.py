@@ -61,7 +61,7 @@ class ProcessManager:
                 return
             for line in stream:
                 tail.append(line.rstrip())
-                del tail[:-200]
+                del tail[:-2000]
                 self._notify()
         threading.Thread(target=run, daemon=True).start()
 

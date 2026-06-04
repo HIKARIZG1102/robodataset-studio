@@ -146,7 +146,7 @@ Python Core Service
 - 不要在 Qt 主线程里运行 `rclpy.spin()`。ROS2 listener 应该在独立线程或独立进程中运行，UI 只接收降频后的状态和预览帧。
 - 图像预览必须限帧。RealSense / 多相机可以 30 FPS 采集，但 UI 预览建议限制到 5-10 FPS。
 - 不要每帧都长期保存 `QImage` / `QPixmap`。缩略图、预览帧、AI 检测帧都要使用 LRU cache 或固定大小 ring buffer。
-- 日志窗口不能无限 append。`QPlainTextEdit` / terminal output 应限制最大行数，例如 5000 行，完整日志写入文件。
+- 日志窗口不能无限 append。`QPlainTextEdit` / terminal output 应限制最大行数，Inspector 每个终端面板最多保留 2000 行，完整日志后续写入文件。
 - 页面关闭、topic preview 关闭、采集停止时，必须断开 signal/slot，停止 worker，释放 subscriber。
 - `QThread` 必须完整退出，推荐顺序：
 
@@ -342,7 +342,10 @@ RoboDataset Studio
 - node info、topic echo、topic hz、preview log 必须分开显示为独立终端式面板，实时滚动，不混在同一个输出框。
 - 每个 Start 操作必须有对应 Stop 操作。
 - Stop 后需要安全退出对应 ROS2 CLI / worker，不残留多余进程。
-- `sensor_msgs/msg/Image` 实时 image viewer。
+- `sensor_msgs/msg/Image` 实时 image viewer，预览显示必须来自当前真实 ROS image topic 最新帧。
+- 预览应支持播放 FPS 设置，并根据已观测到的相机 ROS topic 最大接收 FPS 自动抬高最小播放 FPS。
+- 预览应支持暂停；暂停后冻结当前真实帧，允许用户查看静态图。
+- 暂停时显示基于当前真实帧像素计算的亮度 / 欠曝 / 过曝 / RGB 均值 / 3x3 亮度分布。除非 ROS topic 或相机 metadata 明确提供，不允许伪造曝光时间、白平衡增益等相机参数。
 - 图像预览只能默认列出 `sensor_msgs/msg/Image` topic，避免误选 `/parameter_events` 这类非图像 topic。
 - 常见图像 encoding 预览：`rgb8`、`bgr8`、`rgba8`、`bgra8`、`mono8`、`mono16`。
 - 鼠标采样图像坐标和 RGB 值。

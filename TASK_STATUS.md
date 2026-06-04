@@ -1,6 +1,6 @@
 # RoboDataset Studio Task Status
 
-更新时间：2026-06-05 04:24 Asia/Shanghai
+更新时间：2026-06-05 04:52 Asia/Shanghai
 
 ## 当前任务清单
 
@@ -30,6 +30,7 @@
 - [x] 根据新引导要求将 UI 调整为四个主板块：配置与 ROS Topic、采集、数据转换、上传；Process/Settings 移到角落工具。
 - [x] Inspector 支持从 Discovery 选择 node/topic，并对图像 topic 做真实 ROS2 实时预览。
 - [x] Inspector 拆分 Node Info / Topic Echo / Topic Hz / Preview Log 终端面板，并为每个 Start 增加 Stop 和安全退出。
+- [x] Inspector 图像预览增加播放 FPS、暂停冻结真实帧和基于真实帧的亮度/RGB/曝光风险统计；日志面板上限调整为 2000 行。
 - [ ] 创建或连接 GitHub 仓库并推送阶段成果。
 
 ## 已完成项目
@@ -39,7 +40,7 @@
 - UI 层只负责工作台页面和用户交互。
 - ROS2 发现、进程管理、数据生成、校验、转换、上传分别放在独立服务模块。
 - 没有 ROS2 环境时，仍可以用模拟 episode 测试配置、采集、Review 和 Convert 流程。
-- Inspector 页面可从 Discovery 结果选择 node/topic，支持 node info、topic echo、topic hz；Node Info / Topic Echo / Topic Hz / Preview Log 分独立终端面板显示，并支持成对 Stop；对 `sensor_msgs/msg/Image` 支持真实 ROS2 订阅预览、FPS 显示和鼠标坐标 RGB 采样。
+- Inspector 页面可从 Discovery 结果选择 node/topic，支持 node info、topic echo、topic hz；Node Info / Topic Echo / Topic Hz / Preview Log 分独立终端面板显示，每个面板最多保留 2000 行，并支持成对 Stop；对 `sensor_msgs/msg/Image` 支持真实 ROS2 订阅预览、播放 FPS、暂停冻结真实帧、FPS 显示、鼠标坐标 RGB 采样和真实帧亮度/RGB/过曝欠曝统计。
 - Recording、Review、Convert、Upload 页面增加了基础前置条件检查。
 - 已运行 `python3 -m compileall src`，语法编译通过。
 - 已完成本地 git 提交，当前使用 `.git_local` 作为分离 git 仓库目录。
@@ -58,6 +59,7 @@
 - `docs/project_plan.md` 已更新为四段式主工作区信息架构；实际主窗口同步改为四个主导航项，原有 Project / Environment / Discovery / Inspector / Config / Recording / Review / Convert / Upload 功能均保留为板块内页面。
 - 已用 `/usb_camera_test_node` 发布的 `/usb_camera/image_raw` 验证真实 ROS2 图像 topic 可被发现和解析为 RGB frame。
 - Inspector 图像预览改为专用 image topic 下拉框，只列出 `sensor_msgs/msg/Image`，避免误选 `/parameter_events` 等非图像 topic；ProcessManager 停止流程增强为 SIGINT -> SIGTERM -> SIGKILL。
+- Inspector 暂停后的 Frame Stats 明确只展示从当前真实图像像素检测出的统计，不伪造 `sensor_msgs/Image` 未提供的曝光时间或白平衡增益。
 - 已再次运行 `.venv/bin/python -m compileall src` 和 PySide6 offscreen 主窗口检查，均通过。
 
 ## 遇到的问题
