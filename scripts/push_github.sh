@@ -6,7 +6,12 @@ REPO="${2:?repo required}"
 GIT_DIR_PATH="${3:-.git_local}"
 WORK_TREE_PATH="${4:-.}"
 
-IFS= read -r TOKEN
+if [[ -t 0 ]]; then
+  IFS= read -rs TOKEN
+  echo
+else
+  IFS= read -r TOKEN
+fi
 if [[ -z "${TOKEN}" ]]; then
   echo "missing token on stdin" >&2
   exit 1
@@ -30,4 +35,3 @@ fi
 git --git-dir="${GIT_DIR_PATH}" --work-tree="${WORK_TREE_PATH}" \
   -c "http.https://github.com/.extraheader=Authorization: Bearer ${TOKEN}" \
   push "https://github.com/${OWNER}/${REPO}.git" main:main
-

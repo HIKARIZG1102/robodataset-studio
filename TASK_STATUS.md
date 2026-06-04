@@ -1,6 +1,6 @@
 # RoboDataset Studio Task Status
 
-更新时间：2026-06-05 00:38 Asia/Shanghai
+更新时间：2026-06-05 00:46 Asia/Shanghai
 
 ## 当前任务清单
 
@@ -19,7 +19,7 @@
 - [x] 增加第一段前端通知和错误处理。
 - [x] 增加基础语法编译检查。
 - [ ] 安装 PySide6 依赖并启动 GUI 验证。
-- [ ] 初始化 git 仓库并提交阶段成果。
+- [x] 使用 `.git_local` 初始化分离 git 仓库并提交阶段成果。
 - [ ] 创建或连接 GitHub 仓库并推送阶段成果。
 
 ## 已完成项目
@@ -32,6 +32,7 @@
 - Inspector 页面新增前端模拟图像预览，包含 FPS 显示和鼠标坐标 RGB 采样。
 - Recording、Review、Convert、Upload 页面增加了基础前置条件检查。
 - 已运行 `python3 -m compileall src`，语法编译通过。
+- 已完成本地 git 提交，当前使用 `.git_local` 作为分离 git 仓库目录。
 
 ## 遇到的问题
 
@@ -40,6 +41,8 @@
 - 用户消息中包含 GitHub token，属于敏感凭据。后续推送时只应通过环境变量或交互式凭据使用，不写入文件、不打印到日志。建议推送完成后轮换该 token。
 - 当前 Python 环境未安装 `PySide6`，`python3 -m robodataset_studio.main` 无法启动 GUI。
 - 真实 ROS2、h5py 是否已安装还需要继续确认。
+- 使用用户提供的 GitHub token 推送时，GitHub 返回 `invalid credentials`，代码未能推送到远端。需要换用有效 token 或本机 GitHub 登录凭据。
+- 由于当前目录已有一个不可移动的只读 `.git` 挂载点，不能使用普通 `.git` 目录；已改用 `git --git-dir=.git_local --work-tree=.` 的分离仓库方式。
 
 ## 待完成部分
 
