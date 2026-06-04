@@ -1,6 +1,6 @@
 # RoboDataset Studio Task Status
 
-更新时间：2026-06-05 02:36 Asia/Shanghai
+更新时间：2026-06-05 03:05 Asia/Shanghai
 
 ## 当前任务清单
 
@@ -27,6 +27,7 @@
 - [x] Review 页面增加单个 NPZ 字段详情和 HDF5 概览。
 - [x] Process 页面增加选中进程日志详情和停止确认。
 - [x] Upload 页面增加上传前 manifest/hash 生成和本地校验。
+- [x] 根据新引导要求将 UI 调整为四个主板块：配置与 ROS Topic、采集、数据转换、上传；Process/Settings 移到角落工具。
 - [ ] 创建或连接 GitHub 仓库并推送阶段成果。
 
 ## 已完成项目
@@ -52,6 +53,7 @@
 - Review 页面新增选中 NPZ 字段详情，包括 shape、dtype、缺失必需字段；新增当前 HDF5 概览，包括 episode 数、metadata attrs 和首个 episode 字段。
 - Process 页面新增选中进程 stdout/stderr tail 详情，并在停止单个或全部运行中进程前弹出确认。
 - Upload 页面新增 `upload_manifest.json` 生成和本地 hash 校验，上传前会自动刷新 manifest。
+- `docs/project_plan.md` 已更新为四段式主工作区信息架构；实际主窗口同步改为四个主导航项，原有 Project / Environment / Discovery / Inspector / Config / Recording / Review / Convert / Upload 功能均保留为板块内页面。
 - 已再次运行 `.venv/bin/python -m compileall src` 和 PySide6 offscreen 主窗口检查，均通过。
 
 ## 遇到的问题

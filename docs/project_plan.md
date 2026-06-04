@@ -181,16 +181,12 @@ PySide6 / Tauri / Electron 选型补充：
 ```text
 ┌──────────────────────────────────────────────┐
 │ Desktop UI                                    │
-│ - 多页面工作台，而不是单页堆叠所有模块          │
-│ - Project / Environment                       │
-│ - Discovery / Inspector                       │
-│ - Config Builder                              │
-│ - Recording Console                           │
-│ - Dataset Review                              │
-│ - Conversion                                  │
-│ - Upload / Publish                            │
-│ - Process Display                             │
-│ - Settings                                    │
+│ - 四个主工作区，而不是把所有工具平铺成同级导航  │
+│ - 配置与 ROS Topic                             │
+│ - 采集                                         │
+│ - 数据转换                                     │
+│ - 上传                                         │
+│ - 角落工具：Process Display / Settings         │
 └───────────────────┬──────────────────────────┘
                     │ local IPC / direct call
 ┌───────────────────▼──────────────────────────┐
@@ -222,26 +218,73 @@ PySide6 / Tauri / Electron 选型补充：
 
 ## 3.1 UI 页面组织
 
-这个程序不应该把节点发现、topic 监听、YAML 编辑、采集、预览、转换、上传都挤在一个页面里。更合理的形态是一个多页面工作台：左侧主导航或顶部步骤条，右侧显示当前模块。
+这个程序不应该把节点发现、topic 监听、YAML 编辑、采集、预览、转换、上传都挤在一个页面里，也不应该把十几个功能页面都平铺成同级导航。更合理的形态是一个以采集流程为主线的四段式工作台：左侧只显示高频主工作区，右侧在当前工作区内用 tabs / stepper 展开细节。
 
 推荐主导航：
 
 ```text
 RoboDataset Studio
-├── 1. Project
-├── 2. Environment
-├── 3. Discovery
-├── 4. Inspector
-├── 5. Config
-├── 6. Recording
-├── 7. Review
-├── 8. Convert
-├── 9. Upload
-├── Process
-└── Settings
+├── 1. 配置与 ROS Topic
+├── 2. 采集
+├── 3. 数据转换
+├── 4. 上传
+└── 角落工具
+    ├── Process
+    └── Settings
 ```
 
-### 3.1.1 Project 页面
+主工作区与原有功能对应关系：
+
+```text
+1. 配置与 ROS Topic
+   ├── Project
+   ├── Environment
+   ├── Discovery
+   ├── Inspector
+   └── Config
+
+2. 采集
+   ├── Recording
+   └── Review
+
+3. 数据转换
+   └── Convert
+
+4. 上传
+   └── Upload
+
+角落工具
+   ├── Process
+   └── Settings
+```
+
+原则：
+
+- 保留原有所有功能页面和后端能力，但不再把它们暴露成同级主导航。
+- 主导航只承载用户心智里的四个阶段：先配置并选择 ROS topic，再采集，再转换，再上传。
+- Project、Environment、Discovery、Inspector、Config 是“配置与 ROS Topic”工作区内的子步骤。
+- Recording 和 Review 是“采集”工作区内的子步骤，Review 仍然可以检查单个 NPZ、CALVIN layout 和 HDF5 概览。
+- Process Display 与 Settings 不参与主流程。它们应该放在窗口角落或侧栏底部，作为低频工具入口。
+- API key、AI provider、上传认证、默认路径等敏感或全局设置只放在 Settings 内，不在主流程中反复暴露。
+
+### 3.1.1 配置与 ROS Topic 工作区
+
+用途：完成项目选择、运行环境检查、ROS2 / TCP 数据源发现、topic 深入检查，以及采集 YAML 生成。
+
+这个工作区包含原有 Project、Environment、Discovery、Inspector、Config 五个子页面。它们可以用顶部 tabs、左侧二级步骤条或折叠面板组织，但在用户心智上属于同一个“配置”阶段。
+
+推荐子步骤：
+
+```text
+配置与 ROS Topic
+├── Project
+├── Environment
+├── Discovery
+├── Inspector
+└── Config
+```
+
+#### Project 子页面
 
 用途：管理采集项目和数据集版本。
 
@@ -256,7 +299,7 @@ RoboDataset Studio
 - 最近项目列表。
 - 项目级 metadata。
 
-### 3.1.2 Environment 页面
+#### Environment 子页面
 
 用途：检查 ROS2 / Ubuntu / 机器人运行环境。
 
@@ -272,7 +315,7 @@ RoboDataset Studio
 - Genesis 是否可用。
 - 环境检查报告。
 
-### 3.1.3 Discovery 页面
+#### Discovery 子页面
 
 用途：发现当前 ROS2 graph 和 TCP 数据源。
 
@@ -286,7 +329,7 @@ RoboDataset Studio
 - TCP endpoint probe。
 - 节点选择。
 
-### 3.1.4 Inspector 页面
+#### Inspector 子页面
 
 用途：深入查看某个 node/topic/stream。
 
@@ -301,7 +344,7 @@ RoboDataset Studio
 - logs。
 - 单独弹出的终端预览窗口。
 
-### 3.1.5 Config 页面
+#### Config 子页面
 
 用途：生成和编辑采集 YAML。
 
@@ -314,7 +357,21 @@ RoboDataset Studio
 - AI 辅助校验。
 - 模板保存 / 加载。
 
-### 3.1.6 Recording 页面
+### 3.1.2 采集工作区
+
+用途：启动监听式采集、查看 episode 状态、进行数据预览和坏样本筛查。
+
+这个工作区包含原有 Recording 和 Review 两个子页面。
+
+推荐子步骤：
+
+```text
+采集
+├── Recording
+└── Review
+```
+
+#### Recording 子页面
 
 用途：正式采集数据。
 
@@ -329,7 +386,7 @@ RoboDataset Studio
 - 成功 / 失败标记。
 - 删除当前 episode。
 
-### 3.1.7 Review 页面
+#### Review 子页面
 
 用途：数据预览、筛查、删除坏样本。
 
@@ -343,7 +400,7 @@ RoboDataset Studio
 - 手动删除。
 - 质量报告。
 
-### 3.1.8 Convert 页面
+### 3.1.3 数据转换工作区
 
 用途：合并 NPZ、转换 HDF5、生成 metadata。
 
@@ -356,7 +413,7 @@ RoboDataset Studio
 - 转换后校验。
 - HDF5 stats 预览。
 
-### 3.1.9 Upload 页面
+### 3.1.4 上传工作区
 
 用途：发布数据集。
 
@@ -370,7 +427,7 @@ RoboDataset Studio
 - hash 校验。
 - dataset card 生成。
 
-### 3.1.10 Process 页面
+### 3.1.5 Process 角落工具
 
 用途：管理所有由程序启动的后台进程。
 
@@ -385,7 +442,7 @@ RoboDataset Studio
 - uploader。
 - 一键安全停止。
 
-### 3.1.11 Settings 页面
+### 3.1.6 Settings 角落工具
 
 用途：全局设置。
 
@@ -399,20 +456,19 @@ RoboDataset Studio
 - 上传认证。
 - 模板管理。
 
-### 3.1.12 页面间状态流
+### 3.1.7 页面间状态流
 
 页面之间应该有明确状态流，而不是互相散乱读写：
 
 ```text
-Project
-  -> Environment
-  -> Discovery
-  -> Inspector
-  -> Config
-  -> Recording
-  -> Review
-  -> Convert
-  -> Upload
+配置与 ROS Topic
+  Project -> Environment -> Discovery -> Inspector -> Config
+    -> 采集
+      Recording -> Review
+        -> 数据转换
+          Convert
+            -> 上传
+              Upload
 ```
 
 跨页面共享状态：

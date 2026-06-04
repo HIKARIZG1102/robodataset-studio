@@ -1,6 +1,15 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import QListWidget, QMainWindow, QStackedWidget, QHBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QListWidget,
+    QMainWindow,
+    QPushButton,
+    QStackedWidget,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from .pages import (
     AppContext,
@@ -24,21 +33,15 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("RoboDataset Studio")
         self.resize(1280, 820)
         self.ctx = AppContext()
+        self._tool_windows: list[QMainWindow] = []
 
         self.nav = QListWidget()
         self.stack = QStackedWidget()
         pages = [
-            ("1. Project", ProjectPage(self.ctx)),
-            ("2. Environment", EnvironmentPage(self.ctx)),
-            ("3. Discovery", DiscoveryPage(self.ctx)),
-            ("4. Inspector", InspectorPage(self.ctx)),
-            ("5. Config", ConfigPage(self.ctx)),
-            ("6. Recording", RecordingPage(self.ctx)),
-            ("7. Review", ReviewPage(self.ctx)),
-            ("8. Convert", ConvertPage(self.ctx)),
-            ("9. Upload", UploadPage(self.ctx)),
-            ("Process", ProcessPage(self.ctx)),
-            ("Settings", SettingsPage(self.ctx)),
+            ("1. 配置与 ROS Topic", self._config_workspace()),
+            ("2. 采集", self._collection_workspace()),
+            ("3. 数据转换", self._single_page_workspace(ConvertPage(self.ctx))),
+            ("4. 上传", self._single_page_workspace(UploadPage(self.ctx))),
         ]
         for name, page in pages:
             self.nav.addItem(name)
@@ -46,13 +49,56 @@ class MainWindow(QMainWindow):
         self.nav.currentRowChanged.connect(self.stack.setCurrentIndex)
         self.nav.setCurrentRow(0)
 
+        process_button = QPushButton("Process")
+        settings_button = QPushButton("Settings")
+        process_button.clicked.connect(self.open_process)
+        settings_button.clicked.connect(self.open_settings)
+
+        side = QVBoxLayout()
+        side.addWidget(self.nav)
+        side.addStretch(1)
+        side.addWidget(process_button)
+        side.addWidget(settings_button)
+
         root = QWidget()
         layout = QHBoxLayout(root)
-        layout.addWidget(self.nav, 1)
+        layout.addLayout(side, 1)
         layout.addWidget(self.stack, 5)
         self.setCentralWidget(root)
+
+    def _config_workspace(self) -> QTabWidget:
+        tabs = QTabWidget()
+        tabs.addTab(ProjectPage(self.ctx), "Project")
+        tabs.addTab(EnvironmentPage(self.ctx), "Environment")
+        tabs.addTab(DiscoveryPage(self.ctx), "Discovery")
+        tabs.addTab(InspectorPage(self.ctx), "Inspector")
+        tabs.addTab(ConfigPage(self.ctx), "Config")
+        return tabs
+
+    def _collection_workspace(self) -> QTabWidget:
+        tabs = QTabWidget()
+        tabs.addTab(RecordingPage(self.ctx), "Recording")
+        tabs.addTab(ReviewPage(self.ctx), "Review")
+        return tabs
+
+    def _single_page_workspace(self, page: QWidget) -> QWidget:
+        return page
+
+    def open_process(self) -> None:
+        self._open_tool_window("Process", ProcessPage(self.ctx))
+
+    def open_settings(self) -> None:
+        self._open_tool_window("Settings", SettingsPage(self.ctx))
+
+    def _open_tool_window(self, title: str, page: QWidget) -> None:
+        window = QMainWindow(self)
+        window.setWindowTitle(f"RoboDataset Studio - {title}")
+        window.resize(980, 640)
+        window.setCentralWidget(page)
+        self._tool_windows.append(window)
+        window.destroyed.connect(lambda: self._tool_windows.remove(window) if window in self._tool_windows else None)
+        window.show()
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
         self.ctx.process_manager.stop_all()
         super().closeEvent(event)
-
