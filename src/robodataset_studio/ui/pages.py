@@ -32,6 +32,7 @@ from robodataset_studio.core.models import ProjectState
 from robodataset_studio.core.process_manager import ProcessManager
 from robodataset_studio.dataset.converter import Hdf5Converter
 from robodataset_studio.dataset.layout import CalvinLayoutScanner
+from robodataset_studio.dataset.merge_plan import CalvinMergePlanner
 from robodataset_studio.dataset.recorder import MockRecorder
 from robodataset_studio.dataset.validator import DatasetValidator
 from robodataset_studio.ros.graph_discovery import RosGraphDiscovery
@@ -49,6 +50,7 @@ class AppContext:
         self.validator = DatasetValidator()
         self.converter = Hdf5Converter()
         self.layout_scanner = CalvinLayoutScanner()
+        self.merge_planner = CalvinMergePlanner()
         self.last_graph: dict[str, list[dict[str, str]]] = {"nodes": [], "topics": [], "services": []}
 
     def has_config(self) -> bool:
@@ -436,11 +438,37 @@ class ConvertPage(QWidget):
         self.ctx = ctx
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
+        self.plan_table = QTableWidget(0, 7)
+        self.plan_table.setHorizontalHeaderLabels(["Session", "Status", "Episodes", "Annotations", "First", "Last", "Path"])
+        dry_run = QPushButton("Build Merge Dry Run")
+        dry_run.clicked.connect(self.build_dry_run)
         convert = QPushButton("Convert NPZ to HDF5")
         convert.clicked.connect(self.convert)
         layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Merge Dry Run"))
+        layout.addWidget(dry_run)
+        layout.addWidget(self.plan_table)
         layout.addWidget(convert)
         layout.addWidget(self.log)
+
+    def build_dry_run(self) -> None:
+        raw_root = self.ctx.state.dataset_root / "raw_sessions" / self.ctx.state.task_name / self.ctx.state.version
+        rows = self.ctx.merge_planner.build_plan(raw_root)
+        if not rows:
+            QMessageBox.information(self, "Dry run", f"No raw sessions found under:\n{raw_root}")
+        self.plan_table.setRowCount(len(rows))
+        for row_idx, row in enumerate(rows):
+            values = [
+                row["session"],
+                row["status"],
+                row["episodes"],
+                row["has_annotations"],
+                row["first_episode"],
+                row["last_episode"],
+                row["path"],
+            ]
+            for col, value in enumerate(values):
+                self.plan_table.setItem(row_idx, col, QTableWidgetItem(str(value)))
 
     def convert(self) -> None:
         if not self.ctx.has_raw_episodes():
