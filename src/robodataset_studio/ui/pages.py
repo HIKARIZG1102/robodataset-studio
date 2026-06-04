@@ -36,6 +36,7 @@ from robodataset_studio.dataset.merge_plan import CalvinMergePlanner
 from robodataset_studio.dataset.recorder import MockRecorder
 from robodataset_studio.dataset.validator import DatasetValidator
 from robodataset_studio.ros.graph_discovery import RosGraphDiscovery
+from robodataset_studio.upload.manifest import MANIFEST_NAME, UploadManifest
 from robodataset_studio.upload.ssh_uploader import SshUploader
 
 
@@ -520,23 +521,78 @@ class UploadPage(QWidget):
         self.ctx = ctx
         self.local = QLineEdit(str(ctx.state.merged_dir))
         self.target = QLineEdit("user@host:/remote/dataset/path/")
+        self.report = QPlainTextEdit()
+        self.report.setReadOnly(True)
+        build_manifest = QPushButton("Build upload manifest")
+        verify_manifest = QPushButton("Verify upload manifest")
         upload = QPushButton("Start rsync upload")
+        build_manifest.clicked.connect(self.build_manifest)
+        verify_manifest.clicked.connect(self.verify_manifest)
         upload.clicked.connect(self.upload)
         layout = QFormLayout(self)
         layout.addRow("Local path", self.local)
         layout.addRow("SSH target", self.target)
+        layout.addRow(build_manifest)
+        layout.addRow(verify_manifest)
         layout.addRow(upload)
+        layout.addRow(self.report)
 
-    def upload(self) -> None:
-        local_path = Path(self.local.text()).expanduser()
+    def _local_path(self) -> Path:
+        return Path(self.local.text()).expanduser()
+
+    def _validate_local_path(self) -> Path | None:
+        local_path = self._local_path()
         if not local_path.exists():
             QMessageBox.warning(self, "Missing local path", f"Local path does not exist:\n{local_path}")
+            return None
+        if not local_path.is_dir():
+            QMessageBox.warning(self, "Local path", f"Local path must be a directory:\n{local_path}")
+            return None
+        return local_path
+
+    def build_manifest(self) -> Path | None:
+        local_path = self._validate_local_path()
+        if not local_path:
+            return None
+        manifest = UploadManifest()
+        summary = manifest.build(local_path)
+        manifest_path = manifest.write(local_path, summary)
+        self.report.setPlainText(
+            f"manifest: {manifest_path}\n"
+            f"files: {summary['file_count']}\n"
+            f"total_size_mb: {summary['total_size_bytes'] / 1024 / 1024:.3f}"
+        )
+        return manifest_path
+
+    def verify_manifest(self) -> None:
+        local_path = self._validate_local_path()
+        if not local_path:
+            return
+        manifest_path = local_path / MANIFEST_NAME
+        if not manifest_path.exists():
+            QMessageBox.warning(self, "Manifest missing", f"Build {MANIFEST_NAME} before verification.")
+            return
+        result = UploadManifest().verify(manifest_path)
+        self.report.setPlainText(
+            f"manifest: {manifest_path}\n"
+            f"ok: {result['ok']}\n"
+            f"checked: {result['checked']}\n"
+            f"missing: {len(result['missing'])}\n"
+            f"mismatched: {len(result['mismatched'])}"
+        )
+
+    def upload(self) -> None:
+        local_path = self._validate_local_path()
+        if not local_path:
             return
         if not self.ctx.has_converted_dataset() and local_path == self.ctx.state.merged_dir:
             QMessageBox.warning(self, "No converted dataset", "Convert NPZ to HDF5 before uploading the merged directory.")
             return
         if "user@host" in self.target.text():
             QMessageBox.warning(self, "Upload target", "Replace the placeholder SSH target before uploading.")
+            return
+        manifest_path = self.build_manifest()
+        if manifest_path is None:
             return
         uploader = SshUploader(self.ctx.process_manager)
         uploader.upload_with_rsync(local_path, self.target.text().strip())

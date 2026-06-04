@@ -1,6 +1,6 @@
 # RoboDataset Studio Task Status
 
-更新时间：2026-06-05 02:18 Asia/Shanghai
+更新时间：2026-06-05 02:36 Asia/Shanghai
 
 ## 当前任务清单
 
@@ -26,6 +26,7 @@
 - [x] 增加 Convert 页面 merge dry-run 计划表。
 - [x] Review 页面增加单个 NPZ 字段详情和 HDF5 概览。
 - [x] Process 页面增加选中进程日志详情和停止确认。
+- [x] Upload 页面增加上传前 manifest/hash 生成和本地校验。
 - [ ] 创建或连接 GitHub 仓库并推送阶段成果。
 
 ## 已完成项目
@@ -50,6 +51,7 @@
 - Convert 页面新增 merge dry-run 表，按 `raw_sessions/<task>/<version>/<session>/training` 扫描 episode 和 `auto_lang_ann.npy`。
 - Review 页面新增选中 NPZ 字段详情，包括 shape、dtype、缺失必需字段；新增当前 HDF5 概览，包括 episode 数、metadata attrs 和首个 episode 字段。
 - Process 页面新增选中进程 stdout/stderr tail 详情，并在停止单个或全部运行中进程前弹出确认。
+- Upload 页面新增 `upload_manifest.json` 生成和本地 hash 校验，上传前会自动刷新 manifest。
 - 已再次运行 `.venv/bin/python -m compileall src` 和 PySide6 offscreen 主窗口检查，均通过。
 
 ## 遇到的问题
@@ -72,7 +74,7 @@
   - 真实 ROS2 image preview worker。
   - 真实监听式 ROS2 recorder。
   - 真正执行 NPZ merge，兼容 `merge_calvin_sessions.py`。
-  - SSH 上传连接测试和 manifest/hash 校验。
+  - SSH 上传连接测试和远端 manifest/hash 校验。
 
 - 工程化：
   - 安装依赖或确认本机环境。
