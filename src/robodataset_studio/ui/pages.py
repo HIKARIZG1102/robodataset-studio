@@ -31,6 +31,7 @@ from robodataset_studio.core.environment import EnvironmentService
 from robodataset_studio.core.models import ProjectState
 from robodataset_studio.core.process_manager import ProcessManager
 from robodataset_studio.dataset.converter import Hdf5Converter
+from robodataset_studio.dataset.layout import CalvinLayoutScanner
 from robodataset_studio.dataset.recorder import MockRecorder
 from robodataset_studio.dataset.validator import DatasetValidator
 from robodataset_studio.ros.graph_discovery import RosGraphDiscovery
@@ -47,6 +48,7 @@ class AppContext:
         self.recorder = MockRecorder()
         self.validator = DatasetValidator()
         self.converter = Hdf5Converter()
+        self.layout_scanner = CalvinLayoutScanner()
         self.last_graph: dict[str, list[dict[str, str]]] = {"nodes": [], "topics": [], "services": []}
 
     def has_config(self) -> bool:
@@ -102,12 +104,15 @@ class ProjectPage(QWidget):
         self.root = QLineEdit(str(ctx.state.dataset_root))
         browse = QPushButton("Browse")
         browse.clicked.connect(self.browse_root)
+        preset = QPushButton("Use gello_widowx preset")
+        preset.clicked.connect(self.use_gello_preset)
         save = QPushButton("Save Project")
         save.clicked.connect(self.save)
 
         root_row = QHBoxLayout()
         root_row.addWidget(self.root)
         root_row.addWidget(browse)
+        root_row.addWidget(preset)
 
         form = QFormLayout()
         form.addRow("Task name", self.task)
@@ -128,6 +133,11 @@ class ProjectPage(QWidget):
         path = QFileDialog.getExistingDirectory(self, "Dataset root", self.root.text())
         if path:
             self.root.setText(path)
+
+    def use_gello_preset(self) -> None:
+        self.root.setText("/data/dataset/calvin/robot_datasets/gello_widowx")
+        self.task.setText("catch_the_satellite_2fig")
+        self.version.setText("v1")
 
     def save(self) -> None:
         self.ctx.state.task_name = self.task.text().strip() or "task"
@@ -331,11 +341,34 @@ class RecordingPage(QWidget):
         self.episode_index = 0
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
-        record = QPushButton("Record Mock Episode")
+        self.streams = QTableWidget(0, 5)
+        self.streams.setHorizontalHeaderLabels(["Name", "Modality", "Source", "Topic/Endpoint", "Role"])
+        refresh = QPushButton("Refresh Listener Plan")
+        refresh.clicked.connect(self.refresh_plan)
+        record = QPushButton("Simulate Listener Episode")
         record.clicked.connect(self.record)
         layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Listener Recording Console"))
+        layout.addWidget(QLabel("This page listens to configured streams and writes dataset episodes. It does not send robot control commands."))
+        layout.addWidget(refresh)
+        layout.addWidget(self.streams)
         layout.addWidget(record)
         layout.addWidget(self.log)
+        self.refresh_plan()
+
+    def refresh_plan(self) -> None:
+        streams = self.ctx.state.collection_config.get("streams", []) if self.ctx.has_config() else []
+        self.streams.setRowCount(len(streams))
+        for row, stream in enumerate(streams):
+            values = [
+                stream.get("name", ""),
+                stream.get("modality", ""),
+                stream.get("source", ""),
+                stream.get("topic") or stream.get("endpoint", ""),
+                stream.get("training_role", ""),
+            ]
+            for col, value in enumerate(values):
+                self.streams.setItem(row, col, QTableWidgetItem(str(value)))
 
     def record(self) -> None:
         if not self.ctx.has_config():
@@ -352,11 +385,18 @@ class ReviewPage(QWidget):
         self.ctx = ctx
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(["Episode", "Status", "Steps", "Size MB", "Missing", "Fields"])
+        self.layout_table = QTableWidget(0, 6)
+        self.layout_table.setHorizontalHeaderLabels(["Area", "Task", "Version", "NPZ", "HDF5", "Manifest"])
         scan = QPushButton("Scan Episodes")
         scan.clicked.connect(self.scan)
+        scan_layout = QPushButton("Scan CALVIN Layout")
+        scan_layout.clicked.connect(self.scan_layout)
         layout = QVBoxLayout(self)
         layout.addWidget(scan)
         layout.addWidget(self.table)
+        layout.addWidget(QLabel("CALVIN Dataset Layout"))
+        layout.addWidget(scan_layout)
+        layout.addWidget(self.layout_table)
 
     def scan(self) -> None:
         if not self.ctx.has_raw_episodes():
@@ -368,6 +408,26 @@ class ReviewPage(QWidget):
             values = [row["name"], row["status"], row["steps"], row["size_mb"], row["missing"], row["fields"]]
             for col, value in enumerate(values):
                 self.table.setItem(row_idx, col, QTableWidgetItem(str(value)))
+
+    def scan_layout(self) -> None:
+        layout = self.ctx.layout_scanner.scan(self.ctx.state.dataset_root)
+        rows: list[tuple[str, dict[str, object]]] = []
+        rows.extend(("raw_sessions", row) for row in layout.get("raw_sessions", []))
+        rows.extend(("merged_calvin", row) for row in layout.get("merged", []))
+        if not layout.get("exists"):
+            QMessageBox.warning(self, "Dataset root missing", f"Dataset root does not exist locally:\n{self.ctx.state.dataset_root}")
+        self.layout_table.setRowCount(len(rows))
+        for row_idx, (area, row) in enumerate(rows):
+            values = [
+                area,
+                row.get("task", ""),
+                row.get("version", ""),
+                row.get("npz_count", ""),
+                row.get("has_hdf5", ""),
+                row.get("has_manifest", ""),
+            ]
+            for col, value in enumerate(values):
+                self.layout_table.setItem(row_idx, col, QTableWidgetItem(str(value)))
 
 
 class ConvertPage(QWidget):

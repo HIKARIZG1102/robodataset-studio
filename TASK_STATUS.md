@@ -1,6 +1,6 @@
 # RoboDataset Studio Task Status
 
-更新时间：2026-06-05 00:55 Asia/Shanghai
+更新时间：2026-06-05 01:20 Asia/Shanghai
 
 ## 当前任务清单
 
@@ -20,6 +20,9 @@
 - [x] 增加基础语法编译检查。
 - [x] 安装 PySide6 依赖并启动 GUI 验证。
 - [x] 使用 `.git_local` 初始化分离 git 仓库并提交阶段成果。
+- [x] 只读了解远端 `gello_widowx` 数据集结构。
+- [x] 将前端 Recording 页面改为监听式采集控制台，不涉及机器人控制。
+- [x] 增加 CALVIN 数据集布局扫描前端逻辑。
 - [ ] 创建或连接 GitHub 仓库并推送阶段成果。
 
 ## 已完成项目
@@ -36,6 +39,11 @@
 - 已创建 `.venv` 并安装项目依赖。
 - 已用 `QT_QPA_PLATFORM=offscreen` 验证 PySide6 主窗口可创建，当前包含 11 个页面。
 - 已验证最小数据流程：默认配置 -> mock NPZ episode -> Review scan -> HDF5 convert。
+- 已确认 `gello_widowx` 数据集在 Spaceman_Server 的 `/data/dataset/calvin/robot_datasets/gello_widowx`。
+- 已新增 [docs/data_format_notes.md](docs/data_format_notes.md)，记录远端数据格式和对当前项目的影响。
+- Project 页面增加 `gello_widowx` 数据集根路径预设。
+- Recording 页面新增监听 stream 表格，明确只监听数据源并写 episode，不发送控制命令。
+- Review 页面新增 CALVIN layout 扫描表，支持查看 raw/merged 任务版本、NPZ 数、HDF5 和 manifest 状态。
 
 ## 遇到的问题
 
@@ -46,19 +54,20 @@
 - 真实 ROS2 是否已安装还需要继续确认。
 - 使用用户提供的 GitHub token 推送时，GitHub 返回 `invalid credentials`，代码未能推送到远端。需要换用有效 token 或本机 GitHub 登录凭据。
 - 由于当前目录已有一个不可移动的只读 `.git` 挂载点，不能使用普通 `.git` 目录；已改用 `git --git-dir=.git_local --work-tree=.` 的分离仓库方式。
+- `gello_widowx` 数据集路径在 Spaceman_Server 上存在；在 microsate_widowx 上该精确路径不存在。
 
 ## 待完成部分
 
 - 前端逻辑：
-  - 页面间状态流检查：Project -> Environment -> Discovery -> Config -> Recording -> Review -> Convert -> Upload。
-  - 无 project/config/raw data/converted data 时禁用对应操作。
-  - 图像 topic 前端预览占位、FPS、坐标/RGB 采样 UI。
+  - 页面间状态流继续增强：Project -> Environment -> Discovery -> Config -> Recording -> Review -> Convert -> Upload。
   - Process 页面日志查看和停止确认。
+  - Convert 页面增加 merge dry-run 计划视图。
+  - Review 页面增加单个 NPZ 字段详情和 HDF5 概览。
 
 - 后端能力：
   - 真实 ROS2 image preview worker。
-  - 真实 ROS2 recorder。
-  - NPZ 合并计划 dry-run。
+  - 真实监听式 ROS2 recorder。
+  - NPZ 合并计划 dry-run，兼容 `merge_calvin_sessions.py`。
   - SSH 上传连接测试和 manifest/hash 校验。
 
 - 工程化：
