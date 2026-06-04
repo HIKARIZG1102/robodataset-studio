@@ -343,7 +343,8 @@ RoboDataset Studio
 - 每个 Start 操作必须有对应 Stop 操作。
 - Stop 后需要安全退出对应 ROS2 CLI / worker，不残留多余进程。
 - `sensor_msgs/msg/Image` 实时 image viewer，预览显示必须来自当前真实 ROS image topic 最新帧。
-- 预览 buffer 必须采用 latest-frame single-slot 策略：订阅线程只保留最新帧，UI 定时器只显示最新帧，不排队积压大图。
+- 预览 buffer 必须采用 latest-frame single-slot 策略：订阅线程只保留最新帧，UI 定时器主动拉取并显示最新帧，不按帧发送 Qt signal，不排队积压大图。
+- 停止预览或关闭页面时必须清空 worker latest frame、UI latest frame、paused frame 和显示 pixmap。
 - Display 应自动适配 ROS image message 的 width、height、encoding、step 和实际接收 FPS，并在侧栏显示这些真实检测到的特征。
 - 每次启动 image preview 应创建唯一 ROS preview node 名称，避免旧订阅节点残留导致用户误判当前预览状态。
 - Preview Log 应实时显示实际收到的 frame 计数、encoding 和 size，便于确认显示的是当前真实相机流。

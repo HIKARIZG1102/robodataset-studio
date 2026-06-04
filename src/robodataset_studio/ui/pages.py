@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import threading
 import time
 from uuid import uuid4
 
@@ -86,6 +87,11 @@ class ImagePreviewLabel(QLabel):
         self._display_size = (pixmap.width(), pixmap.height())
         self.setPixmap(pixmap)
 
+    def clear_frame(self) -> None:
+        self._frame = None
+        self._display_size = (0, 0)
+        self.setPixmap(QPixmap())
+
     def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt API
         if self._frame is None or self.pixmap() is None:
             return
@@ -101,7 +107,6 @@ class ImagePreviewLabel(QLabel):
 
 
 class RosImagePreviewWorker(QObject):
-    frame_tick = Signal()
     status_changed = Signal(str)
     finished = Signal()
 
@@ -109,6 +114,7 @@ class RosImagePreviewWorker(QObject):
         super().__init__()
         self.topic = topic
         self._running = True
+        self._lock = threading.Lock()
         self._received = 0
         self._last_status_at = 0.0
         self.latest_frame: np.ndarray | None = None
@@ -134,21 +140,21 @@ class RosImagePreviewWorker(QObject):
             def on_image(msg: Image) -> None:
                 frame = self._image_to_rgb(msg)
                 if frame is not None:
-                    self._received += 1
-                    self.latest_frame = frame
-                    self.latest_meta = {
-                        "encoding": msg.encoding,
-                        "width": int(msg.width),
-                        "height": int(msg.height),
-                        "step": int(msg.step),
-                        "received": self._received,
-                    }
-                    self.frame_tick.emit()
+                    with self._lock:
+                        self._received += 1
+                        self.latest_frame = frame
+                        self.latest_meta = {
+                            "encoding": msg.encoding,
+                            "width": int(msg.width),
+                            "height": int(msg.height),
+                            "step": int(msg.step),
+                            "received": self._received,
+                        }
                     now = time.time()
                     if now - self._last_status_at >= 1.0:
                         self._last_status_at = now
                         self.status_changed.emit(
-                            f"receiving: {self.topic} frames={self._received} encoding={msg.encoding} size={msg.width}x{msg.height}"
+                            f"receiving: {self.topic} frames={self.frames_received()} encoding={msg.encoding} size={msg.width}x{msg.height}"
                         )
 
             node.create_subscription(Image, self.topic, on_image, qos_profile_sensor_data)
@@ -177,6 +183,20 @@ class RosImagePreviewWorker(QObject):
 
     def stop(self) -> None:
         self._running = False
+        self.clear_buffer()
+
+    def snapshot(self) -> tuple[np.ndarray | None, dict[str, object]]:
+        with self._lock:
+            return self.latest_frame, dict(self.latest_meta)
+
+    def frames_received(self) -> int:
+        with self._lock:
+            return self._received
+
+    def clear_buffer(self) -> None:
+        with self._lock:
+            self.latest_frame = None
+            self.latest_meta = {}
 
     def _image_to_rgb(self, msg) -> np.ndarray | None:
         encoding = msg.encoding.lower()
@@ -606,7 +626,6 @@ class InspectorPage(QWidget):
         self._preview_worker = RosImagePreviewWorker(topic)
         self._preview_worker.moveToThread(self._preview_thread)
         self._preview_thread.started.connect(self._preview_worker.run)
-        self._preview_worker.frame_tick.connect(self.store_preview_frame)
         self._preview_worker.status_changed.connect(self.preview_status.setText)
         self._preview_worker.status_changed.connect(lambda text: self._append_log("preview", text))
         self._preview_worker.finished.connect(self._preview_thread.quit)
@@ -633,6 +652,7 @@ class InspectorPage(QWidget):
         self._preview_worker = None
         self._preview_thread = None
         self.playback_timer.stop()
+        self.clear_preview_buffer()
         self.preview_status.setText("preview: stopped")
         self._append_log("preview", "[stopped] image preview")
 
@@ -643,13 +663,19 @@ class InspectorPage(QWidget):
             self.preview_status.setText("preview: stopped")
 
     def store_preview_frame(self) -> None:
-        if self._preview_worker is None or self._preview_worker.latest_frame is None:
+        if self._preview_worker is None:
             return
-        frame = self._preview_worker.latest_frame
+        frame, meta = self._preview_worker.snapshot()
+        if frame is None:
+            return
         self._latest_frame = frame
-        self._latest_meta = dict(self._preview_worker.latest_meta)
-        self._latest_sequence += 1
-        self._received_frames += 1
+        self._latest_meta = meta
+        received = int(meta.get("received", 0) or 0)
+        if received <= self._latest_sequence:
+            return
+        delta = received - self._latest_sequence
+        self._latest_sequence = received
+        self._received_frames += delta
         now = time.time()
         if now - self._last_camera_fps_at >= 1.0:
             observed_fps = self._received_frames / (now - self._last_camera_fps_at)
@@ -672,12 +698,26 @@ class InspectorPage(QWidget):
     def display_latest_frame(self) -> None:
         if self._preview_paused:
             return
+        self.store_preview_frame()
         if self._latest_frame is None:
             return
         if self._displayed_sequence == self._latest_sequence:
             return
         self.update_preview_frame(self._latest_frame)
         self._displayed_sequence = self._latest_sequence
+
+    def clear_preview_buffer(self) -> None:
+        self._latest_frame = None
+        self._latest_meta = {}
+        self._latest_sequence = 0
+        self._displayed_sequence = -1
+        self._paused_frame = None
+        self._preview_paused = False
+        self.preview.clear_frame()
+        self.image_meta.setText("image: -")
+        self.fps.setText("preview fps: 0.0")
+        self.camera_fps.setText("camera fps: 0.0")
+        self.sample.setText("sample: x=- y=- rgb=(-, -, -)")
 
     def update_preview_frame(self, frame: np.ndarray) -> None:
         self.preview.set_frame(frame)
