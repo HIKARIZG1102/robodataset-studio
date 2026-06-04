@@ -343,6 +343,8 @@ RoboDataset Studio
 - 每个 Start 操作必须有对应 Stop 操作。
 - Stop 后需要安全退出对应 ROS2 CLI / worker，不残留多余进程。
 - `sensor_msgs/msg/Image` 实时 image viewer，预览显示必须来自当前真实 ROS image topic 最新帧。
+- 每次启动 image preview 应创建唯一 ROS preview node 名称，避免旧订阅节点残留导致用户误判当前预览状态。
+- Preview Log 应实时显示实际收到的 frame 计数、encoding 和 size，便于确认显示的是当前真实相机流。
 - 预览应支持播放 FPS 设置，并根据已观测到的相机 ROS topic 最大接收 FPS 自动抬高最小播放 FPS。
 - 预览应支持暂停；暂停后冻结当前真实帧，允许用户查看静态图。
 - 暂停时显示基于当前真实帧像素计算的亮度 / 欠曝 / 过曝 / RGB 均值 / 3x3 亮度分布。除非 ROS topic 或相机 metadata 明确提供，不允许伪造曝光时间、白平衡增益等相机参数。

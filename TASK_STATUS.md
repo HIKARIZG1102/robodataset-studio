@@ -1,6 +1,6 @@
 # RoboDataset Studio Task Status
 
-更新时间：2026-06-05 04:52 Asia/Shanghai
+更新时间：2026-06-05 05:45 Asia/Shanghai
 
 ## 当前任务清单
 
@@ -31,6 +31,7 @@
 - [x] Inspector 支持从 Discovery 选择 node/topic，并对图像 topic 做真实 ROS2 实时预览。
 - [x] Inspector 拆分 Node Info / Topic Echo / Topic Hz / Preview Log 终端面板，并为每个 Start 增加 Stop 和安全退出。
 - [x] Inspector 图像预览增加播放 FPS、暂停冻结真实帧和基于真实帧的亮度/RGB/曝光风险统计；日志面板上限调整为 2000 行。
+- [x] 修复 image preview 使用固定 ROS node 名导致旧订阅残留/误判的问题，Preview Log 增加真实 frame 计数、encoding、size。
 - [ ] 创建或连接 GitHub 仓库并推送阶段成果。
 
 ## 已完成项目
@@ -60,6 +61,7 @@
 - 已用 `/usb_camera_test_node` 发布的 `/usb_camera/image_raw` 验证真实 ROS2 图像 topic 可被发现和解析为 RGB frame。
 - Inspector 图像预览改为专用 image topic 下拉框，只列出 `sensor_msgs/msg/Image`，避免误选 `/parameter_events` 等非图像 topic；ProcessManager 停止流程增强为 SIGINT -> SIGTERM -> SIGKILL。
 - Inspector 暂停后的 Frame Stats 明确只展示从当前真实图像像素检测出的统计，不伪造 `sensor_msgs/Image` 未提供的曝光时间或白平衡增益。
+- 当前项目外真实摄像头测试节点：`/real_usb_camera_node` 发布 `/usb_camera/image_raw [sensor_msgs/msg/Image]`，encoding=`rgb8`，size=`640x480`，实测约 9-11 FPS；Qt worker 已验证可收到真实帧。
 - 已再次运行 `.venv/bin/python -m compileall src` 和 PySide6 offscreen 主窗口检查，均通过。
 
 ## 遇到的问题

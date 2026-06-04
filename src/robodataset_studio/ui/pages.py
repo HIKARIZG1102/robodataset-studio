@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import time
+from uuid import uuid4
 
 import numpy as np
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
@@ -109,6 +110,8 @@ class RosImagePreviewWorker(QObject):
         super().__init__()
         self.topic = topic
         self._running = True
+        self._received = 0
+        self._last_status_at = 0.0
 
     @Slot()
     def run(self) -> None:
@@ -123,15 +126,22 @@ class RosImagePreviewWorker(QObject):
 
             context = rclpy.Context()
             rclpy.init(context=context)
-            node = rclpy.create_node("robodataset_image_preview", context=context)
+            node = rclpy.create_node(f"robodataset_image_preview_{uuid4().hex[:8]}", context=context)
             executor = SingleThreadedExecutor(context=context)
             executor.add_node(node)
 
             def on_image(msg: Image) -> None:
                 frame = self._image_to_rgb(msg)
                 if frame is not None:
+                    self._received += 1
                     self.frame_received.emit(frame)
                     self.frame_ready.emit(frame)
+                    now = time.time()
+                    if now - self._last_status_at >= 1.0:
+                        self._last_status_at = now
+                        self.status_changed.emit(
+                            f"receiving: {self.topic} frames={self._received} encoding={msg.encoding} size={msg.width}x{msg.height}"
+                        )
 
             node.create_subscription(Image, self.topic, on_image, qos_profile_sensor_data)
             self.status_changed.emit(f"subscribed: {self.topic}")
