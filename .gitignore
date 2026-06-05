@@ -1,5 +1,7 @@
 .git_local/
 .venv/
+RoboDataset-Studio.sh
+RoboDataset-Studio.desktop
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -13,4 +15,3 @@ merged_calvin/
 *.npz
 *.hdf5
 *.h5
-

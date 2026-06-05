@@ -8,14 +8,33 @@ HDF5 conversion, review, and upload workflow.
 ## Quick Start
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
-robodataset-studio
+scripts/bootstrap.sh
+./RoboDataset-Studio.sh
 ```
+
+The bootstrap script creates a local `.venv`, installs the project, and writes
+two local launchers that are intentionally ignored by git:
+
+- `RoboDataset-Studio.sh`
+- `RoboDataset-Studio.desktop`
 
 If ROS2 is not sourced, discovery falls back to an empty graph and the mock
 recorder/converter still work for UI and data-flow testing.
+
+For ROS2 Humble recording, use Python 3.10 because the system `rclpy` extension
+is built for Python 3.10 on Ubuntu 22.04. `scripts/bootstrap.sh` defaults to
+`/usr/bin/python3.10` and sources `/opt/ros/humble/setup.bash` when present.
+On a new Ubuntu machine, install the venv package first if it is missing:
+
+```bash
+sudo apt install python3.10-venv
+```
+
+Override these paths only when needed:
+
+```bash
+PYTHON_BIN=/usr/bin/python3.10 ROS_SETUP=/opt/ros/humble/setup.bash scripts/bootstrap.sh
+```
 
 Run backend smoke tests with ROS2 pytest plugins disabled:
 

@@ -1,6 +1,6 @@
 # RoboDataset Studio Task Status
 
-更新时间：2026-06-05 20:23 Asia/Shanghai
+更新时间：2026-06-05 20:38 Asia/Shanghai
 
 ## 当前任务清单
 
@@ -47,6 +47,10 @@
 - [x] `collection_config.yaml` 默认增加 `runtime.mode=listener_only`、`starts_external_nodes=false`、`publishes_robot_commands=false`。
 - [x] listener-only 配置不再要求 `robot.action_topic` 必填，避免把采集程序和机械臂控制入口绑定。
 - [x] Recording 页面监听计划表增加 Runtime 列，显示当前配置是 `listener_only`。
+- [x] 检查本机依赖：系统 Python 3.13 可运行 UI 依赖，但 ROS2 Humble `rclpy` 需要 Python 3.10。
+- [x] 增加 `scripts/bootstrap.sh`，用于新设备创建 `.venv`、安装项目依赖并生成 `RoboDataset-Studio.sh` / `RoboDataset-Studio.desktop` 启动器。
+- [x] 更新 `scripts/run_app.sh`，优先使用 `.venv` 中的 `robodataset-studio` 并自动 source ROS Humble 环境。
+- [x] 用临时 Python 3.13 虚拟环境验证 bootstrap 的 pip 安装链路和后端 smoke tests；真实 ROS2 recorder 仍需 Python 3.10 venv。
 
 ## 已完成项目
 
@@ -88,14 +92,19 @@
 - 已安装 dev 依赖并运行 `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/python -m pytest -q`，3 个后端 smoke tests 全部通过；直接 pytest 会被 ROS2 `launch_testing` 外部插件自动加载影响，当前用禁用自动插件方式规避。
 - 已为 JointState -> `robot_obs` padding 增加测试，当前 `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/python -m pytest -q` 为 4 passed。
 - 当前版本已按新边界收窄为采集解耦程序：外部节点由其他程序启动，本程序从 ROS2 graph 选择 topic 后生成 listener-only 配置并开始记录，不发布机器人控制命令。
+- 当前机器存在 `/usr/bin/python3.10` 和 `/opt/ros/humble/setup.bash`；在该组合下 `rclpy` 可导入，适合真实 ROS2 监听采集。
+- 已增加新设备安装入口：执行 `scripts/bootstrap.sh` 后，可直接运行根目录生成的 `RoboDataset-Studio.sh`，或使用生成的 `RoboDataset-Studio.desktop`。
+- 已验证 `ALLOW_NON_ROS_PYTHON=1` 的临时安装链路可完成，并在临时环境中运行后端 smoke tests：6 passed。
 
 ## 遇到的问题
 
 - 历史问题：外层工作目录曾有只读 `.git` 挂载，不能直接作为仓库；当前项目已放在 `robodataset-studio/` 子目录内，Git 状态正常。
 - 本机 `gh` 命令不可用，推送 GitHub 可能需要使用 `git` + HTTPS 远端，或通过 GitHub API 创建仓库。
 - 用户消息中包含 GitHub token，属于敏感凭据。后续推送时只应通过环境变量或交互式凭据使用，不写入文件、不打印到日志。建议推送完成后轮换该 token。
-- 系统 Python 环境未安装 `PySide6`，但项目 `.venv` 已安装并可运行 GUI 检查。
-- 真实 ROS2 是否已安装还需要继续确认。
+- 系统默认 `python3` 是 Anaconda Python 3.13.9，不能直接导入 ROS2 Humble 的 `rclpy` C 扩展；真实 ROS2 recorder 必须使用 `/usr/bin/python3.10` 创建虚拟环境。
+- 当前机器尚未安装 `python3.10-venv`，因此默认真实 ROS2 bootstrap 暂时不能创建 `.venv`；需要系统层执行 `sudo apt install python3.10-venv` 后再运行 `scripts/bootstrap.sh`。
+- 当前运行环境 sudo 不可用，不能在本轮直接安装 `python3.10-venv`。
+- `ros2` 命令可用，`ros2 --version` 不是有效参数；当前 `ros2 node list` 可看到已有 WidowX/RViz 相关节点。
 - 曾尝试错误仓库名导致 GitHub 返回 `Repository not found`；已定位真实仓库为 `HIKARIZG1102/robodataset-studio` 并成功推送。
 - 当前 `robodataset-studio/` 已是普通 Git 仓库，不再使用 `.git_local` 分离仓库方式。
 - `gello_widowx` 数据集路径在 Spaceman_Server 上存在；在 microsate_widowx 上该精确路径不存在。
@@ -113,7 +122,6 @@
   - SSH 上传继续扩展远端目录浏览、新建目录、剩余空间检查。
 
 - 工程化：
-  - 安装依赖或确认本机环境。
-  - 运行导入检查。
-  - 初始化 git 仓库。
+  - 在新设备上运行 `scripts/bootstrap.sh`，验证 `.venv` 安装、ROS2 Python 绑定导入和 GUI 启动。
+  - 后续考虑补 `.desktop` 文件或 AppImage/deb 打包，让启动体验更接近普通软件。
   - 持续补充自动化 smoke tests / pytest，覆盖 GUI 状态流和 ROS worker 清理。
