@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import threading
@@ -144,6 +145,12 @@ class RosImagePreviewWorker(QObject):
         executor = None
         node = None
         try:
+            if os.environ.get("ROBODATASET_DISABLE_FASTDDS_SHM", "1") == "1":
+                profile = Path(__file__).resolve().parents[3] / "config" / "fastdds_no_shm.xml"
+                if profile.exists():
+                    os.environ.setdefault("RMW_IMPLEMENTATION", os.environ.get("ROBODATASET_RMW_IMPLEMENTATION", "rmw_cyclonedds_cpp"))
+                    os.environ.setdefault("FASTDDS_DEFAULT_PROFILES_FILE", str(profile))
+                    os.environ.setdefault("FASTRTPS_DEFAULT_PROFILES_FILE", str(profile))
             import rclpy
             from rclpy.executors import SingleThreadedExecutor
             from rclpy.qos import qos_profile_sensor_data
@@ -637,7 +644,8 @@ class InspectorPage(QWidget):
                 pass
         if self._preview_thread is not None:
             self._preview_thread.quit()
-            self._preview_thread.wait(1500)
+            if not self._preview_thread.wait(3000):
+                self._append_log("preview", "[warning] image preview thread did not stop within 3 seconds")
         self._preview_worker = None
         self._preview_thread = None
         self.playback_timer.stop()

@@ -9,6 +9,8 @@ CONDA_EXE="${CONDA_EXE:-$(command -v conda || true)}"
 CONDA_ENV_DIR="${CONDA_ENV_DIR:-${ROOT_DIR}/.conda-env}"
 ENV_BACKEND="${ENV_BACKEND:-auto}"
 ROS_SETUP="${ROS_SETUP:-/opt/ros/humble/setup.bash}"
+FASTDDS_NO_SHM_PROFILE="${ROOT_DIR}/config/fastdds_no_shm.xml"
+ROBODATASET_RMW_IMPLEMENTATION="${ROBODATASET_RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
 
 # shellcheck disable=SC1090
 source "${DESKTOP_DEPS}"
@@ -132,6 +134,8 @@ ENV_KIND=${ENV_KIND}
 ENV_PYTHON=${ENV_PYTHON}
 ENV_COMMAND=${ENV_COMMAND}
 ROS_SETUP=${ROS_SETUP}
+FASTDDS_NO_SHM_PROFILE=${FASTDDS_NO_SHM_PROFILE}
+ROBODATASET_RMW_IMPLEMENTATION=${ROBODATASET_RMW_IMPLEMENTATION}
 EOF
 
 cat > "${ROOT_DIR}/RoboDataset-Studio.sh" <<'EOF'
@@ -158,6 +162,12 @@ if [[ -f "${ROS_SETUP}" ]]; then
   # shellcheck disable=SC1090
   source "${ROS_SETUP}"
   set -u
+fi
+
+if [[ "${ROBODATASET_DISABLE_FASTDDS_SHM:-1}" == "1" && -f "${FASTDDS_NO_SHM_PROFILE:-}" ]]; then
+  export RMW_IMPLEMENTATION="${ROBODATASET_RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
+  export FASTDDS_DEFAULT_PROFILES_FILE="${FASTDDS_NO_SHM_PROFILE}"
+  export FASTRTPS_DEFAULT_PROFILES_FILE="${FASTDDS_NO_SHM_PROFILE}"
 fi
 
 if [[ -n "${DISPLAY:-}" && "${QT_QPA_PLATFORM:-}" != "offscreen" && -n "${ENV_PYTHON:-}" ]]; then

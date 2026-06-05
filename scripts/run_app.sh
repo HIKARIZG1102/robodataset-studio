@@ -21,6 +21,12 @@ if [[ -f "${ROS_SETUP}" ]]; then
   set -u
 fi
 
+if [[ "${ROBODATASET_DISABLE_FASTDDS_SHM:-1}" == "1" && -f "${FASTDDS_NO_SHM_PROFILE:-${ROOT_DIR}/config/fastdds_no_shm.xml}" ]]; then
+  export RMW_IMPLEMENTATION="${ROBODATASET_RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
+  export FASTDDS_DEFAULT_PROFILES_FILE="${FASTDDS_NO_SHM_PROFILE:-${ROOT_DIR}/config/fastdds_no_shm.xml}"
+  export FASTRTPS_DEFAULT_PROFILES_FILE="${FASTDDS_NO_SHM_PROFILE:-${ROOT_DIR}/config/fastdds_no_shm.xml}"
+fi
+
 if [[ -n "${DISPLAY:-}" && "${QT_QPA_PLATFORM:-}" != "offscreen" && -n "${ENV_PYTHON:-}" ]]; then
   qt_install_desktop_dependencies_if_requested "${ENV_PYTHON}" || exit 1
 fi

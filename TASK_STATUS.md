@@ -1,6 +1,6 @@
 # RoboDataset Studio Task Status
 
-更新时间：2026-06-05 21:28 Asia/Shanghai
+更新时间：2026-06-05 21:40 Asia/Shanghai
 
 ## 当前任务清单
 
@@ -57,6 +57,8 @@
 - [x] 当前 `.conda-env` 已验证 `rclpy` 可导入、后端 smoke tests 通过、PySide6 主窗口 offscreen 可创建。
 - [x] 启动器增加 Qt desktop runtime 依赖扫描：对 PySide6 `platforms/` 和 `xcbglintegrations/` 插件运行 `ldd`，缺库时映射并提示 Ubuntu apt 包，避免直接 Qt core dump。
 - [x] bootstrap 和启动器改为默认交互式询问 sudo 安装缺失系统依赖；`AUTO_INSTALL_SYSTEM_DEPS=1` 可无提示自动装，`AUTO_INSTALL_SYSTEM_DEPS=0` 只打印命令。
+- [x] 增加 `config/fastdds_no_shm.xml`，启动器和 ROS recorder/preview 默认切换到 `rmw_cyclonedds_cpp`，并设置 FastDDS no-shm profile 作为 fallback，规避 `fastrtps_port* open_and_lock_file failed`。
+- [x] Image preview 停止等待从 1.5 秒延长到 3 秒，停止超时时写入 warning，降低残留 ROS preview node 风险。
 
 ## 已完成项目
 
@@ -114,6 +116,7 @@
 - 当前机器尚未安装 `python3.10-venv`，因此默认真实 ROS2 bootstrap 暂时不能创建 `.venv`；需要系统层执行 `sudo apt install python3.10-venv` 后再运行 `scripts/bootstrap.sh`。
 - 当前运行环境 sudo 不可用，不能在本轮直接安装 `python3.10-venv`。
 - 当前 X11 桌面缺 `libxcb-cursor0`，导致 PySide6 xcb platform plugin 无法加载；当前扫描确认其余 X11/Wayland/OpenGL 关键库已存在。需要执行 `sudo apt install libxcb-cursor0`，或在 sudo 可用机器上用 `INSTALL_SYSTEM_DEPS=1 scripts/bootstrap.sh` 自动安装缺失 Qt 桌面运行库。
+- 当前出现 `RTPS_TRANSPORT_SHM Failed init_port fastrtps_port7413`，属于 Fast DDS shared-memory lock 冲突；系统已安装 `ros-humble-rmw-cyclonedds-cpp`，当前默认使用 CycloneDDS。若需要恢复 Fast DDS，可设置 `ROBODATASET_RMW_IMPLEMENTATION=rmw_fastrtps_cpp`。
 - `ros2` 命令可用，`ros2 --version` 不是有效参数；当前 `ros2 node list` 可看到已有 WidowX/RViz 相关节点。
 - 曾尝试错误仓库名导致 GitHub 返回 `Repository not found`；已定位真实仓库为 `HIKARIZG1102/robodataset-studio` 并成功推送。
 - 当前 `robodataset-studio/` 已是普通 Git 仓库，不再使用 `.git_local` 分离仓库方式。

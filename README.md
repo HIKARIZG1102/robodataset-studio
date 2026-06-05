@@ -21,6 +21,15 @@ and writes two local launchers that are intentionally ignored by git:
 If ROS2 is not sourced, discovery falls back to an empty graph and the mock
 recorder/converter still work for UI and data-flow testing.
 
+By default, the launcher uses CycloneDDS (`rmw_cyclonedds_cpp`) and also exports
+`config/fastdds_no_shm.xml` as a FastDDS fallback profile. This avoids
+`fastrtps_port* open_and_lock_file` errors that can cause unstable image
+preview on shared workstations. To override the RMW implementation:
+
+```bash
+ROBODATASET_RMW_IMPLEMENTATION=rmw_fastrtps_cpp ./RoboDataset-Studio.sh
+```
+
 For ROS2 Humble recording, use Python 3.10 because the system `rclpy` extension
 is built for Python 3.10 on Ubuntu 22.04. `scripts/bootstrap.sh` defaults to
 `/usr/bin/python3.10`, sources `/opt/ros/humble/setup.bash` when present, and

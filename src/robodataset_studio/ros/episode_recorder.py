@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -97,6 +98,12 @@ class RosEpisodeRecorder:
         steps: int,
         sample_rate: float,
     ) -> tuple[dict[str, list[np.ndarray]], dict[str, list[np.ndarray]]]:
+        if os.environ.get("ROBODATASET_DISABLE_FASTDDS_SHM", "1") == "1":
+            profile = Path(__file__).resolve().parents[3] / "config" / "fastdds_no_shm.xml"
+            if profile.exists():
+                os.environ.setdefault("RMW_IMPLEMENTATION", os.environ.get("ROBODATASET_RMW_IMPLEMENTATION", "rmw_cyclonedds_cpp"))
+                os.environ.setdefault("FASTDDS_DEFAULT_PROFILES_FILE", str(profile))
+                os.environ.setdefault("FASTRTPS_DEFAULT_PROFILES_FILE", str(profile))
         import rclpy
         from rclpy.executors import SingleThreadedExecutor
         from rclpy.qos import qos_profile_sensor_data
