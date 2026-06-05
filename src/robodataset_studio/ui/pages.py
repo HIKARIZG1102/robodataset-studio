@@ -36,7 +36,7 @@ from robodataset_studio.core.models import ProcessRecord, ProjectState
 from robodataset_studio.core.process_manager import ProcessManager
 from robodataset_studio.dataset.converter import Hdf5Converter
 from robodataset_studio.dataset.layout import CalvinLayoutScanner
-from robodataset_studio.dataset.merge_plan import CalvinMergePlanner
+from robodataset_studio.dataset.merge_plan import CalvinMergePlanner, CalvinSessionMerger
 from robodataset_studio.dataset.recorder import MockRecorder
 from robodataset_studio.dataset.validator import DatasetValidator
 from robodataset_studio.ros.episode_recorder import RosEpisodeRecorder
@@ -59,6 +59,7 @@ class AppContext:
         self.converter = Hdf5Converter()
         self.layout_scanner = CalvinLayoutScanner()
         self.merge_planner = CalvinMergePlanner()
+        self.session_merger = CalvinSessionMerger()
         self.last_graph: dict[str, list[dict[str, str]]] = {"nodes": [], "topics": [], "services": []}
 
     def has_config(self) -> bool:
@@ -1032,12 +1033,15 @@ class ConvertPage(QWidget):
         self.plan_table.setHorizontalHeaderLabels(["Session", "Status", "Episodes", "Annotations", "First", "Last", "Path"])
         dry_run = QPushButton("Build Merge Dry Run")
         dry_run.clicked.connect(self.build_dry_run)
+        merge = QPushButton("Merge NPZ Sessions")
+        merge.clicked.connect(self.merge_sessions)
         convert = QPushButton("Convert NPZ to HDF5")
         convert.clicked.connect(self.convert)
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("Merge Dry Run"))
         layout.addWidget(dry_run)
         layout.addWidget(self.plan_table)
+        layout.addWidget(merge)
         layout.addWidget(convert)
         layout.addWidget(self.log)
 
@@ -1059,6 +1063,19 @@ class ConvertPage(QWidget):
             ]
             for col, value in enumerate(values):
                 self.plan_table.setItem(row_idx, col, QTableWidgetItem(str(value)))
+
+    def merge_sessions(self) -> None:
+        raw_root = self.ctx.state.dataset_root / "raw_sessions" / self.ctx.state.task_name / self.ctx.state.version
+        try:
+            manifest = self.ctx.session_merger.merge(raw_root, self.ctx.state.merged_dir)
+        except Exception as exc:
+            QMessageBox.warning(self, "Merge failed", str(exc))
+            self.log.appendPlainText(f"merge failed: {exc}")
+            return
+        self.log.appendPlainText(
+            "merged sessions: "
+            f"{manifest['session_count']} session(s), {manifest['episode_count']} episode(s) -> {manifest['merged_training_dir']}"
+        )
 
     def convert(self) -> None:
         if not self.ctx.has_raw_episodes():
