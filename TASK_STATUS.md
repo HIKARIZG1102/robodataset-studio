@@ -1,6 +1,6 @@
 # RoboDataset Studio Task Status
 
-更新时间：2026-06-05 23:50 Asia/Shanghai
+更新时间：2026-06-06 00:22 Asia/Shanghai
 
 ## 当前任务清单
 
@@ -67,6 +67,7 @@
 - [x] 将 listener-only ROS2 recorder 输出改为 Hermes 风格 CALVIN-like transition 文件：`training/episode_*.npz` 每个文件一条 transition，并写 `training/lang_annotations/auto_lang_ann.npy` 标注区间。
 - [x] `collection_config.yaml` 生成增加环境描述、关节数量/顺序、action 推导策略、CALVIN transition 输出标记和 language annotation 文件路径。
 - [x] JointState -> `robot_obs` 改为配置驱动：支持按 `joint_order` 重排关节，按 `fields` 选择 position / velocity / effort，并按 `output_dim` 自动补零或裁剪。
+- [x] Discovery topic 选择改为显式复选框，不再依赖 Ctrl/Shift 多选；Topic/Type 列改为自适应拉伸并提供 tooltip 显示完整名称。
 
 ## 已完成项目
 

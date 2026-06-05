@@ -6,6 +6,7 @@ import time
 
 import numpy as np
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from robodataset_studio.dataset.merge_plan import CalvinMergePlanner, CalvinSessionMerger
@@ -14,7 +15,7 @@ from robodataset_studio.core.config_manager import ConfigManager
 from robodataset_studio.core.models import ProjectState
 from robodataset_studio.ros.episode_recorder import RosEpisodeRecorder, joint_state_to_robot_obs
 from robodataset_studio.ros.image_conversion import image_bytes_to_rgb
-from robodataset_studio.ui.pages import AppContext, InspectorPage
+from robodataset_studio.ui.pages import AppContext, DiscoveryPage, InspectorPage
 from robodataset_studio.upload.manifest import UploadManifest
 from robodataset_studio.upload.ssh_uploader import parse_ssh_target
 
@@ -164,6 +165,25 @@ def test_inspector_manual_preview_fps_survives_restart() -> None:
     assert page._auto_playback_deadline == 0.0
     assert page._effective_playback_fps == 30
     assert page.playback_timer.interval() == 33
+
+
+def test_discovery_topic_selection_uses_checkboxes() -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    page = DiscoveryPage(ctx)
+    ctx.last_graph = {
+        "nodes": [],
+        "topics": [
+            {"name": "/camera/side/image_raw", "type": "sensor_msgs/msg/Image"},
+            {"name": "/wx250s/joint_states", "type": "sensor_msgs/msg/JointState"},
+        ],
+        "services": [],
+    }
+    page.populate_graph(ctx.last_graph)
+    page.topics.item(1, 0).setCheckState(Qt.Checked)
+
+    assert app is not None
+    assert page._selected_topics() == [ctx.last_graph["topics"][1]]
 
 
 def test_inspector_source_fps_is_separate_from_display_target() -> None:

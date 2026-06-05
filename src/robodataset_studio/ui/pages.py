@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFormLayout,
+    QHeaderView,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -310,11 +311,14 @@ class DiscoveryPage(QWidget):
         self.ctx = ctx
         self.nodes = QListWidget()
         self.nodes.currentRowChanged.connect(self.select_node)
-        self.topics = QTableWidget(0, 2)
-        self.topics.setHorizontalHeaderLabels(["Topic", "Type"])
+        self.topics = QTableWidget(0, 3)
+        self.topics.setHorizontalHeaderLabels(["Use", "Topic", "Type"])
         self.topics.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.topics.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        self.topics.currentCellChanged.connect(self.select_topic)
+        self.topics.setSelectionMode(QAbstractItemView.NoSelection)
+        self.topics.setWordWrap(False)
+        self.topics.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.topics.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.topics.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         refresh = QPushButton("Discover ROS2 Graph")
         refresh.clicked.connect(self.refresh)
         generate = QPushButton("Generate Listener Config From Selected Topics")
@@ -330,18 +334,21 @@ class DiscoveryPage(QWidget):
     def refresh(self) -> None:
         graph = self.ctx.discovery.discover()
         self.ctx.last_graph = graph
+        self.populate_graph(graph)
+
+    def populate_graph(self, graph: dict[str, list[dict[str, str]]]) -> None:
         self.nodes.clear()
         for node in graph.get("nodes", []):
             self.nodes.addItem(node["name"])
         topics = graph.get("topics", [])
         self.topics.setRowCount(len(topics))
         for row, topic in enumerate(topics):
-            self.topics.setItem(row, 0, QTableWidgetItem(topic.get("name", "")))
-            self.topics.setItem(row, 1, QTableWidgetItem(topic.get("type", "")))
+            self.topics.setItem(row, 0, self._make_check_item(Qt.Unchecked))
+            self.topics.setItem(row, 1, self._text_item(topic.get("name", "")))
+            self.topics.setItem(row, 2, self._text_item(topic.get("type", "")))
+        self.topics.resizeRowsToContents()
         if graph.get("nodes"):
             self.nodes.setCurrentRow(0)
-        if topics:
-            self.topics.selectRow(0)
 
     def generate_config(self) -> None:
         selected_topics = self._selected_topics()
@@ -361,14 +368,25 @@ class DiscoveryPage(QWidget):
         if 0 <= row < len(nodes):
             self.ctx.state.selected_nodes = [nodes[row].get("name", "")]
 
-    def select_topic(self, row: int, _current_col: int, _previous_row: int, _previous_col: int) -> None:
-        topics = self.ctx.last_graph.get("topics", [])
-        if 0 <= row < len(topics):
-            self.ctx.state.selected_streams = self._selected_topics() or [topics[row]]
+    def _make_check_item(self, state: Qt.CheckState) -> QTableWidgetItem:
+        item = QTableWidgetItem("")
+        item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+        item.setCheckState(state)
+        return item
+
+    def _text_item(self, text: str) -> QTableWidgetItem:
+        item = QTableWidgetItem(text)
+        item.setToolTip(text)
+        item.setFlags(Qt.ItemIsEnabled)
+        return item
 
     def _selected_topics(self) -> list[dict[str, str]]:
         topics = self.ctx.last_graph.get("topics", [])
-        rows = sorted({index.row() for index in self.topics.selectionModel().selectedRows()})
+        rows = []
+        for row in range(self.topics.rowCount()):
+            item = self.topics.item(row, 0)
+            if item is not None and item.checkState() == Qt.Checked:
+                rows.append(row)
         return [topics[row] for row in rows if 0 <= row < len(topics)]
 
 
