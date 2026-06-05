@@ -434,16 +434,17 @@ class InspectorPage(QWidget):
         self.playback_fps.setValue(10)
         self.playback_fps.setSuffix(" fps")
         self.playback_fps.setFixedWidth(96)
-        self.playback_fps.setToolTip("Manual preview FPS. Changing it disables startup auto FPS.")
+        self.playback_fps.setToolTip("Display target FPS. Source image stream still runs at its original rate.")
         self._frames = 0
-        self._received_frames = 0
         self._last_display_fps_at = time.time()
         self._last_camera_fps_at = time.time()
         self._max_camera_fps = 0.0
+        self._last_source_received = 0
         self.playback_fps.setMinimum(1)
         self._manual_playback_override = False
         self._auto_playback_deadline = 0.0
         self._effective_playback_fps = self.playback_fps.value()
+        self._preview_generation = 0
         self.playback_fps.valueChanged.connect(self.set_manual_playback_fps)
         self._latest_frame: np.ndarray | None = None
         self._latest_meta: dict[str, object] = {}
@@ -639,12 +640,14 @@ class InspectorPage(QWidget):
         if topic_type and topic_type != "sensor_msgs/msg/Image":
             QMessageBox.warning(self, "Topic type", f"Image preview expects sensor_msgs/msg/Image.\nSelected type: {topic_type}")
             return
-        self.stop_image_preview()
+        self.stop_image_preview(clear_display=False)
+        self._preview_generation += 1
+        preview_generation = self._preview_generation
         self._frames = 0
-        self._received_frames = 0
         self._last_display_fps_at = time.time()
         self._last_camera_fps_at = time.time()
         self._max_camera_fps = 0.0
+        self._last_source_received = 0
         self.prepare_preview_playback_start()
         self._preview_thread = QThread(self)
         self._preview_worker = RosImagePreviewWorker(topic)
@@ -654,7 +657,7 @@ class InspectorPage(QWidget):
         self._preview_worker.finished.connect(self._preview_thread.quit)
         self._preview_worker.finished.connect(self._preview_worker.deleteLater)
         self._preview_thread.finished.connect(self._preview_thread.deleteLater)
-        self._preview_thread.finished.connect(self._preview_finished)
+        self._preview_thread.finished.connect(lambda generation=preview_generation: self._preview_finished(generation))
         self._latest_frame = None
         self._latest_meta = {}
         self._latest_sequence = 0
@@ -663,7 +666,7 @@ class InspectorPage(QWidget):
         self._preview_paused = False
         self.pause_preview_button.setText("Pause preview")
         mode = "manual" if self._manual_playback_override else "calibrating"
-        self.camera_fps.setText(f"camera fps: {mode} view: {self._effective_playback_fps}")
+        self.camera_fps.setText(f"source: - max: - target: {self._effective_playback_fps} {mode}")
         self.update_playback_timer()
         self.playback_timer.start()
         self._preview_thread.start()
@@ -676,7 +679,8 @@ class InspectorPage(QWidget):
             return
         self._auto_playback_deadline = time.time() + 2.0
 
-    def stop_image_preview(self) -> None:
+    def stop_image_preview(self, clear_display: bool = True) -> None:
+        self._preview_generation += 1
         if self._preview_worker is not None:
             self._preview_worker.stop()
             try:
@@ -690,11 +694,14 @@ class InspectorPage(QWidget):
         self._preview_worker = None
         self._preview_thread = None
         self.playback_timer.stop()
-        self.clear_preview_buffer()
+        if clear_display:
+            self.clear_preview_buffer()
         self.preview_status.setText("preview: stopped")
         self._append_log("preview", "[stopped] image preview")
 
-    def _preview_finished(self) -> None:
+    def _preview_finished(self, generation: int) -> None:
+        if generation != self._preview_generation:
+            return
         self._preview_worker = None
         self._preview_thread = None
         if self.preview_status.text().startswith("subscribed"):
@@ -721,17 +728,21 @@ class InspectorPage(QWidget):
             return
         self._latest_frame = frame
         self._latest_meta = meta
-        delta = received - self._latest_sequence
         self._latest_sequence = received
-        self._received_frames += delta
+        self.update_source_fps()
+
+    def update_source_fps(self) -> None:
+        if self._preview_worker is None:
+            return
         now = time.time()
         if now - self._last_camera_fps_at >= 1.0:
-            observed_fps = self._received_frames / (now - self._last_camera_fps_at)
+            received = self._preview_worker.frames_received()
+            observed_fps = (received - self._last_source_received) / (now - self._last_camera_fps_at)
             self._max_camera_fps = max(self._max_camera_fps, observed_fps)
             self._update_auto_playback_fps(observed_fps, now)
             mode = "manual" if self._manual_playback_override else "auto"
             self.camera_fps.setText(
-                f"camera fps: {observed_fps:.1f} max: {self._max_camera_fps:.1f} view: {self._effective_playback_fps} {mode}"
+                f"source: {observed_fps:.1f} max: {self._max_camera_fps:.1f} target: {self._effective_playback_fps} {mode}"
             )
             if self._latest_meta:
                 self.image_meta.setText(
@@ -739,12 +750,13 @@ class InspectorPage(QWidget):
                     f"{self._latest_meta.get('width')}x{self._latest_meta.get('height')} "
                     f"{self._latest_meta.get('encoding')}"
                 )
-            self._received_frames = 0
+            self._last_source_received = received
             self._last_camera_fps_at = now
 
     def display_latest_frame(self) -> None:
         if self._preview_paused:
             return
+        self.update_source_fps()
         self.store_preview_frame()
         if self._latest_frame is None:
             return
@@ -763,7 +775,7 @@ class InspectorPage(QWidget):
         self.preview.clear_frame()
         self.image_meta.setText("image: -")
         self.fps.setText("preview fps: 0.0")
-        self.camera_fps.setText("camera fps: 0.0")
+        self.camera_fps.setText("source: 0.0 max: 0.0 target: -")
         self.sample.setText("sample: x=- y=- rgb=(-, -, -)")
 
     def update_preview_frame(self, frame: np.ndarray) -> None:

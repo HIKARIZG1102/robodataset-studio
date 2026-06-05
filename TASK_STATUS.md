@@ -1,6 +1,6 @@
 # RoboDataset Studio Task Status
 
-更新时间：2026-06-05 23:11 Asia/Shanghai
+更新时间：2026-06-05 23:21 Asia/Shanghai
 
 ## 当前任务清单
 
@@ -63,6 +63,7 @@
 - [x] Inspector 明确拆分 Node、Generic topic 和 Image monitor 三组选择；Image monitor 只依赖 image topic，不再要求与普通 topic 或 node 保持一致。
 - [x] Image preview 启动后增加 2 秒相机 FPS 自动检测，默认用检测到的最高可运行帧率作为内部播放 FPS；手动修改 FPS 输入框后切换为手动模式，且不改变控件尺寸。
 - [x] 修复手动 FPS 模式重启预览后被自动校准覆盖的问题，并将预览刷新定时器切换为 Qt PreciseTimer，使手动 30 fps 等设置更稳定生效。
+- [x] Image preview 改为明确的 source/display 分离：ROS 订阅线程保持原始 image topic 最新帧和最高 source FPS，UI 只按用户 target FPS 从最新帧抽样显示；重启预览时保留旧画面直到新帧到达，降低黑屏概率。
 
 ## 已完成项目
 
@@ -112,6 +113,7 @@
 - 当前启动方式：执行 `./RoboDataset-Studio.sh`；也可从文件管理器使用 `RoboDataset-Studio.desktop`。
 - Image monitor 启动时会先短暂显示 `camera fps: calibrating`，约 2 秒内按真实 image topic 的接收帧率自动提高预览播放频率；FPS 输入框仍保留为手动覆盖入口。
 - 已补测试覆盖手动 FPS 重新启动预览时仍保持手动模式，不再回到自动校准。
+- Image monitor 右侧状态现在用 `source/max/target` 区分原始接收帧率、历史最高接收帧率和用户设置的显示抽样帧率。
 
 ## 遇到的问题
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 
 import numpy as np
 import pytest
@@ -109,3 +110,45 @@ def test_inspector_manual_preview_fps_survives_restart() -> None:
     assert page._auto_playback_deadline == 0.0
     assert page._effective_playback_fps == 30
     assert page.playback_timer.interval() == 33
+
+
+def test_inspector_source_fps_is_separate_from_display_target() -> None:
+    app = QApplication.instance() or QApplication([])
+    page = InspectorPage(AppContext())
+    page.playback_fps.setValue(15)
+    page.prepare_preview_playback_start()
+
+    class Worker:
+        def __init__(self, received: int) -> None:
+            self.received = received
+
+        def frames_received(self) -> int:
+            return self.received
+
+    page._preview_worker = Worker(45)  # type: ignore[assignment]
+    page._last_source_received = 0
+    page._last_camera_fps_at = time.time() - 1.5
+
+    page.update_source_fps()
+
+    assert app is not None
+    assert page._manual_playback_override is True
+    assert page._effective_playback_fps == 15
+    assert page.playback_timer.interval() == 66
+    assert "target: 15 manual" in page.camera_fps.text()
+
+
+def test_inspector_ignores_stale_preview_thread_finish() -> None:
+    app = QApplication.instance() or QApplication([])
+    page = InspectorPage(AppContext())
+    worker = object()
+    thread = object()
+    page._preview_worker = worker  # type: ignore[assignment]
+    page._preview_thread = thread  # type: ignore[assignment]
+    page._preview_generation = 2
+
+    page._preview_finished(1)
+
+    assert app is not None
+    assert page._preview_worker is worker
+    assert page._preview_thread is thread
