@@ -434,13 +434,17 @@ class InspectorPage(QWidget):
         self.playback_fps.setValue(10)
         self.playback_fps.setSuffix(" fps")
         self.playback_fps.setFixedWidth(96)
-        self.playback_fps.valueChanged.connect(self.update_playback_timer)
+        self.playback_fps.setToolTip("Manual preview FPS. Changing it disables startup auto FPS.")
         self._frames = 0
         self._received_frames = 0
         self._last_display_fps_at = time.time()
         self._last_camera_fps_at = time.time()
         self._max_camera_fps = 0.0
         self.playback_fps.setMinimum(1)
+        self._manual_playback_override = False
+        self._auto_playback_deadline = 0.0
+        self._effective_playback_fps = self.playback_fps.value()
+        self.playback_fps.valueChanged.connect(self.set_manual_playback_fps)
         self._latest_frame: np.ndarray | None = None
         self._latest_meta: dict[str, object] = {}
         self._latest_sequence = 0
@@ -640,6 +644,9 @@ class InspectorPage(QWidget):
         self._last_display_fps_at = time.time()
         self._last_camera_fps_at = time.time()
         self._max_camera_fps = 0.0
+        self._manual_playback_override = False
+        self._auto_playback_deadline = time.time() + 2.0
+        self._effective_playback_fps = self.playback_fps.value()
         self._preview_thread = QThread(self)
         self._preview_worker = RosImagePreviewWorker(topic)
         self._preview_worker.moveToThread(self._preview_thread)
@@ -656,6 +663,7 @@ class InspectorPage(QWidget):
         self._paused_frame = None
         self._preview_paused = False
         self.pause_preview_button.setText("Pause preview")
+        self.camera_fps.setText("camera fps: calibrating")
         self.playback_timer.start()
         self._preview_thread.start()
         self._append_log("preview", f"$ image-monitor subscribe {topic}")
@@ -712,7 +720,11 @@ class InspectorPage(QWidget):
         if now - self._last_camera_fps_at >= 1.0:
             observed_fps = self._received_frames / (now - self._last_camera_fps_at)
             self._max_camera_fps = max(self._max_camera_fps, observed_fps)
-            self.camera_fps.setText(f"camera fps: {observed_fps:.1f} max: {self._max_camera_fps:.1f}")
+            self._update_auto_playback_fps(observed_fps, now)
+            mode = "manual" if self._manual_playback_override else "auto"
+            self.camera_fps.setText(
+                f"camera fps: {observed_fps:.1f} max: {self._max_camera_fps:.1f} view: {self._effective_playback_fps} {mode}"
+            )
             if self._latest_meta:
                 self.image_meta.setText(
                     "image: "
@@ -755,8 +767,26 @@ class InspectorPage(QWidget):
             self._frames = 0
             self._last_display_fps_at = now
 
+    def set_manual_playback_fps(self, value: int) -> None:
+        self._manual_playback_override = True
+        self._auto_playback_deadline = 0.0
+        self._effective_playback_fps = max(1, value)
+        self.update_playback_timer()
+
+    def _update_auto_playback_fps(self, observed_fps: float, now: float) -> None:
+        if self._manual_playback_override:
+            return
+        if not self._auto_playback_deadline or observed_fps <= 0:
+            return
+        detected_fps = max(1, min(120, int(max(observed_fps, self._max_camera_fps) + 0.999)))
+        if detected_fps != self._effective_playback_fps:
+            self._effective_playback_fps = detected_fps
+            self.update_playback_timer()
+        if now >= self._auto_playback_deadline:
+            self._auto_playback_deadline = 0.0
+
     def update_playback_timer(self) -> None:
-        interval_ms = max(1, int(1000 / max(self.playback_fps.value(), 1)))
+        interval_ms = max(1, int(1000 / max(self._effective_playback_fps, 1)))
         self.playback_timer.setInterval(interval_ms)
 
     def toggle_preview_pause(self) -> None:
