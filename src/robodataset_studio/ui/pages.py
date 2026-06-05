@@ -510,6 +510,7 @@ class InspectorPage(QWidget):
         self.timer.timeout.connect(self.refresh_output)
         self.timer.start(1000)
         self.playback_timer = QTimer(self)
+        self.playback_timer.setTimerType(Qt.PreciseTimer)
         self.playback_timer.timeout.connect(self.display_latest_frame)
         self.update_playback_timer()
         self.refresh_choices()
@@ -644,9 +645,7 @@ class InspectorPage(QWidget):
         self._last_display_fps_at = time.time()
         self._last_camera_fps_at = time.time()
         self._max_camera_fps = 0.0
-        self._manual_playback_override = False
-        self._auto_playback_deadline = time.time() + 2.0
-        self._effective_playback_fps = self.playback_fps.value()
+        self.prepare_preview_playback_start()
         self._preview_thread = QThread(self)
         self._preview_worker = RosImagePreviewWorker(topic)
         self._preview_worker.moveToThread(self._preview_thread)
@@ -663,10 +662,19 @@ class InspectorPage(QWidget):
         self._paused_frame = None
         self._preview_paused = False
         self.pause_preview_button.setText("Pause preview")
-        self.camera_fps.setText("camera fps: calibrating")
+        mode = "manual" if self._manual_playback_override else "calibrating"
+        self.camera_fps.setText(f"camera fps: {mode} view: {self._effective_playback_fps}")
+        self.update_playback_timer()
         self.playback_timer.start()
         self._preview_thread.start()
         self._append_log("preview", f"$ image-monitor subscribe {topic}")
+
+    def prepare_preview_playback_start(self) -> None:
+        self._effective_playback_fps = self.playback_fps.value()
+        if self._manual_playback_override:
+            self._auto_playback_deadline = 0.0
+            return
+        self._auto_playback_deadline = time.time() + 2.0
 
     def stop_image_preview(self) -> None:
         if self._preview_worker is not None:

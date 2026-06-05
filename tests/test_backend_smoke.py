@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 
 import numpy as np
 import pytest
+from PySide6.QtWidgets import QApplication
 
 from robodataset_studio.dataset.merge_plan import CalvinMergePlanner, CalvinSessionMerger
 from robodataset_studio.dataset.recorder import MockRecorder
@@ -11,8 +13,11 @@ from robodataset_studio.core.config_manager import ConfigManager
 from robodataset_studio.core.models import ProjectState
 from robodataset_studio.ros.episode_recorder import joint_state_to_robot_obs
 from robodataset_studio.ros.image_conversion import image_bytes_to_rgb
+from robodataset_studio.ui.pages import AppContext, InspectorPage
 from robodataset_studio.upload.manifest import UploadManifest
 from robodataset_studio.upload.ssh_uploader import parse_ssh_target
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
 def test_rgb_image_conversion_respects_encoding() -> None:
@@ -89,3 +94,18 @@ def test_default_config_is_listener_only_without_action_topic() -> None:
     assert config["robot"]["action_topic"] is None
     assert config["robot"]["control"]["enabled"] is False
     assert ConfigManager().validate(config) == []
+
+
+def test_inspector_manual_preview_fps_survives_restart() -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    page = InspectorPage(ctx)
+    page.playback_fps.setValue(30)
+
+    page.prepare_preview_playback_start()
+
+    assert app is not None
+    assert page._manual_playback_override is True
+    assert page._auto_playback_deadline == 0.0
+    assert page._effective_playback_fps == 30
+    assert page.playback_timer.interval() == 33

@@ -1,6 +1,6 @@
 # RoboDataset Studio Task Status
 
-更新时间：2026-06-05 22:47 Asia/Shanghai
+更新时间：2026-06-05 23:11 Asia/Shanghai
 
 ## 当前任务清单
 
@@ -62,6 +62,7 @@
 - [x] Image preview UI 固定 16:9 预览区域、固定右侧状态列宽度、取消播放 FPS 自动改值，避免状态文本/FPS 更新导致显示框尺寸跳动。
 - [x] Inspector 明确拆分 Node、Generic topic 和 Image monitor 三组选择；Image monitor 只依赖 image topic，不再要求与普通 topic 或 node 保持一致。
 - [x] Image preview 启动后增加 2 秒相机 FPS 自动检测，默认用检测到的最高可运行帧率作为内部播放 FPS；手动修改 FPS 输入框后切换为手动模式，且不改变控件尺寸。
+- [x] 修复手动 FPS 模式重启预览后被自动校准覆盖的问题，并将预览刷新定时器切换为 Qt PreciseTimer，使手动 30 fps 等设置更稳定生效。
 
 ## 已完成项目
 
@@ -110,6 +111,7 @@
 - 当前机器 conda backend 已验证成功：`.conda-env/bin/python` 为 Python 3.10，source ROS Humble 后 `rclpy import ok`。
 - 当前启动方式：执行 `./RoboDataset-Studio.sh`；也可从文件管理器使用 `RoboDataset-Studio.desktop`。
 - Image monitor 启动时会先短暂显示 `camera fps: calibrating`，约 2 秒内按真实 image topic 的接收帧率自动提高预览播放频率；FPS 输入框仍保留为手动覆盖入口。
+- 已补测试覆盖手动 FPS 重新启动预览时仍保持手动模式，不再回到自动校准。
 
 ## 遇到的问题
 
