@@ -1871,6 +1871,38 @@ app/
 
 ---
 
+## 12.1 当前实现决策：采集与控制解耦
+
+当前工程只负责数据采集链路，不负责启动传感器节点、控制机械臂或发布动作命令。
+
+已有外部系统可以用类似命令启动：
+
+```bash
+ros2 launch hermes_data_collection collect_data.launch.py camera_count:=2 instruction:="catch the satellite"
+```
+
+RoboDataset Studio 的职责边界是：
+
+- 发现已经存在的 ROS2 nodes / topics。
+- 让用户选择需要监听的 image、JointState 和后续扩展的 action/array streams。
+- 根据选择生成 `listener_only` 的 `collection_config.yaml`。
+- Recording 页面只订阅已有 topic 并写 NPZ episode。
+- 不调用 `ros2 launch` 启动外部采集节点。
+- 不向 robot action topic 发布控制命令。
+
+配置中使用：
+
+```yaml
+runtime:
+  mode: listener_only
+  starts_external_nodes: false
+  publishes_robot_commands: false
+```
+
+`robot.action_topic` 可以作为数据来源或元数据保留，但不是 listener-only 采集的必填项。
+
+---
+
 ## 13. 首版项目名称建议
 
 可选：

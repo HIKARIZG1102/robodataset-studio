@@ -14,8 +14,10 @@ class ConfigManager:
     def build_default_config(self, state: ProjectState, topics: list[dict[str, str]] | None = None) -> dict[str, Any]:
         topics = topics or []
         image_topics = [t for t in topics if "Image" in t.get("type", "") or "image" in t.get("name", "").lower()]
-        joint_topic = next((t["name"] for t in topics if "joint" in t.get("name", "").lower()), "/wx250s/joint_states")
-        action_topic = next((t["name"] for t in topics if "action" in t.get("name", "").lower()), "/widowx_action")
+        joint_topic = next((t["name"] for t in topics if "joint" in t.get("name", "").lower()), None)
+        action_topic = next((t["name"] for t in topics if "action" in t.get("name", "").lower()), None)
+        if not topics:
+            joint_topic = "/wx250s/joint_states"
 
         cameras = []
         streams = []
@@ -101,6 +103,11 @@ class ConfigManager:
                 "end_effector_frame": "wx250s/ee_gripper_link",
                 "joint_state_topic": joint_topic,
                 "action_topic": action_topic,
+                "control": {
+                    "enabled": False,
+                    "mode": "external_controller_only",
+                    "publishes_commands": False,
+                },
                 "action_format": {
                     "type": "delta_ee_pose_gripper",
                     "dim": 7,
@@ -130,6 +137,13 @@ class ConfigManager:
                         "fields": ["joint_position", "joint_velocity", "gripper_state"],
                     }
                 ]
+                if joint_topic
+                else []
+            },
+            "runtime": {
+                "mode": "listener_only",
+                "starts_external_nodes": False,
+                "publishes_robot_commands": False,
             },
             "dataset": {
                 "output_format": ["npz", "hdf5"],
@@ -179,11 +193,9 @@ class ConfigManager:
                 errors.append(f"missing required section: {key}")
         if not config.get("cameras") and not config.get("streams"):
             errors.append("missing cameras or streams")
-        robot = config.get("robot", {})
-        if not robot.get("joint_state_topic"):
-            errors.append("robot.joint_state_topic is required")
-        if not robot.get("action_topic"):
-            errors.append("robot.action_topic is required")
+        runtime = config.get("runtime", {})
+        if runtime.get("publishes_robot_commands") is True:
+            errors.append("runtime.publishes_robot_commands must stay false for listener-only recording")
         return errors
 
     def save(self, path: Path, config: dict[str, Any]) -> None:
@@ -192,4 +204,3 @@ class ConfigManager:
 
     def clone(self, config: dict[str, Any]) -> dict[str, Any]:
         return deepcopy(config)
-

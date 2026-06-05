@@ -298,10 +298,11 @@ class DiscoveryPage(QWidget):
         self.topics = QTableWidget(0, 2)
         self.topics.setHorizontalHeaderLabels(["Topic", "Type"])
         self.topics.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.topics.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.topics.currentCellChanged.connect(self.select_topic)
         refresh = QPushButton("Discover ROS2 Graph")
         refresh.clicked.connect(self.refresh)
-        generate = QPushButton("Generate Config From Topics")
+        generate = QPushButton("Generate Listener Config From Selected Topics")
         generate.clicked.connect(self.generate_config)
         layout = QVBoxLayout(self)
         layout.addWidget(refresh)
@@ -328,10 +329,17 @@ class DiscoveryPage(QWidget):
             self.topics.selectRow(0)
 
     def generate_config(self) -> None:
+        selected_topics = self._selected_topics()
+        topics = selected_topics or self.ctx.last_graph.get("topics", [])
         self.ctx.state.collection_config = self.ctx.config_manager.build_default_config(
-            self.ctx.state, self.ctx.last_graph.get("topics", [])
+            self.ctx.state, topics
         )
-        QMessageBox.information(self, "Config", "collection_config.yaml generated in memory. Open Config page to edit/save.")
+        self.ctx.state.selected_streams = topics
+        QMessageBox.information(
+            self,
+            "Config",
+            f"listener-only collection_config.yaml generated from {len(topics)} topic(s). Open Config page to edit/save.",
+        )
 
     def select_node(self, row: int) -> None:
         nodes = self.ctx.last_graph.get("nodes", [])
@@ -341,7 +349,12 @@ class DiscoveryPage(QWidget):
     def select_topic(self, row: int, _current_col: int, _previous_row: int, _previous_col: int) -> None:
         topics = self.ctx.last_graph.get("topics", [])
         if 0 <= row < len(topics):
-            self.ctx.state.selected_streams = [topics[row]]
+            self.ctx.state.selected_streams = self._selected_topics() or [topics[row]]
+
+    def _selected_topics(self) -> list[dict[str, str]]:
+        topics = self.ctx.last_graph.get("topics", [])
+        rows = sorted({index.row() for index in self.topics.selectionModel().selectedRows()})
+        return [topics[row] for row in rows if 0 <= row < len(topics)]
 
 
 class InspectorPage(QWidget):
@@ -869,8 +882,8 @@ class RecordingPage(QWidget):
         self.episode_index = 0
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
-        self.streams = QTableWidget(0, 5)
-        self.streams.setHorizontalHeaderLabels(["Name", "Modality", "Source", "Topic/Endpoint", "Role"])
+        self.streams = QTableWidget(0, 6)
+        self.streams.setHorizontalHeaderLabels(["Name", "Modality", "Source", "Topic/Endpoint", "Role", "Runtime"])
         self.duration = QSpinBox()
         self.duration.setRange(1, 600)
         self.duration.setValue(2)
@@ -897,6 +910,8 @@ class RecordingPage(QWidget):
 
     def refresh_plan(self) -> None:
         streams = self.ctx.state.collection_config.get("streams", []) if self.ctx.has_config() else []
+        runtime = self.ctx.state.collection_config.get("runtime", {}) if self.ctx.has_config() else {}
+        mode = runtime.get("mode", "listener_only")
         self.streams.setRowCount(len(streams))
         for row, stream in enumerate(streams):
             values = [
@@ -905,6 +920,7 @@ class RecordingPage(QWidget):
                 stream.get("source", ""),
                 stream.get("topic") or stream.get("endpoint", ""),
                 stream.get("training_role", ""),
+                mode,
             ]
             for col, value in enumerate(values):
                 self.streams.setItem(row, col, QTableWidgetItem(str(value)))

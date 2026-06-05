@@ -7,6 +7,8 @@ import pytest
 
 from robodataset_studio.dataset.merge_plan import CalvinMergePlanner, CalvinSessionMerger
 from robodataset_studio.dataset.recorder import MockRecorder
+from robodataset_studio.core.config_manager import ConfigManager
+from robodataset_studio.core.models import ProjectState
 from robodataset_studio.ros.episode_recorder import joint_state_to_robot_obs
 from robodataset_studio.ros.image_conversion import image_bytes_to_rgb
 from robodataset_studio.upload.manifest import UploadManifest
@@ -70,3 +72,20 @@ def test_joint_state_to_robot_obs_pads_to_output_dim() -> None:
     robot_obs = joint_state_to_robot_obs([1.0, 2.0], [0.1], [0.01], 6)
     assert robot_obs.dtype == np.float32
     assert np.allclose(robot_obs, [1.0, 2.0, 0.1, 0.01, 0.0, 0.0])
+
+
+def test_default_config_is_listener_only_without_action_topic() -> None:
+    topics = [
+        {"name": "/camera/front/image_raw", "type": "sensor_msgs/msg/Image"},
+        {"name": "/joint_states", "type": "sensor_msgs/msg/JointState"},
+    ]
+    config = ConfigManager().build_default_config(ProjectState(), topics)
+
+    assert config["runtime"] == {
+        "mode": "listener_only",
+        "starts_external_nodes": False,
+        "publishes_robot_commands": False,
+    }
+    assert config["robot"]["action_topic"] is None
+    assert config["robot"]["control"]["enabled"] is False
+    assert ConfigManager().validate(config) == []

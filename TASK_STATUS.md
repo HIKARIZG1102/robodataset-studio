@@ -1,6 +1,6 @@
 # RoboDataset Studio Task Status
 
-更新时间：2026-06-05 17:58 Asia/Shanghai
+更新时间：2026-06-05 20:23 Asia/Shanghai
 
 ## 当前任务清单
 
@@ -19,7 +19,7 @@
 - [x] 增加第一段前端通知和错误处理。
 - [x] 增加基础语法编译检查。
 - [x] 安装 PySide6 依赖并启动 GUI 验证。
-- [x] 使用 `.git_local` 初始化分离 git 仓库并提交阶段成果。
+- [x] 已克隆 `HIKARIZG1102/robodataset-studio` 普通 Git 仓库并连接 `origin/main`。
 - [x] 只读了解远端 `gello_widowx` 数据集结构。
 - [x] 将前端 Recording 页面改为监听式采集控制台，不涉及机器人控制。
 - [x] 增加 CALVIN 数据集布局扫描前端逻辑。
@@ -42,6 +42,11 @@
 - [x] Upload 增加 SSH 连接测试和远端 manifest size/hash 校验后台任务入口。
 - [x] 增加后端 smoke tests，覆盖图像 encoding 转换、CALVIN session merge、upload manifest 和 SSH target 解析。
 - [x] 真实 ROS2 recorder 增加 `sensor_msgs/msg/JointState` 订阅，按采样节拍写入 `robot_obs`。
+- [x] 明确当前项目职责边界：只做 listener-only 数据采集，不负责传感器节点启动/停止，也不负责机械臂控制。
+- [x] Discovery 页面支持多选已有 ROS2 topic，并用选中 topic 生成监听式采集配置。
+- [x] `collection_config.yaml` 默认增加 `runtime.mode=listener_only`、`starts_external_nodes=false`、`publishes_robot_commands=false`。
+- [x] listener-only 配置不再要求 `robot.action_topic` 必填，避免把采集程序和机械臂控制入口绑定。
+- [x] Recording 页面监听计划表增加 Runtime 列，显示当前配置是 `listener_only`。
 
 ## 已完成项目
 
@@ -53,7 +58,7 @@
 - Inspector 页面可从 Discovery 结果选择 node/topic，支持 node info、topic echo、topic hz；Node Info / Topic Echo / Topic Hz / Preview Log 分独立终端面板显示，每个面板最多保留 2000 行，并支持成对 Stop；对 `sensor_msgs/msg/Image` 支持真实 ROS2 订阅预览、播放 FPS、暂停冻结真实帧、FPS 显示、鼠标坐标 RGB 采样和真实帧亮度/RGB/过曝欠曝统计。
 - Recording、Review、Convert、Upload 页面增加了基础前置条件检查。
 - 已运行 `python3 -m compileall src`，语法编译通过。
-- 已完成本地 git 提交，当前使用 `.git_local` 作为分离 git 仓库目录。
+- 已完成本地 git 提交，当前工作目录是普通 Git 仓库并跟踪 `origin/main`。
 - 已创建 `.venv` 并安装项目依赖。
 - 已用 `QT_QPA_PLATFORM=offscreen` 验证 PySide6 主窗口可创建，当前包含 4 个主板块，配置区和采集区保留子页面 tabs。
 - 已验证最小数据流程：默认配置 -> mock NPZ episode -> Review scan -> HDF5 convert。
@@ -82,17 +87,19 @@
 - 已验证 SSH target parser 和连接测试后台任务可启动/停止；远端校验需要真实 SSH target 后在 Process 页面查看结果。
 - 已安装 dev 依赖并运行 `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/python -m pytest -q`，3 个后端 smoke tests 全部通过；直接 pytest 会被 ROS2 `launch_testing` 外部插件自动加载影响，当前用禁用自动插件方式规避。
 - 已为 JointState -> `robot_obs` padding 增加测试，当前 `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/python -m pytest -q` 为 4 passed。
+- 当前版本已按新边界收窄为采集解耦程序：外部节点由其他程序启动，本程序从 ROS2 graph 选择 topic 后生成 listener-only 配置并开始记录，不发布机器人控制命令。
 
 ## 遇到的问题
 
-- 当前工作目录的 `.git` 是只读挂载，`git status` 显示这里还不是有效 git 仓库。后续需要在当前工程目录初始化新的 git 仓库。
+- 历史问题：外层工作目录曾有只读 `.git` 挂载，不能直接作为仓库；当前项目已放在 `robodataset-studio/` 子目录内，Git 状态正常。
 - 本机 `gh` 命令不可用，推送 GitHub 可能需要使用 `git` + HTTPS 远端，或通过 GitHub API 创建仓库。
 - 用户消息中包含 GitHub token，属于敏感凭据。后续推送时只应通过环境变量或交互式凭据使用，不写入文件、不打印到日志。建议推送完成后轮换该 token。
 - 系统 Python 环境未安装 `PySide6`，但项目 `.venv` 已安装并可运行 GUI 检查。
 - 真实 ROS2 是否已安装还需要继续确认。
 - 曾尝试错误仓库名导致 GitHub 返回 `Repository not found`；已定位真实仓库为 `HIKARIZG1102/robodataset-studio` 并成功推送。
-- 由于当前目录已有一个不可移动的只读 `.git` 挂载点，不能使用普通 `.git` 目录；已改用 `git --git-dir=.git_local --work-tree=.` 的分离仓库方式。
+- 当前 `robodataset-studio/` 已是普通 Git 仓库，不再使用 `.git_local` 分离仓库方式。
 - `gello_widowx` 数据集路径在 Spaceman_Server 上存在；在 microsate_widowx 上该精确路径不存在。
+- 用户明确传感器节点控制不需要做；后续不要新增 `ros2 launch hermes_data_collection ...` 的启动/停止控制，只把它视为外部节点已启动后的数据来源参考。
 
 ## 待完成部分
 
@@ -101,6 +108,7 @@
 
 - 后端能力：
   - 真实监听式 ROS2 recorder 继续扩展到 action/通用数组 stream，并加入更严格同步策略。
+  - 基于用户选择的 topic 完善 stream schema 映射，支持 JointState/action/Float32MultiArray 等非图像流作为记录数据来源。
   - NPZ merge 继续扩展语言 annotation 合并策略，进一步兼容 `merge_calvin_sessions.py`。
   - SSH 上传继续扩展远端目录浏览、新建目录、剩余空间检查。
 
