@@ -1026,10 +1026,10 @@ class RecordingPage(QWidget):
             QMessageBox.warning(self, "ROS2 recording failed", str(exc))
             self.log.appendPlainText(f"recording failed: {exc}")
             return
-        self.episode_index += 1
+        self.episode_index += max(result.steps, 1)
         warning_text = f" warnings={len(result.warnings)}" if result.warnings else ""
         self.log.appendPlainText(
-            f"recorded real ROS2 episode: {result.path} steps={result.steps} streams={', '.join(result.streams)}{warning_text}"
+            f"recorded real ROS2 CALVIN transitions: {result.path.parent} count={result.steps} streams={', '.join(result.streams)}{warning_text}"
         )
 
 

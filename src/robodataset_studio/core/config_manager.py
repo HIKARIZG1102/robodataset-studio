@@ -14,8 +14,10 @@ class ConfigManager:
     def build_default_config(self, state: ProjectState, topics: list[dict[str, str]] | None = None) -> dict[str, Any]:
         topics = topics or []
         image_topics = [t for t in topics if "Image" in t.get("type", "") or "image" in t.get("name", "").lower()]
-        joint_topic = next((t["name"] for t in topics if "joint" in t.get("name", "").lower()), None)
+        joint_candidates = [t for t in topics if "JointState" in t.get("type", "") or "joint" in t.get("name", "").lower()]
+        joint_topic = next((t["name"] for t in joint_candidates), None)
         action_topic = next((t["name"] for t in topics if "action" in t.get("name", "").lower()), None)
+        gripper_topic = next((t["name"] for t in topics if "gripper" in t.get("name", "").lower()), None)
         if not topics:
             joint_topic = "/wx250s/joint_states"
 
@@ -45,6 +47,8 @@ class ConfigManager:
                 "shape": [480, 640, 3],
                 "encoding": "rgb8",
                 "training_role": "observation",
+                "calvin_key": name,
+                "required": idx == 0,
                 "preview": {"renderer": "image_rgb"},
             })
 
@@ -82,6 +86,8 @@ class ConfigManager:
                     "shape": [480, 640, 3],
                     "encoding": "rgb8",
                     "training_role": "observation",
+                    "calvin_key": cam["name"],
+                    "required": cam["name"] == "rgb_static",
                     "preview": {"renderer": "image_rgb"},
                 }
                 for cam in cameras
@@ -95,14 +101,25 @@ class ConfigManager:
                 "created_at": datetime.now().isoformat(timespec="seconds"),
                 "environment": state.environment,
             },
+            "environment": {
+                "type": state.environment,
+                "description": "physical WidowX + RealSense scene; external control nodes provide motion and sensor streams",
+                "workspace": "robotarm_control_ws",
+                "lighting": "unspecified",
+                "objects": [],
+                "notes": "",
+            },
             "robot": {
                 "name": "widowx",
                 "model": "wx250s",
                 "description": "6-dof WidowX arm with gripper",
+                "joint_count": 6,
+                "joint_order": ["waist", "shoulder", "elbow", "forearm_roll", "wrist_angle", "wrist_rotate"],
                 "base_frame": "wx250s/base_link",
                 "end_effector_frame": "wx250s/ee_gripper_link",
                 "joint_state_topic": joint_topic,
                 "action_topic": action_topic,
+                "gripper_state_topic": gripper_topic,
                 "control": {
                     "enabled": False,
                     "mode": "external_controller_only",
@@ -133,12 +150,24 @@ class ConfigManager:
                         "name": "robot_obs",
                         "source_topic": joint_topic,
                         "type": "sensor_msgs/msg/JointState",
-                        "output_dim": 32,
-                        "fields": ["joint_position", "joint_velocity", "gripper_state"],
+                        "output_dim": 6,
+                        "fields": ["joint_position"],
+                        "joint_order": ["waist", "shoulder", "elbow", "forearm_roll", "wrist_angle", "wrist_rotate"],
                     }
                 ]
                 if joint_topic
                 else []
+            },
+            "action": {
+                "name": "rel_actions",
+                "source": "derived_from_robot_obs",
+                "source_topic": joint_topic,
+                "source_action_topic": action_topic,
+                "gripper_state_topic": gripper_topic,
+                "format": "delta_joint_position_gripper",
+                "dim": 7,
+                "fields": ["djoint_0", "djoint_1", "djoint_2", "djoint_3", "djoint_4", "djoint_5", "gripper"],
+                "default_gripper": 1.0,
             },
             "runtime": {
                 "mode": "listener_only",
@@ -148,12 +177,14 @@ class ConfigManager:
             "dataset": {
                 "output_format": ["npz", "hdf5"],
                 "npz_schema": "calvin_style",
+                "calvin_like_transition_files": True,
                 "hdf5_schema": "pi05_calvin_hdf5",
                 "cache_root": str(state.raw_session_dir),
                 "merged_root": str(state.merged_dir),
                 "split": "training",
                 "episode_prefix": "episode_",
                 "write_language_annotations": True,
+                "language_annotation_file": "lang_annotations/auto_lang_ann.npy",
             },
             "recording": {
                 "sample_rate_hz": 10,

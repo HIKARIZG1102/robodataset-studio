@@ -84,7 +84,10 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 ./.conda-env/bin/python -m pytest -q
 - Managed `topic echo` and `topic hz` subprocesses with safe stop.
 - Auto-generated `collection_config.yaml` with robot, camera, stream, dataset,
   recording, Genesis, and AI sections.
-- Mock NPZ recorder producing CALVIN-compatible fields.
+- Listener-only ROS2 recorder that subscribes to already-running image and
+  joint topics, then writes Hermes-style CALVIN-like transition files:
+  `training/episode_*.npz` plus `training/lang_annotations/auto_lang_ann.npy`.
+- Mock NPZ recorder producing the same CALVIN-like transition layout.
 - HDF5 converter for generated NPZ episodes.
 - Review scanner with field and size summaries.
 - SSH upload command wrapper through `rsync` or `scp` style subprocess command.

@@ -62,11 +62,13 @@ class RosEpisodeRecorder:
         if not arrays:
             raise RuntimeError("no image frames were captured from configured ROS2 streams")
 
+        primary_state_name = "robot_obs"
         for stream in joint_streams:
             name = str(stream.get("name") or "robot_obs")
             values = states.get(name, [])
             if values:
                 arrays[name] = np.stack(values, axis=0).astype(np.float32)
+                primary_state_name = name
             else:
                 warnings.append(f"no JointState messages captured for {stream.get('source_topic')}")
 
@@ -74,9 +76,13 @@ class RosEpisodeRecorder:
         for name, array in list(arrays.items()):
             arrays[name] = array[:actual_steps]
 
-        arrays.setdefault("robot_obs", np.zeros((actual_steps, 32), dtype=np.float32))
-        arrays.setdefault("rel_actions", np.zeros((actual_steps, 7), dtype=np.float32))
-        arrays.setdefault("actions", np.zeros((actual_steps, 7), dtype=np.float32))
+        if "robot_obs" not in arrays:
+            state_dim = int(config.get("action", {}).get("dim") or 7) - 1
+            arrays["robot_obs"] = np.zeros((actual_steps, max(state_dim, 1)), dtype=np.float32)
+            primary_state_name = "robot_obs"
+        actions = self._derive_actions(config, arrays[primary_state_name], actual_steps)
+        arrays["rel_actions"] = actions
+        arrays["actions"] = actions.copy()
 
         metadata = {
             "mock": False,
@@ -84,12 +90,96 @@ class RosEpisodeRecorder:
             "source": "ros2_listener",
             "streams": [stream.get("name", "") for stream in image_streams],
             "state_topics": [stream.get("source_topic", "") for stream in joint_streams],
+            "runtime": config.get("runtime", {}),
+            "project": config.get("project", {}),
+            "environment": config.get("environment", {}),
+            "robot": config.get("robot", {}),
+            "instruction": config.get("instruction", {}),
+            "dataset": config.get("dataset", {}),
             "warnings": warnings,
         }
         episodes_dir.mkdir(parents=True, exist_ok=True)
-        path = episodes_dir / f"episode_{episode_index:07d}.npz"
-        np.savez_compressed(path, **arrays, episode_metadata=np.array(json.dumps(metadata, ensure_ascii=False)))
-        return RosEpisodeResult(path=path, steps=actual_steps, streams=list(arrays), warnings=warnings)
+        transition_count = max(actual_steps - 1, 0)
+        if transition_count <= 0:
+            raise RuntimeError("at least 2 synchronized samples are required to write CALVIN transition files")
+        first_path = episodes_dir / f"episode_{episode_index:07d}.npz"
+        for offset in range(transition_count):
+            transition = {
+                name: array[offset]
+                for name, array in arrays.items()
+                if name not in {"rel_actions", "actions"}
+            }
+            transition["rel_actions"] = arrays["rel_actions"][offset]
+            transition["actions"] = arrays["actions"][offset]
+            transition["episode_metadata"] = np.array(json.dumps({**metadata, "transition_index": offset}, ensure_ascii=False))
+            path = episodes_dir / f"episode_{episode_index + offset:07d}.npz"
+            self._write_npz_atomic(path, transition)
+        self._write_language_annotations(config, episodes_dir, episode_index, episode_index + transition_count - 1)
+        return RosEpisodeResult(path=first_path, steps=transition_count, streams=list(arrays), warnings=warnings)
+
+    def _derive_actions(self, config: dict, robot_obs: np.ndarray, actual_steps: int) -> np.ndarray:
+        action_cfg = config.get("action", {})
+        action_dim = int(action_cfg.get("dim") or 7)
+        default_gripper = float(action_cfg.get("default_gripper", 1.0))
+        actions = np.zeros((actual_steps, action_dim), dtype=np.float32)
+        if actual_steps <= 1:
+            return actions
+        delta_dim = max(action_dim - 1, 0)
+        obs_dim = min(delta_dim, robot_obs.shape[1] if robot_obs.ndim == 2 else 0)
+        if obs_dim:
+            actions[:-1, :obs_dim] = robot_obs[1:, :obs_dim] - robot_obs[:-1, :obs_dim]
+        if action_dim:
+            actions[:, -1] = default_gripper
+        return actions
+
+    def _write_npz_atomic(self, path: Path, arrays: dict[str, np.ndarray]) -> None:
+        tmp_path = path.with_suffix(".npz.tmp")
+        with tmp_path.open("wb") as file:
+            np.savez_compressed(file, **arrays)
+            file.flush()
+            os.fsync(file.fileno())
+        tmp_path.replace(path)
+
+    def _write_language_annotations(self, config: dict, episodes_dir: Path, start_idx: int, end_idx: int) -> None:
+        dataset = config.get("dataset", {})
+        if dataset.get("write_language_annotations", True) is False:
+            return
+        instruction = str(config.get("instruction", {}).get("text", "")).strip()
+        task = self._slugify_task_name(instruction or str(config.get("project", {}).get("name", "")))
+        ann_rel = Path(str(dataset.get("language_annotation_file") or "lang_annotations/auto_lang_ann.npy"))
+        ann_path = episodes_dir / ann_rel
+        annotations = self._load_annotations(ann_path)
+        annotations["info"]["indx"].append([start_idx, end_idx])
+        annotations["language"]["ann"].append(instruction)
+        annotations["language"]["task"].append(task)
+        ann_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = ann_path.with_suffix(".npy.tmp")
+        with tmp_path.open("wb") as file:
+            np.save(file, annotations, allow_pickle=True)
+            file.flush()
+            os.fsync(file.fileno())
+        tmp_path.replace(ann_path)
+
+    def _load_annotations(self, ann_path: Path) -> dict:
+        if not ann_path.exists():
+            return {"info": {"indx": []}, "language": {"ann": [], "task": []}}
+        annotations = np.load(ann_path, allow_pickle=True)
+        if isinstance(annotations, np.ndarray) and annotations.shape == ():
+            annotations = annotations.item()
+        if not isinstance(annotations, dict):
+            return {"info": {"indx": []}, "language": {"ann": [], "task": []}}
+        annotations.setdefault("info", {})
+        annotations.setdefault("language", {})
+        annotations["info"].setdefault("indx", [])
+        annotations["language"].setdefault("ann", [])
+        annotations["language"].setdefault("task", [])
+        return annotations
+
+    def _slugify_task_name(self, text: str) -> str:
+        task = "".join(ch.lower() if ch.isalnum() else "_" for ch in text).strip("_")
+        while "__" in task:
+            task = task.replace("__", "_")
+        return task or "unnamed_task"
 
     def _capture_streams(
         self,
@@ -134,13 +224,16 @@ class RosEpisodeRecorder:
 
             return on_image
 
-        def make_joint_callback(stream_name: str, output_dim: int):
+        def make_joint_callback(stream_name: str, output_dim: int, fields: list[str], joint_order: list[str]):
             def on_joint_state(msg: JointState) -> None:
                 latest_states[stream_name] = joint_state_to_robot_obs(
+                    msg.name,
                     msg.position,
                     msg.velocity,
                     msg.effort,
                     output_dim,
+                    fields,
+                    joint_order,
                 )
 
             return on_joint_state
@@ -155,8 +248,15 @@ class RosEpisodeRecorder:
                 stream_name = str(stream.get("name") or "robot_obs")
                 topic = str(stream.get("source_topic") or "")
                 output_dim = int(stream.get("output_dim") or 32)
+                fields = [str(field) for field in stream.get("fields", ["joint_position"])]
+                joint_order = [str(name) for name in stream.get("joint_order", [])]
                 if topic:
-                    node.create_subscription(JointState, topic, make_joint_callback(stream_name, output_dim), qos_profile_sensor_data)
+                    node.create_subscription(
+                        JointState,
+                        topic,
+                        make_joint_callback(stream_name, output_dim, fields, joint_order),
+                        qos_profile_sensor_data,
+                    )
 
             deadline = time.time() + max(steps / max(sample_rate, 1.0) + 3.0, 5.0)
             next_sample_at = time.time()
@@ -194,14 +294,36 @@ class RosEpisodeRecorder:
 
 
 def joint_state_to_robot_obs(
+    names: Sequence[str],
     position: Sequence[float],
     velocity: Sequence[float],
     effort: Sequence[float],
     output_dim: int,
+    fields: Sequence[str] | None = None,
+    joint_order: Sequence[str] | None = None,
 ) -> np.ndarray:
-    values = list(position)
-    values.extend(velocity)
-    values.extend(effort)
+    fields = fields or ["joint_position"]
+    values: list[float] = []
+    ordered_names = list(joint_order or [])
+    if ordered_names:
+        position_map = dict(zip(names, position))
+        velocity_map = dict(zip(names, velocity))
+        effort_map = dict(zip(names, effort))
+        for field in fields:
+            if field in {"joint_position", "position"}:
+                values.extend(float(position_map.get(name, 0.0)) for name in ordered_names)
+            elif field in {"joint_velocity", "velocity"}:
+                values.extend(float(velocity_map.get(name, 0.0)) for name in ordered_names)
+            elif field == "effort":
+                values.extend(float(effort_map.get(name, 0.0)) for name in ordered_names)
+    else:
+        for field in fields:
+            if field in {"joint_position", "position"}:
+                values.extend(float(value) for value in position)
+            elif field in {"joint_velocity", "velocity"}:
+                values.extend(float(value) for value in velocity)
+            elif field == "effort":
+                values.extend(float(value) for value in effort)
     output = np.zeros((output_dim,), dtype=np.float32)
     if values:
         count = min(len(values), output_dim)

@@ -12,7 +12,7 @@ from robodataset_studio.dataset.merge_plan import CalvinMergePlanner, CalvinSess
 from robodataset_studio.dataset.recorder import MockRecorder
 from robodataset_studio.core.config_manager import ConfigManager
 from robodataset_studio.core.models import ProjectState
-from robodataset_studio.ros.episode_recorder import joint_state_to_robot_obs
+from robodataset_studio.ros.episode_recorder import RosEpisodeRecorder, joint_state_to_robot_obs
 from robodataset_studio.ros.image_conversion import image_bytes_to_rgb
 from robodataset_studio.ui.pages import AppContext, InspectorPage
 from robodataset_studio.upload.manifest import UploadManifest
@@ -42,18 +42,32 @@ def test_calvin_session_merge_reindexes_episodes(tmp_path) -> None:
     recorder.record_episode(raw_root / "session_b" / "training", 8, steps=2)
 
     plan = CalvinMergePlanner().build_plan(raw_root)
-    assert [row["episodes"] for row in plan] == [1, 1]
+    assert [row["episodes"] for row in plan] == [2, 2]
 
     merged_training = tmp_path / "merged_calvin" / "task" / "v1" / "training"
     manifest = CalvinSessionMerger().merge(raw_root, merged_training)
 
-    assert manifest["episode_count"] == 2
+    assert manifest["episode_count"] == 4
     assert [path.name for path in sorted(merged_training.glob("episode_*.npz"))] == [
         "episode_0000000.npz",
         "episode_0000001.npz",
+        "episode_0000002.npz",
+        "episode_0000003.npz",
     ]
     saved_manifest = json.loads((merged_training.parent / "merge_manifest.json").read_text(encoding="utf-8"))
-    assert saved_manifest["episode_count"] == 2
+    assert saved_manifest["episode_count"] == 4
+
+
+def test_mock_recorder_writes_calvin_transition_files(tmp_path) -> None:
+    path = MockRecorder().record_episode(tmp_path / "training", 0, steps=3)
+
+    assert path.name == "episode_0000000.npz"
+    assert (tmp_path / "training" / "episode_0000002.npz").exists()
+    assert (tmp_path / "training" / "lang_annotations" / "auto_lang_ann.npy").exists()
+    with np.load(path, allow_pickle=True) as data:
+        assert data["rgb_static"].shape == (224, 224, 3)
+        assert data["robot_obs"].shape == (6,)
+        assert data["rel_actions"].shape == (7,)
 
 
 def test_upload_manifest_roundtrip(tmp_path) -> None:
@@ -75,9 +89,22 @@ def test_parse_ssh_target_rejects_missing_remote_path() -> None:
 
 
 def test_joint_state_to_robot_obs_pads_to_output_dim() -> None:
-    robot_obs = joint_state_to_robot_obs([1.0, 2.0], [0.1], [0.01], 6)
+    robot_obs = joint_state_to_robot_obs(["a", "b"], [1.0, 2.0], [0.1], [0.01], 6)
     assert robot_obs.dtype == np.float32
-    assert np.allclose(robot_obs, [1.0, 2.0, 0.1, 0.01, 0.0, 0.0])
+    assert np.allclose(robot_obs, [1.0, 2.0, 0.0, 0.0, 0.0, 0.0])
+
+
+def test_joint_state_to_robot_obs_respects_joint_order_and_fields() -> None:
+    robot_obs = joint_state_to_robot_obs(
+        ["elbow", "waist", "shoulder"],
+        [3.0, 1.0, 2.0],
+        [0.3, 0.1, 0.2],
+        [],
+        6,
+        ["joint_position", "joint_velocity"],
+        ["waist", "shoulder", "elbow"],
+    )
+    assert np.allclose(robot_obs, [1.0, 2.0, 3.0, 0.1, 0.2, 0.3])
 
 
 def test_default_config_is_listener_only_without_action_topic() -> None:
@@ -93,8 +120,35 @@ def test_default_config_is_listener_only_without_action_topic() -> None:
         "publishes_robot_commands": False,
     }
     assert config["robot"]["action_topic"] is None
+    assert config["robot"]["joint_count"] == 6
     assert config["robot"]["control"]["enabled"] is False
+    assert config["dataset"]["calvin_like_transition_files"] is True
+    assert config["dataset"]["language_annotation_file"] == "lang_annotations/auto_lang_ann.npy"
+    assert config["environment"]["type"] == "physical"
+    assert config["action"]["source"] == "derived_from_robot_obs"
     assert ConfigManager().validate(config) == []
+
+
+def test_ros_recorder_writes_annotations_and_delta_actions(tmp_path) -> None:
+    recorder = RosEpisodeRecorder()
+    config = ConfigManager().build_default_config(ProjectState(), [])
+    config["instruction"]["text"] = "catch the satellite"
+    robot_obs = np.array(
+        [
+            [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            [0.1, 0.0, 0.0, 0.0, 0.0, 0.0],
+            [0.3, 0.1, 0.0, 0.0, 0.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    actions = recorder._derive_actions(config, robot_obs, 3)
+    assert actions.shape == (3, 7)
+    assert np.allclose(actions[0], [0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0])
+
+    recorder._write_language_annotations(config, tmp_path / "training", 5, 7)
+    annotations = np.load(tmp_path / "training" / "lang_annotations" / "auto_lang_ann.npy", allow_pickle=True).item()
+    assert annotations["info"]["indx"] == [[5, 7]]
+    assert annotations["language"]["ann"] == ["catch the satellite"]
 
 
 def test_inspector_manual_preview_fps_survives_restart() -> None:

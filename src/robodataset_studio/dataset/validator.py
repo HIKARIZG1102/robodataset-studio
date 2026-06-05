@@ -20,7 +20,7 @@ class DatasetValidator:
                     missing = [f for f in REQUIRED_FIELDS if f not in fields]
                     row["fields"] = ", ".join(fields)
                     row["missing"] = ", ".join(missing)
-                    row["steps"] = int(data[fields[0]].shape[0]) if fields else 0
+                    row["steps"] = self._infer_transition_steps(data, fields)
                     row["status"] = "ok" if not missing else "warning"
             except Exception as exc:
                 row["fields"] = ""
@@ -29,6 +29,17 @@ class DatasetValidator:
                 row["status"] = "error"
             rows.append(row)
         return rows
+
+    def _infer_transition_steps(self, data: np.lib.npyio.NpzFile, fields: list[str]) -> int:
+        if not fields:
+            return 0
+        if "rel_actions" in data.files and getattr(data["rel_actions"], "ndim", 0) == 1:
+            return 1
+        first = data[fields[0]]
+        shape = getattr(first, "shape", ())
+        if len(shape) == 3 and shape[-1] in {1, 3, 4}:
+            return 1
+        return int(shape[0]) if shape else 1
 
     def describe_npz(self, path: Path) -> str:
         lines = [f"file: {path}", f"size_mb: {path.stat().st_size / 1024 / 1024:.3f}"]

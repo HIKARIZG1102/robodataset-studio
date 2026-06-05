@@ -36,7 +36,7 @@ class ProjectState:
 
     @property
     def episodes_dir(self) -> Path:
-        return self.raw_session_dir / "episodes"
+        return self.raw_session_dir / "training"
 
     @property
     def merged_dir(self) -> Path:
@@ -59,4 +59,3 @@ class ProcessRecord:
 
     def command_text(self) -> str:
         return " ".join(self.command)
-
