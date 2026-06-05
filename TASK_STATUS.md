@@ -60,6 +60,7 @@
 - [x] 增加 `config/fastdds_no_shm.xml`，启动器和 ROS recorder/preview 默认切换到 `rmw_cyclonedds_cpp`，并设置 FastDDS no-shm profile 作为 fallback，规避 `fastrtps_port* open_and_lock_file failed`。
 - [x] Image preview 停止等待从 1.5 秒延长到 3 秒，停止超时时写入 warning，降低残留 ROS preview node 风险。
 - [x] Image preview UI 固定 16:9 预览区域、固定右侧状态列宽度、取消播放 FPS 自动改值，避免状态文本/FPS 更新导致显示框尺寸跳动。
+- [x] Inspector 明确拆分 Node、Generic topic 和 Image monitor 三组选择；Image monitor 只依赖 image topic，不再要求与普通 topic 或 node 保持一致。
 
 ## 已完成项目
 

@@ -384,6 +384,7 @@ class InspectorPage(QWidget):
         self.node.setEditable(True)
         self.type_label = QLabel("type: -")
         self.image_type_label = QLabel("image type: -")
+        self.decoupled_hint = QLabel("Node, generic topic, and image topic are independent selections.")
         self.preview_status = QLabel("preview: stopped")
         self.image_meta = QLabel("image: -")
         self._topic_types: dict[str, str] = {}
@@ -397,8 +398,8 @@ class InspectorPage(QWidget):
         stop_echo = QPushButton("Stop topic echo")
         start_hz = QPushButton("Start topic hz")
         stop_hz = QPushButton("Stop topic hz")
-        start_preview = QPushButton("Start image preview")
-        stop_preview = QPushButton("Stop image preview")
+        start_preview = QPushButton("Start image monitor")
+        stop_preview = QPushButton("Stop image monitor")
         self.pause_preview_button = QPushButton("Pause preview")
         self.pause_preview_button.clicked.connect(self.toggle_preview_pause)
         refresh_choices.clicked.connect(self.refresh_choices)
@@ -448,31 +449,36 @@ class InspectorPage(QWidget):
         self._preview_paused = False
         layout = QVBoxLayout(self)
         layout.addWidget(refresh_choices)
-        layout.addWidget(QLabel("Node"))
-        layout.addWidget(self.node)
-        layout.addWidget(QLabel("Topic"))
-        layout.addWidget(self.topic)
-        layout.addWidget(self.type_label)
-        layout.addWidget(QLabel("Image topic"))
-        layout.addWidget(self.image_topic)
-        layout.addWidget(self.image_type_label)
         node_row = QHBoxLayout()
+        node_row.addWidget(QLabel("Node"))
+        node_row.addWidget(self.node, 1)
         node_row.addWidget(start_node_info)
         node_row.addWidget(stop_node_info)
+        topic_row = QHBoxLayout()
+        topic_row.addWidget(QLabel("Generic topic"))
+        topic_row.addWidget(self.topic, 1)
+        topic_row.addWidget(self.type_label)
         echo_row = QHBoxLayout()
         echo_row.addWidget(start_echo)
         echo_row.addWidget(stop_echo)
         hz_row = QHBoxLayout()
         hz_row.addWidget(start_hz)
         hz_row.addWidget(stop_hz)
+        image_topic_row = QHBoxLayout()
+        image_topic_row.addWidget(QLabel("Image monitor topic"))
+        image_topic_row.addWidget(self.image_topic, 1)
+        image_topic_row.addWidget(self.image_type_label)
         preview_buttons = QHBoxLayout()
         preview_buttons.addWidget(start_preview)
         preview_buttons.addWidget(stop_preview)
         preview_buttons.addWidget(self.pause_preview_button)
         preview_buttons.addWidget(self.playback_fps)
+        layout.addWidget(self.decoupled_hint)
         layout.addLayout(node_row)
+        layout.addLayout(topic_row)
         layout.addLayout(echo_row)
         layout.addLayout(hz_row)
+        layout.addLayout(image_topic_row)
         layout.addLayout(preview_buttons)
         preview_row = QHBoxLayout()
         preview_row.setContentsMargins(0, 0, 0, 0)
@@ -548,7 +554,8 @@ class InspectorPage(QWidget):
     def refresh_choices(self) -> None:
         if not self.ctx.last_graph.get("topics") and not self.ctx.last_graph.get("nodes"):
             self.ctx.last_graph = self.ctx.discovery.discover()
-        selected_topic = self.ctx.state.selected_streams[0].get("name", "") if self.ctx.state.selected_streams else ""
+        selected_topic = self._selected_topic_name()
+        selected_image_topic = self._selected_image_topic_name()
         selected_node = self.ctx.state.selected_nodes[0] if self.ctx.state.selected_nodes else ""
         self._topic_types = {topic.get("name", ""): topic.get("type", "") for topic in self.ctx.last_graph.get("topics", [])}
         self.node.blockSignals(True)
@@ -577,9 +584,12 @@ class InspectorPage(QWidget):
                 self.topic.setCurrentIndex(index)
             else:
                 self.topic.setEditText(selected_topic)
-            image_index = self.image_topic.findData(selected_topic)
+        if selected_image_topic:
+            image_index = self.image_topic.findData(selected_image_topic)
             if image_index >= 0:
                 self.image_topic.setCurrentIndex(image_index)
+            else:
+                self.image_topic.setEditText(selected_image_topic)
         elif image_topics:
             self.image_topic.setCurrentIndex(0)
         self.node.blockSignals(False)
@@ -598,8 +608,6 @@ class InspectorPage(QWidget):
         topic = self._selected_topic_name()
         typ = self._topic_types.get(topic, "")
         self.type_label.setText(f"type: {typ or '-'}")
-        if topic:
-            self.ctx.state.selected_streams = [{"name": topic, "type": typ}]
 
     def _selected_image_topic_name(self) -> str:
         data = self.image_topic.currentData()
@@ -650,7 +658,7 @@ class InspectorPage(QWidget):
         self.pause_preview_button.setText("Pause preview")
         self.playback_timer.start()
         self._preview_thread.start()
-        self._append_log("preview", f"$ subscribe {topic}")
+        self._append_log("preview", f"$ image-monitor subscribe {topic}")
 
     def stop_image_preview(self) -> None:
         if self._preview_worker is not None:
