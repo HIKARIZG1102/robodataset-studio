@@ -1,0 +1,59 @@
+from __future__ import annotations
+
+import json
+
+import numpy as np
+
+from robodataset_studio.dataset.merge_plan import CalvinMergePlanner, CalvinSessionMerger
+from robodataset_studio.dataset.recorder import MockRecorder
+from robodataset_studio.ros.image_conversion import image_bytes_to_rgb
+from robodataset_studio.upload.manifest import UploadManifest
+from robodataset_studio.upload.ssh_uploader import parse_ssh_target
+
+
+def test_rgb_image_conversion_respects_encoding() -> None:
+    rgb = np.array([[[1, 2, 3], [4, 5, 6]]], dtype=np.uint8)
+    meta = {"encoding": "rgb8", "height": 1, "width": 2, "step": 6}
+    converted = image_bytes_to_rgb(rgb.tobytes(), meta)
+    assert converted is not None
+    assert converted.tolist() == rgb.tolist()
+
+    bgr = np.array([[[3, 2, 1], [6, 5, 4]]], dtype=np.uint8)
+    meta["encoding"] = "bgr8"
+    converted = image_bytes_to_rgb(bgr.tobytes(), meta)
+    assert converted is not None
+    assert converted.tolist() == rgb.tolist()
+
+
+def test_calvin_session_merge_reindexes_episodes(tmp_path) -> None:
+    raw_root = tmp_path / "raw_sessions" / "task" / "v1"
+    recorder = MockRecorder()
+    recorder.record_episode(raw_root / "session_a" / "training", 3, steps=2)
+    recorder.record_episode(raw_root / "session_b" / "training", 8, steps=2)
+
+    plan = CalvinMergePlanner().build_plan(raw_root)
+    assert [row["episodes"] for row in plan] == [1, 1]
+
+    merged_training = tmp_path / "merged_calvin" / "task" / "v1" / "training"
+    manifest = CalvinSessionMerger().merge(raw_root, merged_training)
+
+    assert manifest["episode_count"] == 2
+    assert [path.name for path in sorted(merged_training.glob("episode_*.npz"))] == [
+        "episode_0000000.npz",
+        "episode_0000001.npz",
+    ]
+    saved_manifest = json.loads((merged_training.parent / "merge_manifest.json").read_text(encoding="utf-8"))
+    assert saved_manifest["episode_count"] == 2
+
+
+def test_upload_manifest_roundtrip(tmp_path) -> None:
+    payload = tmp_path / "payload.txt"
+    payload.write_text("hello dataset\n", encoding="utf-8")
+
+    manifest = UploadManifest()
+    manifest_path = manifest.write(tmp_path)
+    result = manifest.verify(manifest_path)
+
+    assert result["ok"] is True
+    assert result["checked"] == 1
+    assert parse_ssh_target("user@example.com:/data/out") == ("user@example.com", "/data/out")

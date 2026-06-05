@@ -1,6 +1,6 @@
 # RoboDataset Studio Task Status
 
-更新时间：2026-06-05 17:51 Asia/Shanghai
+更新时间：2026-06-05 17:55 Asia/Shanghai
 
 ## 当前任务清单
 
@@ -40,6 +40,7 @@
 - [x] 增加第一版真实监听式 ROS2 image recorder，可按配置订阅 `sensor_msgs/msg/Image` 并写入 NPZ episode。
 - [x] 增加可执行 NPZ session merge：按 session 扫描 raw `training/episode_*.npz`，重编号复制到 merged training，并写 `merge_manifest.json`。
 - [x] Upload 增加 SSH 连接测试和远端 manifest size/hash 校验后台任务入口。
+- [x] 增加后端 smoke tests，覆盖图像 encoding 转换、CALVIN session merge、upload manifest 和 SSH target 解析。
 
 ## 已完成项目
 
@@ -78,6 +79,7 @@
 - 已用当前真实 `/usb_camera/image_raw [sensor_msgs/msg/Image]` 验证 ROS2 recorder 后端：1 秒采集写出 `episode_0000000.npz`，包含 `rgb_static (3, 480, 640, 3) uint8`、`robot_obs`、`rel_actions`、`actions` 和 `episode_metadata`。
 - 已用临时双 session mock 数据验证 NPZ merge：输出连续 `episode_0000000.npz`、`episode_0000001.npz`，并生成 `merge_manifest.json`。
 - 已验证 SSH target parser 和连接测试后台任务可启动/停止；远端校验需要真实 SSH target 后在 Process 页面查看结果。
+- 已安装 dev 依赖并运行 `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/python -m pytest -q`，3 个后端 smoke tests 全部通过；直接 pytest 会被 ROS2 `launch_testing` 外部插件自动加载影响，当前用禁用自动插件方式规避。
 
 ## 遇到的问题
 
@@ -104,4 +106,4 @@
   - 安装依赖或确认本机环境。
   - 运行导入检查。
   - 初始化 git 仓库。
-  - 增加自动化 smoke tests / pytest。
+  - 持续补充自动化 smoke tests / pytest，覆盖 GUI 状态流和 ROS worker 清理。

@@ -17,6 +17,12 @@ robodataset-studio
 If ROS2 is not sourced, discovery falls back to an empty graph and the mock
 recorder/converter still work for UI and data-flow testing.
 
+Run backend smoke tests with ROS2 pytest plugins disabled:
+
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/python -m pytest -q
+```
+
 ## MVP Scope
 
 - Project, Environment, Discovery, Inspector, Config, Recording, Review,
@@ -42,4 +48,3 @@ src/robodataset_studio/
 scripts/      command-line helpers
 docs/         architecture notes
 ```
-
