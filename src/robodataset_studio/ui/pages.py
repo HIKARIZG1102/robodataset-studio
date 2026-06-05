@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSpinBox,
     QPlainTextEdit,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -78,7 +79,8 @@ class ImagePreviewWidget(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setMinimumSize(448, 448)
+        self.setMinimumSize(640, 360)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setMouseTracking(True)
         self._frame: np.ndarray | None = None
         self._image: QImage | None = None
@@ -106,12 +108,18 @@ class ImagePreviewWidget(QWidget):
         if self._image is None or self._image.isNull():
             painter.end()
             return
-        scaled = self._image.scaled(self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        scaled = self._image.scaled(self.size(), Qt.KeepAspectRatio, Qt.FastTransformation)
         x = int((self.width() - scaled.width()) / 2)
         y = int((self.height() - scaled.height()) / 2)
         self._target_rect = (x, y, scaled.width(), scaled.height())
         painter.drawImage(x, y, scaled)
         painter.end()
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802 - Qt API
+        return max(360, int(width * 9 / 16))
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802 - Qt API
+        return True
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt API
         if self._frame is None or self._target_rect is None:
@@ -177,7 +185,7 @@ class RosImagePreviewWorker(QObject):
                 if now - self._last_status_at >= 1.0:
                     self._last_status_at = now
                     self.status_changed.emit(
-                        f"receiving: {self.topic} frames={self.frames_received()} encoding={msg.encoding} size={msg.width}x{msg.height}"
+                        f"receiving frames={self.frames_received()} encoding={msg.encoding} size={msg.width}x{msg.height}"
                     )
 
             node.create_subscription(Image, self.topic, on_image, qos_profile_sensor_data)
@@ -415,10 +423,16 @@ class InspectorPage(QWidget):
         self.sample = QLabel("sample: x=- y=- rgb=(-, -, -)")
         self.fps = QLabel("preview fps: 0.0")
         self.camera_fps = QLabel("camera fps: 0.0")
+        for label in [self.preview_status, self.image_meta, self.fps, self.camera_fps, self.sample]:
+            label.setMinimumWidth(260)
+            label.setMaximumWidth(320)
+            label.setWordWrap(False)
+            label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.playback_fps = QSpinBox()
         self.playback_fps.setRange(1, 480)
         self.playback_fps.setValue(10)
         self.playback_fps.setSuffix(" fps")
+        self.playback_fps.setFixedWidth(96)
         self.playback_fps.valueChanged.connect(self.update_playback_timer)
         self._frames = 0
         self._received_frames = 0
@@ -461,8 +475,10 @@ class InspectorPage(QWidget):
         layout.addLayout(hz_row)
         layout.addLayout(preview_buttons)
         preview_row = QHBoxLayout()
+        preview_row.setContentsMargins(0, 0, 0, 0)
         preview_row.addWidget(self.preview, 3)
         info_col = QVBoxLayout()
+        info_col.setContentsMargins(0, 0, 0, 0)
         info_col.addWidget(QLabel("Image Topic Preview"))
         info_col.addWidget(self.preview_status)
         info_col.addWidget(self.image_meta)
@@ -478,6 +494,7 @@ class InspectorPage(QWidget):
         terminals.addTab(self.hz_log, "Topic Hz")
         terminals.addTab(self.preview_log, "Preview Log")
         terminals.addTab(self.frame_stats, "Frame Stats")
+        terminals.setMinimumHeight(220)
         layout.addWidget(terminals)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh_output)
@@ -687,17 +704,12 @@ class InspectorPage(QWidget):
         if now - self._last_camera_fps_at >= 1.0:
             observed_fps = self._received_frames / (now - self._last_camera_fps_at)
             self._max_camera_fps = max(self._max_camera_fps, observed_fps)
-            minimum_playback_fps = max(1, int(np.ceil(self._max_camera_fps)))
-            if self.playback_fps.minimum() < minimum_playback_fps:
-                self.playback_fps.setMinimum(minimum_playback_fps)
-            if self.playback_fps.value() < minimum_playback_fps:
-                self.playback_fps.setValue(minimum_playback_fps)
             self.camera_fps.setText(f"camera fps: {observed_fps:.1f} max: {self._max_camera_fps:.1f}")
             if self._latest_meta:
                 self.image_meta.setText(
                     "image: "
                     f"{self._latest_meta.get('width')}x{self._latest_meta.get('height')} "
-                    f"encoding={self._latest_meta.get('encoding')} step={self._latest_meta.get('step')}"
+                    f"{self._latest_meta.get('encoding')}"
                 )
             self._received_frames = 0
             self._last_camera_fps_at = now
