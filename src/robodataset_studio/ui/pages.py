@@ -234,12 +234,12 @@ class RosImagePreviewWorker(QObject):
             gray = rows[:, :width].reshape((height, width)).copy()
             return np.repeat(gray[:, :, None], 3, axis=2)
         if encoding in {"mono16", "16uc1", "16uc1; compresseddepth"}:
-            depth = np.frombuffer(bytes(msg.data), dtype=np.uint16).reshape((height, step // 2))[:, :width]
+            depth = np.frombuffer(data, dtype=np.uint16).reshape((height, step // 2))[:, :width]
             max_value = int(depth.max()) or 1
             gray = np.clip(depth.astype(np.float32) * 255.0 / max_value, 0, 255).astype(np.uint8)
             return np.repeat(gray[:, :, None], 3, axis=2)
         if encoding in {"32fc1"}:
-            depth = np.frombuffer(bytes(msg.data), dtype=np.float32).reshape((height, step // 4))[:, :width]
+            depth = np.frombuffer(data, dtype=np.float32).reshape((height, step // 4))[:, :width]
             finite = depth[np.isfinite(depth)]
             if finite.size == 0:
                 return np.zeros((height, width, 3), dtype=np.uint8)
@@ -638,8 +638,7 @@ class InspectorPage(QWidget):
         self._preview_worker = RosImagePreviewWorker(topic)
         self._preview_worker.moveToThread(self._preview_thread)
         self._preview_thread.started.connect(self._preview_worker.run)
-        self._preview_worker.status_changed.connect(self.preview_status.setText)
-        self._preview_worker.status_changed.connect(lambda text: self._append_log("preview", text))
+        self._preview_worker.status_changed.connect(self.handle_preview_status, Qt.QueuedConnection)
         self._preview_worker.finished.connect(self._preview_thread.quit)
         self._preview_worker.finished.connect(self._preview_worker.deleteLater)
         self._preview_thread.finished.connect(self._preview_thread.deleteLater)
@@ -677,6 +676,11 @@ class InspectorPage(QWidget):
         self._preview_thread = None
         if self.preview_status.text().startswith("subscribed"):
             self.preview_status.setText("preview: stopped")
+
+    @Slot(str)
+    def handle_preview_status(self, text: str) -> None:
+        self.preview_status.setText(text)
+        self._append_log("preview", text)
 
     def store_preview_frame(self) -> None:
         if self._preview_worker is None:
@@ -1184,7 +1188,6 @@ class ProcessPage(QWidget):
         layout.addWidget(self.table)
         layout.addWidget(QLabel("Selected Process Log"))
         layout.addWidget(self.log)
-        self.ctx.process_manager.add_listener(self.refresh)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh)
         self.timer.start(1500)
