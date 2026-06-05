@@ -22,7 +22,7 @@ if [[ -f "${ROS_SETUP}" ]]; then
 fi
 
 if [[ -n "${DISPLAY:-}" && "${QT_QPA_PLATFORM:-}" != "offscreen" && -n "${ENV_PYTHON:-}" ]]; then
-  qt_print_desktop_dependency_help "${ENV_PYTHON}" || exit 1
+  qt_install_desktop_dependencies_if_requested "${ENV_PYTHON}" || exit 1
 fi
 
 export PYTHONPATH="${ROOT_DIR}/src:${PYTHONPATH:-}"

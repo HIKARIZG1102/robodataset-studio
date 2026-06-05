@@ -33,15 +33,21 @@ On a new Ubuntu machine, either install the venv package:
 sudo apt install python3.10-venv libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-util1 libxcb-xkb1 libxkbcommon-x11-0 libx11-xcb1 libgl1 libegl1 libfontconfig1 libfreetype6 libdbus-1-3 libglib2.0-0 libwayland-client0 libwayland-cursor0 libwayland-egl1
 ```
 
-or let bootstrap try the system install on machines where sudo is available:
+or let bootstrap/startup ask to install missing system packages automatically:
 
 ```bash
-INSTALL_SYSTEM_DEPS=1 scripts/bootstrap.sh
+scripts/bootstrap.sh
 ```
 
 The Qt/PySide6 desktop runtime needs X11/Wayland/OpenGL system libraries.
 `scripts/bootstrap.sh` and `RoboDataset-Studio.sh` scan the installed Qt plugins
-with `ldd` and print the exact missing Ubuntu packages before the app starts.
+with `ldd` and prompt for sudo installation of exact missing Ubuntu packages
+before the app starts. Control the behavior with:
+
+```bash
+AUTO_INSTALL_SYSTEM_DEPS=1 scripts/bootstrap.sh  # install without prompting
+AUTO_INSTALL_SYSTEM_DEPS=0 scripts/bootstrap.sh  # only print commands
+```
 
 or force the conda backend:
 

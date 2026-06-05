@@ -25,6 +25,32 @@ source_ros() {
   fi
 }
 
+install_python_venv_package() {
+  case "${AUTO_INSTALL_SYSTEM_DEPS:-ask}" in
+    1|yes|true)
+      sudo apt-get update
+      sudo apt-get install -y python3.10-venv
+      ;;
+    0|no|false)
+      return 1
+      ;;
+    ask|*)
+      if [[ -t 0 ]]; then
+        read -r -p "Install python3.10-venv with sudo now? [Y/n] " answer
+        case "${answer}" in
+          n|N|no|NO) return 1 ;;
+          *)
+            sudo apt-get update
+            sudo apt-get install -y python3.10-venv
+            ;;
+        esac
+      else
+        return 1
+      fi
+      ;;
+  esac
+}
+
 python_version() {
   "$1" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")'
 }
@@ -50,10 +76,7 @@ create_venv() {
     "${PYTHON_BIN}" -m venv "${VENV_DIR}" || {
       echo "Failed to create venv with ${PYTHON_BIN}." >&2
       echo "On Ubuntu 22.04 install: sudo apt install python3.10-venv" >&2
-      if [[ "${INSTALL_SYSTEM_DEPS:-0}" == "1" ]] && command -v sudo >/dev/null 2>&1; then
-        echo "Attempting to install python3.10-venv with sudo..." >&2
-        sudo apt-get update
-        sudo apt-get install -y python3.10-venv
+      if command -v sudo >/dev/null 2>&1 && install_python_venv_package; then
         "${PYTHON_BIN}" -m venv "${VENV_DIR}" || return 1
       else
         return 1
@@ -138,7 +161,7 @@ if [[ -f "${ROS_SETUP}" ]]; then
 fi
 
 if [[ -n "${DISPLAY:-}" && "${QT_QPA_PLATFORM:-}" != "offscreen" && -n "${ENV_PYTHON:-}" ]]; then
-  qt_print_desktop_dependency_help "${ENV_PYTHON}" || exit 1
+  qt_install_desktop_dependencies_if_requested "${ENV_PYTHON}" || exit 1
 fi
 
 export PYTHONPATH="${ROOT_DIR}/src:${PYTHONPATH:-}"

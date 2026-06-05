@@ -100,6 +100,15 @@ qt_print_desktop_dependency_help() {
   return 1
 }
 
+qt_apt_install_packages() {
+  if ! command -v sudo >/dev/null 2>&1; then
+    echo "sudo not found; cannot install system packages automatically." >&2
+    return 1
+  fi
+  sudo apt-get update
+  sudo apt-get install -y "$@"
+}
+
 qt_install_desktop_dependencies_if_requested() {
   local env_python="$1"
   local missing_packages
@@ -107,11 +116,32 @@ qt_install_desktop_dependencies_if_requested() {
   if [[ -z "${missing_packages}" ]]; then
     return 0
   fi
-  if [[ "${INSTALL_SYSTEM_DEPS:-0}" == "1" ]] && command -v sudo >/dev/null 2>&1; then
-    echo "Installing Qt desktop runtime packages: ${missing_packages}" >&2
-    sudo apt-get update
-    sudo apt-get install -y ${missing_packages}
-    return 0
-  fi
+  echo "Missing Qt desktop runtime packages: ${missing_packages}" >&2
+  case "${AUTO_INSTALL_SYSTEM_DEPS:-ask}" in
+    1|yes|true)
+      qt_apt_install_packages ${missing_packages}
+      return $?
+      ;;
+    0|no|false)
+      qt_print_desktop_dependency_help "${env_python}"
+      return 1
+      ;;
+    ask|*)
+      if [[ -t 0 ]]; then
+        read -r -p "Install missing Qt desktop packages with sudo now? [Y/n] " answer
+        case "${answer}" in
+          n|N|no|NO)
+            qt_print_desktop_dependency_help "${env_python}"
+            return 1
+            ;;
+          *)
+            qt_apt_install_packages ${missing_packages}
+            return $?
+            ;;
+        esac
+      fi
+      ;;
+  esac
   qt_print_desktop_dependency_help "${env_python}"
+  return 1
 }

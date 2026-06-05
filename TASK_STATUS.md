@@ -1,6 +1,6 @@
 # RoboDataset Studio Task Status
 
-更新时间：2026-06-05 21:15 Asia/Shanghai
+更新时间：2026-06-05 21:28 Asia/Shanghai
 
 ## 当前任务清单
 
@@ -56,6 +56,7 @@
 - [x] 当前机器已用 `ENV_BACKEND=conda scripts/bootstrap.sh` 成功创建 `.conda-env`，并生成 `RoboDataset-Studio.sh` / `RoboDataset-Studio.desktop`。
 - [x] 当前 `.conda-env` 已验证 `rclpy` 可导入、后端 smoke tests 通过、PySide6 主窗口 offscreen 可创建。
 - [x] 启动器增加 Qt desktop runtime 依赖扫描：对 PySide6 `platforms/` 和 `xcbglintegrations/` 插件运行 `ldd`，缺库时映射并提示 Ubuntu apt 包，避免直接 Qt core dump。
+- [x] bootstrap 和启动器改为默认交互式询问 sudo 安装缺失系统依赖；`AUTO_INSTALL_SYSTEM_DEPS=1` 可无提示自动装，`AUTO_INSTALL_SYSTEM_DEPS=0` 只打印命令。
 
 ## 已完成项目
 
