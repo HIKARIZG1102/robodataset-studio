@@ -30,7 +30,7 @@ is unavailable.
 On a new Ubuntu machine, either install the venv package:
 
 ```bash
-sudo apt install python3.10-venv
+sudo apt install python3.10-venv libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-util1 libxcb-xkb1 libxkbcommon-x11-0 libx11-xcb1 libgl1 libegl1 libfontconfig1 libfreetype6 libdbus-1-3 libglib2.0-0 libwayland-client0 libwayland-cursor0 libwayland-egl1
 ```
 
 or let bootstrap try the system install on machines where sudo is available:
@@ -38,6 +38,10 @@ or let bootstrap try the system install on machines where sudo is available:
 ```bash
 INSTALL_SYSTEM_DEPS=1 scripts/bootstrap.sh
 ```
+
+The Qt/PySide6 desktop runtime needs X11/Wayland/OpenGL system libraries.
+`scripts/bootstrap.sh` and `RoboDataset-Studio.sh` scan the installed Qt plugins
+with `ldd` and print the exact missing Ubuntu packages before the app starts.
 
 or force the conda backend:
 

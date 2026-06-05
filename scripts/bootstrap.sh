@@ -2,12 +2,16 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DESKTOP_DEPS="${ROOT_DIR}/scripts/desktop_deps.sh"
 PYTHON_BIN="${PYTHON_BIN:-/usr/bin/python3.10}"
 VENV_DIR="${VENV_DIR:-${ROOT_DIR}/.venv}"
 CONDA_EXE="${CONDA_EXE:-$(command -v conda || true)}"
 CONDA_ENV_DIR="${CONDA_ENV_DIR:-${ROOT_DIR}/.conda-env}"
 ENV_BACKEND="${ENV_BACKEND:-auto}"
 ROS_SETUP="${ROS_SETUP:-/opt/ros/humble/setup.bash}"
+
+# shellcheck disable=SC1090
+source "${DESKTOP_DEPS}"
 
 source_ros() {
   if [[ -f "${ROS_SETUP}" ]]; then
@@ -98,6 +102,7 @@ esac
 
 "${ENV_PYTHON}" -m pip install --upgrade pip setuptools wheel
 "${ENV_PYTHON}" -m pip install -e "${ROOT_DIR}[dev,upload]"
+qt_install_desktop_dependencies_if_requested "${ENV_PYTHON}" || true
 
 cat > "${ROOT_DIR}/.robodataset_env" <<EOF
 ENV_KIND=${ENV_KIND}
@@ -112,6 +117,10 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${ROOT_DIR}/.robodataset_env"
+DESKTOP_DEPS="${ROOT_DIR}/scripts/desktop_deps.sh"
+
+# shellcheck disable=SC1090
+source "${DESKTOP_DEPS}"
 
 if [[ -f "${ENV_FILE}" ]]; then
   # shellcheck disable=SC1090
@@ -126,6 +135,10 @@ if [[ -f "${ROS_SETUP}" ]]; then
   # shellcheck disable=SC1090
   source "${ROS_SETUP}"
   set -u
+fi
+
+if [[ -n "${DISPLAY:-}" && "${QT_QPA_PLATFORM:-}" != "offscreen" && -n "${ENV_PYTHON:-}" ]]; then
+  qt_print_desktop_dependency_help "${ENV_PYTHON}" || exit 1
 fi
 
 export PYTHONPATH="${ROOT_DIR}/src:${PYTHONPATH:-}"

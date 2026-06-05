@@ -4,6 +4,10 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROS_SETUP="${ROS_SETUP:-/opt/ros/humble/setup.bash}"
 ENV_FILE="${ROOT_DIR}/.robodataset_env"
+DESKTOP_DEPS="${ROOT_DIR}/scripts/desktop_deps.sh"
+
+# shellcheck disable=SC1090
+source "${DESKTOP_DEPS}"
 
 if [[ -f "${ENV_FILE}" ]]; then
   # shellcheck disable=SC1090
@@ -15,6 +19,10 @@ if [[ -f "${ROS_SETUP}" ]]; then
   # shellcheck disable=SC1090
   source "${ROS_SETUP}"
   set -u
+fi
+
+if [[ -n "${DISPLAY:-}" && "${QT_QPA_PLATFORM:-}" != "offscreen" && -n "${ENV_PYTHON:-}" ]]; then
+  qt_print_desktop_dependency_help "${ENV_PYTHON}" || exit 1
 fi
 
 export PYTHONPATH="${ROOT_DIR}/src:${PYTHONPATH:-}"
