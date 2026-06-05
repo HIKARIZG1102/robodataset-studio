@@ -1,6 +1,6 @@
 # RoboDataset Studio Task Status
 
-更新时间：2026-06-05 20:38 Asia/Shanghai
+更新时间：2026-06-05 20:57 Asia/Shanghai
 
 ## 当前任务清单
 
@@ -51,6 +51,10 @@
 - [x] 增加 `scripts/bootstrap.sh`，用于新设备创建 `.venv`、安装项目依赖并生成 `RoboDataset-Studio.sh` / `RoboDataset-Studio.desktop` 启动器。
 - [x] 更新 `scripts/run_app.sh`，优先使用 `.venv` 中的 `robodataset-studio` 并自动 source ROS Humble 环境。
 - [x] 用临时 Python 3.13 虚拟环境验证 bootstrap 的 pip 安装链路和后端 smoke tests；真实 ROS2 recorder 仍需 Python 3.10 venv。
+- [x] `scripts/bootstrap.sh` 增加 `ENV_BACKEND=auto|venv|conda`，当 `python3.10-venv` 不可用时可自动 fallback 到项目本地 `.conda-env`。
+- [x] `scripts/bootstrap.sh` 增加 `INSTALL_SYSTEM_DEPS=1`，在新设备 sudo 可用时可尝试自动安装 `python3.10-venv`。
+- [x] 当前机器已用 `ENV_BACKEND=conda scripts/bootstrap.sh` 成功创建 `.conda-env`，并生成 `RoboDataset-Studio.sh` / `RoboDataset-Studio.desktop`。
+- [x] 当前 `.conda-env` 已验证 `rclpy` 可导入、后端 smoke tests 通过、PySide6 主窗口 offscreen 可创建。
 
 ## 已完成项目
 
@@ -95,6 +99,9 @@
 - 当前机器存在 `/usr/bin/python3.10` 和 `/opt/ros/humble/setup.bash`；在该组合下 `rclpy` 可导入，适合真实 ROS2 监听采集。
 - 已增加新设备安装入口：执行 `scripts/bootstrap.sh` 后，可直接运行根目录生成的 `RoboDataset-Studio.sh`，或使用生成的 `RoboDataset-Studio.desktop`。
 - 已验证 `ALLOW_NON_ROS_PYTHON=1` 的临时安装链路可完成，并在临时环境中运行后端 smoke tests：6 passed。
+- 当前机器检测到 conda：`/home/microsate/anaconda3/bin/conda`，后续用 conda backend 验证真实 Python 3.10 本地环境。
+- 当前机器 conda backend 已验证成功：`.conda-env/bin/python` 为 Python 3.10，source ROS Humble 后 `rclpy import ok`。
+- 当前启动方式：执行 `./RoboDataset-Studio.sh`；也可从文件管理器使用 `RoboDataset-Studio.desktop`。
 
 ## 遇到的问题
 
@@ -122,6 +129,5 @@
   - SSH 上传继续扩展远端目录浏览、新建目录、剩余空间检查。
 
 - 工程化：
-  - 在新设备上运行 `scripts/bootstrap.sh`，验证 `.venv` 安装、ROS2 Python 绑定导入和 GUI 启动。
-  - 后续考虑补 `.desktop` 文件或 AppImage/deb 打包，让启动体验更接近普通软件。
+  - 后续考虑补 AppImage/deb 打包，让启动体验更接近普通软件。
   - 持续补充自动化 smoke tests / pytest，覆盖 GUI 状态流和 ROS worker 清理。

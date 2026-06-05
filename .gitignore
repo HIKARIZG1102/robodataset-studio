@@ -1,5 +1,7 @@
 .git_local/
 .venv/
+.conda-env/
+.robodataset_env
 RoboDataset-Studio.sh
 RoboDataset-Studio.desktop
 __pycache__/
