@@ -39,7 +39,9 @@ from robodataset_studio.dataset.layout import CalvinLayoutScanner
 from robodataset_studio.dataset.merge_plan import CalvinMergePlanner
 from robodataset_studio.dataset.recorder import MockRecorder
 from robodataset_studio.dataset.validator import DatasetValidator
+from robodataset_studio.ros.episode_recorder import RosEpisodeRecorder
 from robodataset_studio.ros.graph_discovery import RosGraphDiscovery
+from robodataset_studio.ros.image_conversion import image_bytes_to_rgb
 from robodataset_studio.upload.manifest import MANIFEST_NAME, UploadManifest
 from robodataset_studio.upload.ssh_uploader import SshUploader
 
@@ -52,6 +54,7 @@ class AppContext:
         self.environment = EnvironmentService()
         self.discovery = RosGraphDiscovery()
         self.recorder = MockRecorder()
+        self.ros_recorder = RosEpisodeRecorder()
         self.validator = DatasetValidator()
         self.converter = Hdf5Converter()
         self.layout_scanner = CalvinLayoutScanner()
@@ -209,49 +212,6 @@ class RosImagePreviewWorker(QObject):
         with self._lock:
             self.latest_data = None
             self.latest_meta = {}
-
-    @staticmethod
-    def image_bytes_to_rgb(data: bytes, meta: dict[str, object]) -> np.ndarray | None:
-        encoding = str(meta.get("encoding", "")).lower()
-        height = int(meta.get("height", 0) or 0)
-        width = int(meta.get("width", 0) or 0)
-        step = int(meta.get("step", 0) or 0)
-        raw = np.frombuffer(data, dtype=np.uint8)
-        if height <= 0 or width <= 0 or step <= 0:
-            return None
-        rows = raw.reshape((height, step))
-        if encoding in {"rgb8", "bgr8"}:
-            frame = rows[:, : width * 3].reshape((height, width, 3)).copy()
-            if encoding == "bgr8":
-                frame = frame[:, :, ::-1].copy()
-            return frame
-        if encoding in {"rgba8", "bgra8"}:
-            frame = rows[:, : width * 4].reshape((height, width, 4))[:, :, :3].copy()
-            if encoding == "bgra8":
-                frame = frame[:, :, ::-1].copy()
-            return frame
-        if encoding in {"mono8", "8uc1"}:
-            gray = rows[:, :width].reshape((height, width)).copy()
-            return np.repeat(gray[:, :, None], 3, axis=2)
-        if encoding in {"mono16", "16uc1", "16uc1; compresseddepth"}:
-            depth = np.frombuffer(data, dtype=np.uint16).reshape((height, step // 2))[:, :width]
-            max_value = int(depth.max()) or 1
-            gray = np.clip(depth.astype(np.float32) * 255.0 / max_value, 0, 255).astype(np.uint8)
-            return np.repeat(gray[:, :, None], 3, axis=2)
-        if encoding in {"32fc1"}:
-            depth = np.frombuffer(data, dtype=np.float32).reshape((height, step // 4))[:, :width]
-            finite = depth[np.isfinite(depth)]
-            if finite.size == 0:
-                return np.zeros((height, width, 3), dtype=np.uint8)
-            low = float(np.percentile(finite, 1))
-            high = float(np.percentile(finite, 99))
-            if high <= low:
-                high = low + 1.0
-            gray = np.clip((depth - low) * 255.0 / (high - low), 0, 255)
-            gray = np.nan_to_num(gray, nan=0.0, posinf=255.0, neginf=0.0).astype(np.uint8)
-            return np.repeat(gray[:, :, None], 3, axis=2)
-        return None
-
 
 class ProjectPage(QWidget):
     def __init__(self, ctx: AppContext) -> None:
@@ -691,7 +651,7 @@ class InspectorPage(QWidget):
         received = int(meta.get("received", 0) or 0)
         if received <= self._latest_sequence:
             return
-        frame = RosImagePreviewWorker.image_bytes_to_rgb(data, meta)
+        frame = image_bytes_to_rgb(data, meta)
         if frame is None:
             self._append_log("preview", f"unsupported image encoding: {meta.get('encoding')}")
             self._latest_sequence = received
@@ -910,16 +870,27 @@ class RecordingPage(QWidget):
         self.log.setReadOnly(True)
         self.streams = QTableWidget(0, 5)
         self.streams.setHorizontalHeaderLabels(["Name", "Modality", "Source", "Topic/Endpoint", "Role"])
+        self.duration = QSpinBox()
+        self.duration.setRange(1, 600)
+        self.duration.setValue(2)
+        self.duration.setSuffix(" sec")
         refresh = QPushButton("Refresh Listener Plan")
         refresh.clicked.connect(self.refresh_plan)
-        record = QPushButton("Simulate Listener Episode")
-        record.clicked.connect(self.record)
+        record_mock = QPushButton("Simulate Listener Episode")
+        record_ros = QPushButton("Record ROS2 Episode")
+        record_mock.clicked.connect(self.record_mock)
+        record_ros.clicked.connect(self.record_ros)
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("Listener Recording Console"))
         layout.addWidget(QLabel("This page listens to configured streams and writes dataset episodes. It does not send robot control commands."))
         layout.addWidget(refresh)
         layout.addWidget(self.streams)
-        layout.addWidget(record)
+        controls = QHBoxLayout()
+        controls.addWidget(QLabel("Duration"))
+        controls.addWidget(self.duration)
+        controls.addWidget(record_ros)
+        controls.addWidget(record_mock)
+        layout.addLayout(controls)
         layout.addWidget(self.log)
         self.refresh_plan()
 
@@ -937,13 +908,34 @@ class RecordingPage(QWidget):
             for col, value in enumerate(values):
                 self.streams.setItem(row, col, QTableWidgetItem(str(value)))
 
-    def record(self) -> None:
+    def record_mock(self) -> None:
         if not self.ctx.has_config():
             QMessageBox.warning(self, "Missing config", "Generate and save collection_config.yaml before recording.")
             return
         path = self.ctx.recorder.record_episode(self.ctx.state.episodes_dir, self.episode_index)
         self.episode_index += 1
         self.log.appendPlainText(f"recorded: {path}")
+
+    def record_ros(self) -> None:
+        if not self.ctx.has_config():
+            QMessageBox.warning(self, "Missing config", "Generate and save collection_config.yaml before recording.")
+            return
+        try:
+            result = self.ctx.ros_recorder.record_episode(
+                self.ctx.state.collection_config,
+                self.ctx.state.episodes_dir,
+                self.episode_index,
+                duration_sec=float(self.duration.value()),
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "ROS2 recording failed", str(exc))
+            self.log.appendPlainText(f"recording failed: {exc}")
+            return
+        self.episode_index += 1
+        warning_text = f" warnings={len(result.warnings)}" if result.warnings else ""
+        self.log.appendPlainText(
+            f"recorded real ROS2 episode: {result.path} steps={result.steps} streams={', '.join(result.streams)}{warning_text}"
+        )
 
 
 class ReviewPage(QWidget):

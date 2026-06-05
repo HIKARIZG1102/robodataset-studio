@@ -1,6 +1,6 @@
 # RoboDataset Studio Task Status
 
-更新时间：2026-06-05 07:18 Asia/Shanghai
+更新时间：2026-06-05 17:44 Asia/Shanghai
 
 ## 当前任务清单
 
@@ -36,7 +36,8 @@
 - [x] Image preview 改为 RViz 风格 pull-based latest-frame 渲染：订阅线程不按帧发 Qt signal，Stop 后清空 worker/UI buffer 和 pixmap。
 - [x] Image preview 显示面板改为 paintEvent 自绘 QImage，Stop/close 时断开 worker signal，降低闪退和 QLabel pixmap 缓存问题。
 - [x] Image preview worker 改为 raw bytes latest-slot：ROS callback 只保存最新 raw bytes 和 metadata，UI display timer 按需转换，减少回调线程 CPU/内存压力。
-- [ ] 创建或连接 GitHub 仓库并推送阶段成果。
+- [x] 创建或连接 GitHub 仓库并推送阶段成果。
+- [x] 增加第一版真实监听式 ROS2 image recorder，可按配置订阅 `sensor_msgs/msg/Image` 并写入 NPZ episode。
 
 ## 已完成项目
 
@@ -71,6 +72,8 @@
 - 已验证自绘 preview loop：真实相机显示序列可推进，Stop 后 preview widget frame 清空；额外验证 stop cleanup 后 worker/thread/latest frame 均为空。
 - 已验证 raw-slot preview：真实相机显示序列可推进到 58；当前项目外 `real_usb_camera_publisher.py` 测试源本身 Python 进程 CPU 很高，后续应替换为正式 camera driver 或优化测试 publisher。
 - 已再次运行 `.venv/bin/python -m compileall src` 和 PySide6 offscreen 主窗口检查，均通过。
+- 已连接并推送到 `https://github.com/HIKARIZG1102/robodataset-studio.git` 的 `main` 分支。
+- 已用当前真实 `/usb_camera/image_raw [sensor_msgs/msg/Image]` 验证 ROS2 recorder 后端：1 秒采集写出 `episode_0000000.npz`，包含 `rgb_static (3, 480, 640, 3) uint8`、`robot_obs`、`rel_actions`、`actions` 和 `episode_metadata`。
 
 ## 遇到的问题
 
@@ -79,7 +82,7 @@
 - 用户消息中包含 GitHub token，属于敏感凭据。后续推送时只应通过环境变量或交互式凭据使用，不写入文件、不打印到日志。建议推送完成后轮换该 token。
 - 系统 Python 环境未安装 `PySide6`，但项目 `.venv` 已安装并可运行 GUI 检查。
 - 真实 ROS2 是否已安装还需要继续确认。
-- 使用用户提供的 GitHub token 推送时，GitHub 返回 `invalid credentials`，代码未能推送到远端。需要换用有效 token 或本机 GitHub 登录凭据。
+- 曾尝试错误仓库名导致 GitHub 返回 `Repository not found`；已定位真实仓库为 `HIKARIZG1102/robodataset-studio` 并成功推送。
 - 由于当前目录已有一个不可移动的只读 `.git` 挂载点，不能使用普通 `.git` 目录；已改用 `git --git-dir=.git_local --work-tree=.` 的分离仓库方式。
 - `gello_widowx` 数据集路径在 Spaceman_Server 上存在；在 microsate_widowx 上该精确路径不存在。
 
@@ -89,7 +92,7 @@
   - 页面间状态流继续增强：Project -> Environment -> Discovery -> Config -> Recording -> Review -> Convert -> Upload。
 
 - 后端能力：
-  - 真实监听式 ROS2 recorder。
+  - 真实监听式 ROS2 recorder 继续扩展到 JointState/action/通用数组 stream。
   - 真正执行 NPZ merge，兼容 `merge_calvin_sessions.py`。
   - SSH 上传连接测试和远端 manifest/hash 校验。
 
@@ -97,4 +100,4 @@
   - 安装依赖或确认本机环境。
   - 运行导入检查。
   - 初始化 git 仓库。
-  - 创建 GitHub 仓库并推送阶段成果。
+  - 增加自动化 smoke tests / pytest。
