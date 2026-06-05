@@ -39,6 +39,7 @@ class ProcessManager:
         )
         proc = subprocess.Popen(
             command,
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -54,6 +55,9 @@ class ProcessManager:
         threading.Thread(target=self._waiter, args=(process_id, proc), daemon=True).start()
         self._notify()
         return record
+
+    def process(self, process_id: str) -> subprocess.Popen[str] | None:
+        return self._processes.get(process_id)
 
     def _pump_stream(self, process_id: str, stream, tail: list[str]) -> None:
         def run() -> None:

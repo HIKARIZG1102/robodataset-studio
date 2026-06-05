@@ -1098,16 +1098,22 @@ class UploadPage(QWidget):
         self.report.setReadOnly(True)
         build_manifest = QPushButton("Build upload manifest")
         verify_manifest = QPushButton("Verify upload manifest")
+        test_ssh = QPushButton("Test SSH connection")
         upload = QPushButton("Start rsync upload")
+        remote_verify = QPushButton("Verify remote manifest")
         build_manifest.clicked.connect(self.build_manifest)
         verify_manifest.clicked.connect(self.verify_manifest)
+        test_ssh.clicked.connect(self.test_ssh)
         upload.clicked.connect(self.upload)
+        remote_verify.clicked.connect(self.verify_remote)
         layout = QFormLayout(self)
         layout.addRow("Local path", self.local)
         layout.addRow("SSH target", self.target)
         layout.addRow(build_manifest)
         layout.addRow(verify_manifest)
+        layout.addRow(test_ssh)
         layout.addRow(upload)
+        layout.addRow(remote_verify)
         layout.addRow(self.report)
 
     def _local_path(self) -> Path:
@@ -1169,6 +1175,29 @@ class UploadPage(QWidget):
             return
         uploader = SshUploader(self.ctx.process_manager)
         uploader.upload_with_rsync(local_path, self.target.text().strip())
+
+    def test_ssh(self) -> None:
+        try:
+            record = SshUploader(self.ctx.process_manager).test_connection(self.target.text().strip())
+        except Exception as exc:
+            QMessageBox.warning(self, "SSH target", str(exc))
+            return
+        self.report.setPlainText(f"started SSH connection test: {record.process_id}\nOpen Process to inspect details.")
+
+    def verify_remote(self) -> None:
+        local_path = self._validate_local_path()
+        if not local_path:
+            return
+        manifest_path = local_path / MANIFEST_NAME
+        if not manifest_path.exists():
+            QMessageBox.warning(self, "Manifest missing", f"Build {MANIFEST_NAME} before remote verification.")
+            return
+        try:
+            record = SshUploader(self.ctx.process_manager).verify_remote_manifest(manifest_path, self.target.text().strip())
+        except Exception as exc:
+            QMessageBox.warning(self, "Remote verify", str(exc))
+            return
+        self.report.setPlainText(f"started remote manifest verification: {record.process_id}\nOpen Process to inspect details.")
 
 
 class ProcessPage(QWidget):

@@ -1,6 +1,6 @@
 # RoboDataset Studio Task Status
 
-更新时间：2026-06-05 17:48 Asia/Shanghai
+更新时间：2026-06-05 17:51 Asia/Shanghai
 
 ## 当前任务清单
 
@@ -39,6 +39,7 @@
 - [x] 创建或连接 GitHub 仓库并推送阶段成果。
 - [x] 增加第一版真实监听式 ROS2 image recorder，可按配置订阅 `sensor_msgs/msg/Image` 并写入 NPZ episode。
 - [x] 增加可执行 NPZ session merge：按 session 扫描 raw `training/episode_*.npz`，重编号复制到 merged training，并写 `merge_manifest.json`。
+- [x] Upload 增加 SSH 连接测试和远端 manifest size/hash 校验后台任务入口。
 
 ## 已完成项目
 
@@ -76,6 +77,7 @@
 - 已连接并推送到 `https://github.com/HIKARIZG1102/robodataset-studio.git` 的 `main` 分支。
 - 已用当前真实 `/usb_camera/image_raw [sensor_msgs/msg/Image]` 验证 ROS2 recorder 后端：1 秒采集写出 `episode_0000000.npz`，包含 `rgb_static (3, 480, 640, 3) uint8`、`robot_obs`、`rel_actions`、`actions` 和 `episode_metadata`。
 - 已用临时双 session mock 数据验证 NPZ merge：输出连续 `episode_0000000.npz`、`episode_0000001.npz`，并生成 `merge_manifest.json`。
+- 已验证 SSH target parser 和连接测试后台任务可启动/停止；远端校验需要真实 SSH target 后在 Process 页面查看结果。
 
 ## 遇到的问题
 
@@ -96,7 +98,7 @@
 - 后端能力：
   - 真实监听式 ROS2 recorder 继续扩展到 JointState/action/通用数组 stream。
   - NPZ merge 继续扩展语言 annotation 合并策略，进一步兼容 `merge_calvin_sessions.py`。
-  - SSH 上传连接测试和远端 manifest/hash 校验。
+  - SSH 上传继续扩展远端目录浏览、新建目录、剩余空间检查。
 
 - 工程化：
   - 安装依赖或确认本机环境。
