@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import numpy as np
+import pytest
 
 from robodataset_studio.dataset.merge_plan import CalvinMergePlanner, CalvinSessionMerger
 from robodataset_studio.dataset.recorder import MockRecorder
@@ -58,6 +59,11 @@ def test_upload_manifest_roundtrip(tmp_path) -> None:
     assert result["ok"] is True
     assert result["checked"] == 1
     assert parse_ssh_target("user@example.com:/data/out") == ("user@example.com", "/data/out")
+
+
+def test_parse_ssh_target_rejects_missing_remote_path() -> None:
+    with pytest.raises(ValueError, match="user@host:/remote/path"):
+        parse_ssh_target("user@example.com")
 
 
 def test_joint_state_to_robot_obs_pads_to_output_dim() -> None:
