@@ -6,6 +6,7 @@ import numpy as np
 
 from robodataset_studio.dataset.merge_plan import CalvinMergePlanner, CalvinSessionMerger
 from robodataset_studio.dataset.recorder import MockRecorder
+from robodataset_studio.ros.episode_recorder import joint_state_to_robot_obs
 from robodataset_studio.ros.image_conversion import image_bytes_to_rgb
 from robodataset_studio.upload.manifest import UploadManifest
 from robodataset_studio.upload.ssh_uploader import parse_ssh_target
@@ -57,3 +58,9 @@ def test_upload_manifest_roundtrip(tmp_path) -> None:
     assert result["ok"] is True
     assert result["checked"] == 1
     assert parse_ssh_target("user@example.com:/data/out") == ("user@example.com", "/data/out")
+
+
+def test_joint_state_to_robot_obs_pads_to_output_dim() -> None:
+    robot_obs = joint_state_to_robot_obs([1.0, 2.0], [0.1], [0.01], 6)
+    assert robot_obs.dtype == np.float32
+    assert np.allclose(robot_obs, [1.0, 2.0, 0.1, 0.01, 0.0, 0.0])
