@@ -95,7 +95,9 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 ./.conda-env/bin/python -m pytest -q
 - Mock NPZ recorder producing the same CALVIN-like transition layout.
 - HDF5 converter for generated NPZ episodes.
 - Review scanner with field and size summaries.
-- SSH upload command wrapper through `rsync` or `scp` style subprocess command.
+- SSH upload workflow with split internal/public host fields, port, username,
+  password/key authentication, remote directory browsing, folder creation, and
+  `rsync` upload from the selected remote directory.
 
 ## Repository Layout
 

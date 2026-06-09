@@ -1,6 +1,6 @@
 # RoboDataset Studio Task Status
 
-更新时间：2026-06-09 00:00 Asia/Shanghai
+更新时间：2026-06-09 20:51 Asia/Shanghai
 
 ## 当前任务清单
 
@@ -71,6 +71,7 @@
 - [x] Config 页面增加项目相对目录 `config_library/` 配置库，支持新建配置、加载旧配置、保存到配置库和删除旧配置。
 - [x] Review 从采集页面 tab 中分离出来，成为采集和数据转换之间的独立主步骤。
 - [x] Settings 增加中英文切换下拉项，并显示依赖环境默认使用项目内 `.venv` / `.conda-env`。
+- [x] Upload 页面改为正常 SSH 工作流：内网/公网 host 分开输入、端口/用户名/密码/密钥分开配置，支持连接后浏览远端目录、双击进入目录、返回上级、新建文件夹、选择当前目录后再上传。
 
 ## 已完成项目
 
@@ -148,7 +149,7 @@
   - 真实监听式 ROS2 recorder 继续扩展到 action/通用数组 stream，并加入更严格同步策略。
   - 基于用户选择的 topic 完善 stream schema 映射，支持 JointState/action/Float32MultiArray 等非图像流作为记录数据来源。
   - NPZ merge 继续扩展语言 annotation 合并策略，进一步兼容 `merge_calvin_sessions.py`。
-  - SSH 上传继续扩展远端目录浏览、新建目录、剩余空间检查。
+  - SSH 上传继续扩展远端剩余空间检查、保存服务器配置和更完整的上传进度解析。
 
 - 工程化：
   - 后续考虑补 AppImage/deb 打包，让启动体验更接近普通软件。

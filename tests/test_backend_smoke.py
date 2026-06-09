@@ -16,10 +16,10 @@ from robodataset_studio.core.config_manager import ConfigManager
 from robodataset_studio.core.models import ProjectState
 from robodataset_studio.ros.episode_recorder import RosEpisodeRecorder, joint_state_to_robot_obs
 from robodataset_studio.ros.image_conversion import image_bytes_to_rgb
-from robodataset_studio.ui.pages import AppContext, DiscoveryPage, InspectorPage, SettingsPage
+from robodataset_studio.ui.pages import AppContext, DiscoveryPage, InspectorPage, SettingsPage, UploadPage
 from robodataset_studio.ui.main_window import MainWindow
 from robodataset_studio.upload.manifest import UploadManifest
-from robodataset_studio.upload.ssh_uploader import parse_ssh_target
+from robodataset_studio.upload.ssh_uploader import SshConnection, SshUploader, parse_ssh_target
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -101,6 +101,64 @@ def test_config_library_roundtrip_and_delete(tmp_path) -> None:
 def test_parse_ssh_target_rejects_missing_remote_path() -> None:
     with pytest.raises(ValueError, match="user@host:/remote/path"):
         parse_ssh_target("user@example.com")
+
+
+def test_ssh_connection_target_and_auth_mode() -> None:
+    connection = SshConnection(
+        host="192.168.1.10",
+        port=2222,
+        username="trainer",
+        remote_path="/data/dataset",
+        password="secret",
+    )
+
+    assert connection.target == "trainer@192.168.1.10:/data/dataset"
+    assert connection.auth_mode == "password"
+
+
+def test_rsync_upload_uses_port_and_key(tmp_path) -> None:
+    ctx = AppContext()
+    local = tmp_path / "dataset"
+    local.mkdir()
+    command = SshUploader(ctx.process_manager).rsync_command(
+        local,
+        "trainer@example.com:/data/out",
+        port=2200,
+        key_path="/home/user/.ssh/id_rsa",
+    )
+
+    assert "-e" in command
+    assert "ssh -p 2200 -i /home/user/.ssh/id_rsa" in command
+
+
+def test_upload_page_builds_connection_from_split_fields() -> None:
+    app = QApplication.instance() or QApplication([])
+    page = UploadPage(AppContext())
+    page.lan_host.setText("10.0.0.5")
+    page.wan_host.setText("public.example.com")
+    page.port.setValue(2222)
+    page.username.setText("robot")
+    page.remote_path.setText("/data/calvin")
+
+    connection = page._connection()
+
+    assert app is not None
+    assert connection is not None
+    assert connection.host == "10.0.0.5"
+    assert connection.target == "robot@10.0.0.5:/data/calvin"
+    page.password.setText("secret")
+    assert page.auth_hint.text() == "auth: password"
+
+
+def test_upload_page_remote_listing_table() -> None:
+    app = QApplication.instance() or QApplication([])
+    page = UploadPage(AppContext())
+
+    page._set_remote_listing([{"name": "training", "is_dir": True, "size": 0}])
+
+    assert app is not None
+    assert page.remote_files.item(0, 0).text() == "training"
+    assert page.remote_files.item(0, 1).text() == "dir"
 
 
 def test_joint_state_to_robot_obs_pads_to_output_dim() -> None:

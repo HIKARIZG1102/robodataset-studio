@@ -47,7 +47,7 @@ from robodataset_studio.ros.episode_recorder import RosEpisodeRecorder
 from robodataset_studio.ros.graph_discovery import RosGraphDiscovery
 from robodataset_studio.ros.image_conversion import image_bytes_to_rgb
 from robodataset_studio.upload.manifest import MANIFEST_NAME, UploadManifest
-from robodataset_studio.upload.ssh_uploader import SshUploader
+from robodataset_studio.upload.ssh_uploader import SshConnection, SshUploader
 
 
 class AppContext:
@@ -1282,25 +1282,66 @@ class UploadPage(QWidget):
         super().__init__()
         self.ctx = ctx
         self.local = QLineEdit(str(ctx.state.merged_dir))
-        self.target = QLineEdit("user@host:/remote/dataset/path/")
+        self.lan_host = QLineEdit("")
+        self.wan_host = QLineEdit("")
+        self.port = QSpinBox()
+        self.port.setRange(1, 65535)
+        self.port.setValue(22)
+        self.username = QLineEdit("")
+        self.password = QLineEdit("")
+        self.password.setEchoMode(QLineEdit.Password)
+        self.key_path = QLineEdit("")
+        self.auth_hint = QLabel("auth: agent_or_default_key")
+        self.remote_path = QLineEdit("/data/dataset")
+        self.new_folder = QLineEdit("")
+        self.remote_files = QTableWidget(0, 3)
+        self.remote_files.setHorizontalHeaderLabels(["Name", "Type", "Size"])
+        self.remote_files.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.remote_files.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.remote_files.currentCellChanged.connect(self.select_remote_row)
+        self.remote_files.cellDoubleClicked.connect(self.open_remote_row)
         self.report = QPlainTextEdit()
         self.report.setReadOnly(True)
         build_manifest = QPushButton("Build upload manifest")
         verify_manifest = QPushButton("Verify upload manifest")
-        test_ssh = QPushButton("Test SSH connection")
+        test_ssh = QPushButton("Connect and list")
+        parent_dir = QPushButton("Up")
+        select_dir = QPushButton("Use current directory")
+        mkdir = QPushButton("Create folder")
         upload = QPushButton("Start rsync upload")
         remote_verify = QPushButton("Verify remote manifest")
+        self.password.textChanged.connect(self.update_auth_hint)
+        self.key_path.textChanged.connect(self.update_auth_hint)
         build_manifest.clicked.connect(self.build_manifest)
         verify_manifest.clicked.connect(self.verify_manifest)
         test_ssh.clicked.connect(self.test_ssh)
+        parent_dir.clicked.connect(self.go_parent_dir)
+        select_dir.clicked.connect(self.select_current_remote_dir)
+        mkdir.clicked.connect(self.create_remote_folder)
         upload.clicked.connect(self.upload)
         remote_verify.clicked.connect(self.verify_remote)
         layout = QFormLayout(self)
         layout.addRow("Local path", self.local)
-        layout.addRow("SSH target", self.target)
+        layout.addRow("Internal IP / Host", self.lan_host)
+        layout.addRow("Public IP / Host", self.wan_host)
+        layout.addRow("Port", self.port)
+        layout.addRow("Username", self.username)
+        layout.addRow("Password", self.password)
+        layout.addRow("Private key path", self.key_path)
+        layout.addRow("Authentication", self.auth_hint)
+        layout.addRow("Remote directory", self.remote_path)
+        remote_buttons = QHBoxLayout()
+        remote_buttons.addWidget(test_ssh)
+        remote_buttons.addWidget(parent_dir)
+        remote_buttons.addWidget(select_dir)
+        layout.addRow(remote_buttons)
+        mkdir_row = QHBoxLayout()
+        mkdir_row.addWidget(self.new_folder)
+        mkdir_row.addWidget(mkdir)
+        layout.addRow("New folder", mkdir_row)
+        layout.addRow(self.remote_files)
         layout.addRow(build_manifest)
         layout.addRow(verify_manifest)
-        layout.addRow(test_ssh)
         layout.addRow(upload)
         layout.addRow(remote_verify)
         layout.addRow(self.report)
@@ -1349,6 +1390,112 @@ class UploadPage(QWidget):
             f"mismatched: {len(result['mismatched'])}"
         )
 
+    def _connection(self) -> SshConnection | None:
+        host = self.lan_host.text().strip() or self.wan_host.text().strip()
+        if not host:
+            QMessageBox.warning(self, "SSH server", "Enter internal IP/host or public IP/host.")
+            return None
+        username = self.username.text().strip()
+        if not username:
+            QMessageBox.warning(self, "SSH username", "Enter the SSH login username.")
+            return None
+        remote_path = self.remote_path.text().strip() or "/"
+        return SshConnection(
+            host=host,
+            port=int(self.port.value()),
+            username=username,
+            remote_path=remote_path,
+            password=self.password.text(),
+            key_path=self.key_path.text().strip(),
+        )
+
+    def update_auth_hint(self) -> None:
+        if self.key_path.text().strip():
+            mode = "key"
+        elif self.password.text():
+            mode = "password"
+        else:
+            mode = "agent_or_default_key"
+        self.auth_hint.setText(f"auth: {mode}")
+
+    def _selected_remote_name(self) -> str | None:
+        row = self.remote_files.currentRow()
+        if row < 0:
+            return None
+        item = self.remote_files.item(row, 0)
+        return item.text() if item else None
+
+    def _set_remote_listing(self, entries: list[dict[str, object]]) -> None:
+        self.remote_files.setRowCount(len(entries))
+        for row, entry in enumerate(entries):
+            values = [
+                entry.get("name", ""),
+                "dir" if entry.get("is_dir") else "file",
+                entry.get("size", ""),
+            ]
+            for col, value in enumerate(values):
+                self.remote_files.setItem(row, col, QTableWidgetItem(str(value)))
+
+    def refresh_remote_listing(self) -> None:
+        connection = self._connection()
+        if connection is None:
+            return
+        try:
+            entries = SshUploader(self.ctx.process_manager).list_remote_dir(connection)
+        except Exception as exc:
+            QMessageBox.warning(self, "SSH list failed", str(exc))
+            self.report.setPlainText(f"SSH list failed: {exc}\nauth mode: {connection.auth_mode}")
+            return
+        self._set_remote_listing(entries)
+        self.report.setPlainText(
+            f"connected: {connection.host_with_user}:{connection.port}\n"
+            f"auth mode: {connection.auth_mode}\n"
+            f"remote: {connection.remote_path}\n"
+            f"entries: {len(entries)}"
+        )
+
+    def select_remote_row(self, current_row: int, _current_col: int, _previous_row: int, _previous_col: int) -> None:
+        if current_row < 0:
+            return
+        name = self._selected_remote_name()
+        typ = self.remote_files.item(current_row, 1).text() if self.remote_files.item(current_row, 1) else ""
+        if name:
+            self.report.setPlainText(f"selected remote {typ}: {name}")
+
+    def open_remote_row(self, row: int, _col: int) -> None:
+        item = self.remote_files.item(row, 0)
+        typ = self.remote_files.item(row, 1)
+        if not item or not typ or typ.text() != "dir":
+            return
+        base = self.remote_path.text().rstrip("/")
+        self.remote_path.setText(f"{base}/{item.text()}" if base else f"/{item.text()}")
+        self.refresh_remote_listing()
+
+    def go_parent_dir(self) -> None:
+        path = Path(self.remote_path.text().strip() or "/")
+        parent = str(path.parent)
+        self.remote_path.setText(parent if parent else "/")
+        self.refresh_remote_listing()
+
+    def select_current_remote_dir(self) -> None:
+        connection = self._connection()
+        if connection is None:
+            return
+        self.report.setPlainText(f"upload target selected: {connection.target}")
+
+    def create_remote_folder(self) -> None:
+        connection = self._connection()
+        if connection is None:
+            return
+        try:
+            created = SshUploader(self.ctx.process_manager).mkdir_remote(connection, self.new_folder.text())
+        except Exception as exc:
+            QMessageBox.warning(self, "Create folder failed", str(exc))
+            return
+        self.remote_path.setText(created)
+        self.new_folder.clear()
+        self.refresh_remote_listing()
+
     def upload(self) -> None:
         local_path = self._validate_local_path()
         if not local_path:
@@ -1356,22 +1503,17 @@ class UploadPage(QWidget):
         if not self.ctx.has_converted_dataset() and local_path == self.ctx.state.merged_dir:
             QMessageBox.warning(self, "No converted dataset", "Convert NPZ to HDF5 before uploading the merged directory.")
             return
-        if "user@host" in self.target.text():
-            QMessageBox.warning(self, "Upload target", "Replace the placeholder SSH target before uploading.")
+        connection = self._connection()
+        if connection is None:
             return
         manifest_path = self.build_manifest()
         if manifest_path is None:
             return
         uploader = SshUploader(self.ctx.process_manager)
-        uploader.upload_with_rsync(local_path, self.target.text().strip())
+        uploader.upload_connection_with_rsync(local_path, connection)
 
     def test_ssh(self) -> None:
-        try:
-            record = SshUploader(self.ctx.process_manager).test_connection(self.target.text().strip())
-        except Exception as exc:
-            QMessageBox.warning(self, "SSH target", str(exc))
-            return
-        self.report.setPlainText(f"started SSH connection test: {record.process_id}\nOpen Process to inspect details.")
+        self.refresh_remote_listing()
 
     def verify_remote(self) -> None:
         local_path = self._validate_local_path()
@@ -1381,8 +1523,16 @@ class UploadPage(QWidget):
         if not manifest_path.exists():
             QMessageBox.warning(self, "Manifest missing", f"Build {MANIFEST_NAME} before remote verification.")
             return
+        connection = self._connection()
+        if connection is None:
+            return
         try:
-            record = SshUploader(self.ctx.process_manager).verify_remote_manifest(manifest_path, self.target.text().strip())
+            record = SshUploader(self.ctx.process_manager).verify_remote_manifest(
+                manifest_path,
+                connection.target,
+                connection.port,
+                connection.key_path,
+            )
         except Exception as exc:
             QMessageBox.warning(self, "Remote verify", str(exc))
             return
