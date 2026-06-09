@@ -23,6 +23,7 @@ class ProjectState:
     collection_config: dict[str, Any] = field(default_factory=dict)
     conversion_outputs: list[Path] = field(default_factory=list)
     upload_targets: list[str] = field(default_factory=list)
+    language: str = "zh"
 
     @property
     def raw_session_dir(self) -> Path:

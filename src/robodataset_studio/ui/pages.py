@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 )
 
 from robodataset_studio.core.config_manager import ConfigManager
+from robodataset_studio.core.config_library import ConfigLibrary
 from robodataset_studio.core.environment import EnvironmentService
 from robodataset_studio.core.models import ProcessRecord, ProjectState
 from robodataset_studio.core.process_manager import ProcessManager
@@ -53,6 +54,7 @@ class AppContext:
     def __init__(self) -> None:
         self.state = ProjectState()
         self.config_manager = ConfigManager()
+        self.config_library = ConfigLibrary()
         self.process_manager = ProcessManager()
         self.environment = EnvironmentService()
         self.discovery = RosGraphDiscovery()
@@ -931,13 +933,34 @@ class ConfigPage(QWidget):
         self.ctx = ctx
         self.editor = QPlainTextEdit()
         self.status = QLabel("")
+        self.library = QComboBox()
+        self.library.setEditable(False)
+        self.config_name = QLineEdit("default_listener")
+        new_config = QPushButton("New Config")
+        load_library = QPushButton("Load From Library")
+        save_library = QPushButton("Save To Library")
+        delete_library = QPushButton("Delete Library Config")
         generate = QPushButton("Generate Default")
         validate = QPushButton("Validate")
         save = QPushButton("Save collection_config.yaml")
+        new_config.clicked.connect(self.new_config)
+        load_library.clicked.connect(self.load_library_config)
+        save_library.clicked.connect(self.save_library_config)
+        delete_library.clicked.connect(self.delete_library_config)
         generate.clicked.connect(self.generate)
         validate.clicked.connect(self.validate)
         save.clicked.connect(self.save)
         layout = QVBoxLayout(self)
+        library_row = QHBoxLayout()
+        library_row.addWidget(QLabel("Config library"))
+        library_row.addWidget(self.library, 2)
+        library_row.addWidget(QLabel("Name"))
+        library_row.addWidget(self.config_name, 1)
+        library_row.addWidget(new_config)
+        library_row.addWidget(load_library)
+        library_row.addWidget(save_library)
+        library_row.addWidget(delete_library)
+        layout.addLayout(library_row)
         row = QHBoxLayout()
         row.addWidget(generate)
         row.addWidget(validate)
@@ -945,7 +968,18 @@ class ConfigPage(QWidget):
         layout.addLayout(row)
         layout.addWidget(self.status)
         layout.addWidget(self.editor)
+        self.refresh_library()
         self.generate()
+
+    def refresh_library(self) -> None:
+        selected = self.library.currentText()
+        self.library.clear()
+        for path in self.ctx.config_library.list_configs():
+            self.library.addItem(path.stem)
+        if selected:
+            index = self.library.findText(selected)
+            if index >= 0:
+                self.library.setCurrentIndex(index)
 
     def generate(self) -> None:
         if not self.ctx.state.collection_config:
@@ -953,6 +987,49 @@ class ConfigPage(QWidget):
                 self.ctx.state, self.ctx.last_graph.get("topics", [])
             )
         self.editor.setPlainText(self.ctx.config_manager.dumps(self.ctx.state.collection_config))
+
+    def new_config(self) -> None:
+        self.ctx.state.collection_config = self.ctx.config_manager.build_default_config(
+            self.ctx.state, self.ctx.state.selected_streams or self.ctx.last_graph.get("topics", [])
+        )
+        self.editor.setPlainText(self.ctx.config_manager.dumps(self.ctx.state.collection_config))
+        self.status.setText("New config generated from current selected topics.")
+
+    def load_library_config(self) -> None:
+        name = self.library.currentText().strip()
+        if not name:
+            QMessageBox.warning(self, "Config library", "No saved config selected.")
+            return
+        text = self.ctx.config_library.load_text(name)
+        self.editor.setPlainText(text)
+        self.ctx.state.collection_config = self.ctx.config_manager.loads(text)
+        self.config_name.setText(name)
+        self.status.setText(f"Loaded config_library/{name}.yaml")
+
+    def save_library_config(self) -> None:
+        name = self.config_name.text().strip()
+        if not name:
+            QMessageBox.warning(self, "Config library", "Enter a config name before saving.")
+            return
+        config = self._current_config()
+        text = self.ctx.config_manager.dumps(config)
+        path = self.ctx.config_library.save_text(name, text)
+        self.refresh_library()
+        index = self.library.findText(path.stem)
+        if index >= 0:
+            self.library.setCurrentIndex(index)
+        self.status.setText(f"Saved library config: {path.relative_to(Path(__file__).resolve().parents[3])}")
+
+    def delete_library_config(self) -> None:
+        name = self.library.currentText().strip()
+        if not name:
+            QMessageBox.warning(self, "Config library", "No saved config selected.")
+            return
+        if QMessageBox.question(self, "Delete config", f"Delete config_library/{name}.yaml?") != QMessageBox.Yes:
+            return
+        path = self.ctx.config_library.delete(name)
+        self.refresh_library()
+        self.status.setText(f"Deleted library config: {path.name}")
 
     def _current_config(self) -> dict:
         config = self.ctx.config_manager.loads(self.editor.toPlainText())
@@ -1412,11 +1489,23 @@ class SettingsPage(QWidget):
     def __init__(self, ctx: AppContext) -> None:
         super().__init__()
         self.ctx = ctx
+        self.language = QComboBox()
+        self.language.addItems(["中文", "English"])
+        self.language.setCurrentText("中文" if ctx.state.language == "zh" else "English")
+        self.language.currentTextChanged.connect(self.set_language)
+        switch_language = QPushButton("Switch / 切换")
+        switch_language.clicked.connect(self.toggle_language)
         self.ai_enabled = QComboBox()
         self.ai_enabled.addItems(["disabled", "enabled"])
         self.ai_base = QLineEdit("")
         self.ai_model = QLineEdit("")
+        self.env_note = QLabel("Python env: project-local .venv or .conda-env")
         layout = QFormLayout(self)
+        language_row = QHBoxLayout()
+        language_row.addWidget(self.language)
+        language_row.addWidget(switch_language)
+        layout.addRow("Language / 语言", language_row)
+        layout.addRow("Dependency env", self.env_note)
         layout.addRow("AI validation", self.ai_enabled)
         layout.addRow("OpenAI-compatible base URL", self.ai_base)
         layout.addRow("Model", self.ai_model)
@@ -1424,3 +1513,9 @@ class SettingsPage(QWidget):
         note.setReadOnly(True)
         note.setPlainText("API keys should be provided through environment variables, not saved in project YAML.")
         layout.addRow(note)
+
+    def set_language(self, text: str) -> None:
+        self.ctx.state.language = "en" if text == "English" else "zh"
+
+    def toggle_language(self) -> None:
+        self.language.setCurrentText("English" if self.ctx.state.language == "zh" else "中文")

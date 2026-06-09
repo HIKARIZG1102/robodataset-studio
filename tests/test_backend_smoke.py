@@ -11,11 +11,13 @@ from PySide6.QtWidgets import QApplication
 
 from robodataset_studio.dataset.merge_plan import CalvinMergePlanner, CalvinSessionMerger
 from robodataset_studio.dataset.recorder import MockRecorder
+from robodataset_studio.core.config_library import ConfigLibrary
 from robodataset_studio.core.config_manager import ConfigManager
 from robodataset_studio.core.models import ProjectState
 from robodataset_studio.ros.episode_recorder import RosEpisodeRecorder, joint_state_to_robot_obs
 from robodataset_studio.ros.image_conversion import image_bytes_to_rgb
-from robodataset_studio.ui.pages import AppContext, DiscoveryPage, InspectorPage
+from robodataset_studio.ui.pages import AppContext, DiscoveryPage, InspectorPage, SettingsPage
+from robodataset_studio.ui.main_window import MainWindow
 from robodataset_studio.upload.manifest import UploadManifest
 from robodataset_studio.upload.ssh_uploader import parse_ssh_target
 
@@ -82,6 +84,18 @@ def test_upload_manifest_roundtrip(tmp_path) -> None:
     assert result["ok"] is True
     assert result["checked"] == 1
     assert parse_ssh_target("user@example.com:/data/out") == ("user@example.com", "/data/out")
+
+
+def test_config_library_roundtrip_and_delete(tmp_path) -> None:
+    library = ConfigLibrary(tmp_path / "config_library")
+    path = library.save_text("widowx default", "project:\n  name: demo\n")
+
+    assert path.name == "widowx_default.yaml"
+    assert [config.name for config in library.list_configs()] == ["widowx_default.yaml"]
+    assert "name: demo" in library.load_text("widowx default")
+    deleted = library.delete("widowx default")
+    assert deleted.name == "widowx_default.yaml"
+    assert library.list_configs() == []
 
 
 def test_parse_ssh_target_rejects_missing_remote_path() -> None:
@@ -184,6 +198,33 @@ def test_discovery_topic_selection_uses_checkboxes() -> None:
 
     assert app is not None
     assert page._selected_topics() == [ctx.last_graph["topics"][1]]
+
+
+def test_main_window_has_review_as_separate_step() -> None:
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    nav_labels = [window.nav.item(index).text() for index in range(window.nav.count())]
+
+    assert app is not None
+    assert nav_labels == [
+        "1. 配置与 ROS Topic",
+        "2. 采集",
+        "3. 数据 Review",
+        "4. 数据转换",
+        "5. 上传",
+    ]
+
+
+def test_settings_language_toggle_updates_state() -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    page = SettingsPage(ctx)
+
+    page.toggle_language()
+
+    assert app is not None
+    assert ctx.state.language == "en"
+    assert page.language.currentText() == "English"
 
 
 def test_inspector_source_fps_is_separate_from_display_target() -> None:

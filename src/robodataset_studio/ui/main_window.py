@@ -40,9 +40,10 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         pages = [
             ("1. 配置与 ROS Topic", self._config_workspace()),
-            ("2. 采集", self._collection_workspace()),
-            ("3. 数据转换", self._single_page_workspace(ConvertPage(self.ctx))),
-            ("4. 上传", self._single_page_workspace(UploadPage(self.ctx))),
+            ("2. 采集", self._single_page_workspace(RecordingPage(self.ctx))),
+            ("3. 数据 Review", self._single_page_workspace(ReviewPage(self.ctx))),
+            ("4. 数据转换", self._single_page_workspace(ConvertPage(self.ctx))),
+            ("5. 上传", self._single_page_workspace(UploadPage(self.ctx))),
         ]
         for name, page in pages:
             self.nav.addItem(name)
@@ -75,12 +76,6 @@ class MainWindow(QMainWindow):
         tabs.addTab(DiscoveryPage(self.ctx), "Discovery")
         tabs.addTab(self.inspector_page, "Inspector")
         tabs.addTab(ConfigPage(self.ctx), "Config")
-        return tabs
-
-    def _collection_workspace(self) -> QTabWidget:
-        tabs = QTabWidget()
-        tabs.addTab(RecordingPage(self.ctx), "Recording")
-        tabs.addTab(ReviewPage(self.ctx), "Review")
         return tabs
 
     def _single_page_workspace(self, page: QWidget) -> QWidget:

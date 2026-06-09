@@ -18,6 +18,9 @@ and writes two local launchers that are intentionally ignored by git:
 - `RoboDataset-Studio.sh`
 - `RoboDataset-Studio.desktop`
 
+Python dependencies are installed into a project-local environment by default:
+`.venv/` for venv or `.conda-env/` for the conda fallback.
+
 If ROS2 is not sourced, discovery falls back to an empty graph and the mock
 recorder/converter still work for UI and data-flow testing.
 
@@ -84,6 +87,8 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 ./.conda-env/bin/python -m pytest -q
 - Managed `topic echo` and `topic hz` subprocesses with safe stop.
 - Auto-generated `collection_config.yaml` with robot, camera, stream, dataset,
   recording, Genesis, and AI sections.
+- Project-local config library under `config_library/` for saved listener
+  configs that can be loaded, copied, or deleted from the Config page.
 - Listener-only ROS2 recorder that subscribes to already-running image and
   joint topics, then writes Hermes-style CALVIN-like transition files:
   `training/episode_*.npz` plus `training/lang_annotations/auto_lang_ann.npy`.

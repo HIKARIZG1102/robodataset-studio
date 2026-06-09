@@ -1,6 +1,6 @@
 # RoboDataset Studio Task Status
 
-更新时间：2026-06-06 00:22 Asia/Shanghai
+更新时间：2026-06-09 00:00 Asia/Shanghai
 
 ## 当前任务清单
 
@@ -68,6 +68,9 @@
 - [x] `collection_config.yaml` 生成增加环境描述、关节数量/顺序、action 推导策略、CALVIN transition 输出标记和 language annotation 文件路径。
 - [x] JointState -> `robot_obs` 改为配置驱动：支持按 `joint_order` 重排关节，按 `fields` 选择 position / velocity / effort，并按 `output_dim` 自动补零或裁剪。
 - [x] Discovery topic 选择改为显式复选框，不再依赖 Ctrl/Shift 多选；Topic/Type 列改为自适应拉伸并提供 tooltip 显示完整名称。
+- [x] Config 页面增加项目相对目录 `config_library/` 配置库，支持新建配置、加载旧配置、保存到配置库和删除旧配置。
+- [x] Review 从采集页面 tab 中分离出来，成为采集和数据转换之间的独立主步骤。
+- [x] Settings 增加中英文切换下拉项，并显示依赖环境默认使用项目内 `.venv` / `.conda-env`。
 
 ## 已完成项目
 
