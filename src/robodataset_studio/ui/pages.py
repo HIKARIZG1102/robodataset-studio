@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import threading
 import time
@@ -1293,6 +1293,7 @@ class UploadPage(QWidget):
         self.key_path = QLineEdit("")
         self.auth_hint = QLabel("auth: agent_or_default_key")
         self.remote_path = QLineEdit("/data/dataset")
+        self.path_breadcrumbs = QHBoxLayout()
         self.new_folder = QLineEdit("")
         self.remote_files = QTableWidget(0, 3)
         self.remote_files.setHorizontalHeaderLabels(["Name", "Type", "Size"])
@@ -1329,7 +1330,9 @@ class UploadPage(QWidget):
         layout.addRow("Password", self.password)
         layout.addRow("Private key path", self.key_path)
         layout.addRow("Authentication", self.auth_hint)
+        self.remote_path.textChanged.connect(self.update_remote_breadcrumbs)
         layout.addRow("Remote directory", self.remote_path)
+        layout.addRow("Path", self.path_breadcrumbs)
         remote_buttons = QHBoxLayout()
         remote_buttons.addWidget(test_ssh)
         remote_buttons.addWidget(parent_dir)
@@ -1345,6 +1348,7 @@ class UploadPage(QWidget):
         layout.addRow(upload)
         layout.addRow(remote_verify)
         layout.addRow(self.report)
+        self.update_remote_breadcrumbs()
 
     def _local_path(self) -> Path:
         return Path(self.local.text()).expanduser()
@@ -1425,6 +1429,36 @@ class UploadPage(QWidget):
         item = self.remote_files.item(row, 0)
         return item.text() if item else None
 
+    def _remote_path_parts(self) -> list[tuple[str, str]]:
+        raw = self.remote_path.text().strip() or "/"
+        absolute = raw.startswith("/")
+        parts = [part for part in raw.split("/") if part]
+        crumbs: list[tuple[str, str]] = [("/", "/")] if absolute else []
+        current = "" if absolute else "."
+        for part in parts:
+            current = f"{current.rstrip('/')}/{part}" if current not in {"", "."} else (f"/{part}" if absolute else part)
+            crumbs.append((part, current))
+        if not crumbs:
+            crumbs.append(("/", "/"))
+        return crumbs
+
+    def update_remote_breadcrumbs(self) -> None:
+        while self.path_breadcrumbs.count():
+            item = self.path_breadcrumbs.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        for label, target in self._remote_path_parts():
+            button = QPushButton(label)
+            button.setToolTip(target)
+            button.clicked.connect(lambda _checked=False, path=target: self.jump_remote_path(path))
+            self.path_breadcrumbs.addWidget(button)
+        self.path_breadcrumbs.addStretch(1)
+
+    def jump_remote_path(self, path: str) -> None:
+        self.remote_path.setText(path or "/")
+        self.refresh_remote_listing()
+
     def _set_remote_listing(self, entries: list[dict[str, object]]) -> None:
         self.remote_files.setRowCount(len(entries))
         for row, entry in enumerate(entries):
@@ -1447,6 +1481,7 @@ class UploadPage(QWidget):
             self.report.setPlainText(f"SSH list failed: {exc}\nauth mode: {connection.auth_mode}")
             return
         self._set_remote_listing(entries)
+        self.update_remote_breadcrumbs()
         self.report.setPlainText(
             f"connected: {connection.host_with_user}:{connection.port}\n"
             f"auth mode: {connection.auth_mode}\n"
@@ -1472,7 +1507,7 @@ class UploadPage(QWidget):
         self.refresh_remote_listing()
 
     def go_parent_dir(self) -> None:
-        path = Path(self.remote_path.text().strip() or "/")
+        path = PurePosixPath(self.remote_path.text().strip() or "/")
         parent = str(path.parent)
         self.remote_path.setText(parent if parent else "/")
         self.refresh_remote_listing()

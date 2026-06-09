@@ -161,6 +161,22 @@ def test_upload_page_remote_listing_table() -> None:
     assert page.remote_files.item(0, 1).text() == "dir"
 
 
+def test_upload_page_remote_path_breadcrumbs() -> None:
+    app = QApplication.instance() or QApplication([])
+    page = UploadPage(AppContext())
+    page.remote_path.setText("/data/dataset/calvin")
+
+    crumbs = page._remote_path_parts()
+
+    assert app is not None
+    assert crumbs == [
+        ("/", "/"),
+        ("data", "/data"),
+        ("dataset", "/data/dataset"),
+        ("calvin", "/data/dataset/calvin"),
+    ]
+
+
 def test_joint_state_to_robot_obs_pads_to_output_dim() -> None:
     robot_obs = joint_state_to_robot_obs(["a", "b"], [1.0, 2.0], [0.1], [0.01], 6)
     assert robot_obs.dtype == np.float32
