@@ -1,6 +1,6 @@
 # RoboDataset Studio Task Status
 
-更新时间：2026-06-09 21:37 Asia/Shanghai
+更新时间：2026-06-10 16:20 Asia/Shanghai
 
 ## 当前任务清单
 
@@ -73,6 +73,11 @@
 - [x] Settings 增加中英文切换下拉项，并显示依赖环境默认使用项目内 `.venv` / `.conda-env`。
 - [x] Upload 页面改为正常 SSH 工作流：内网/公网 host 分开输入、端口/用户名/密码/密钥分开配置，支持连接后浏览远端目录、双击进入目录、返回上级、新建文件夹、选择当前目录后再上传。
 - [x] Upload 远端目录增加 VS Code/文件管理器风格路径面包屑，支持点击路径任意层级直接跳转并刷新对应目录。
+- [x] V2 已接回原仓库新分支 `v2-local-integration` 并推送到 `origin/v2-local-integration`，`main` 保留老版本不变。
+- [x] V2 本机启动链路已验证：`ENV_BACKEND=conda scripts/bootstrap.sh` 生成项目内 `.conda-env` 和 `RoboDataset-Studio.sh`，`.conda-env` 中 `rclpy`、`PySide6`、`paramiko` 均可导入。
+- [x] V2 自动测试已通过：`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 QT_QPA_PLATFORM=offscreen .conda-env/bin/python -m pytest -q` 为 32 passed。
+- [x] V2 真实 ROS2 采集链路已验收：订阅 `/camera/color/image_raw [sensor_msgs/msg/Image]` 和 `/wx250s/joint_states [sensor_msgs/msg/JointState]`，2 秒采集生成 19 个 CALVIN-like transition 文件和 `lang_annotations/auto_lang_ann.npy`。
+- [x] V2 真实采集输出已检查：`episode_0000000.npz` 包含 `rgb_static (720, 1280, 3) uint8`、`robot_obs (6,) float32`、`rel_actions (7,) float32`、`actions (7,) float32` 和 `episode_metadata`。
 
 ## 已完成项目
 
@@ -124,6 +129,8 @@
 - 已补测试覆盖手动 FPS 重新启动预览时仍保持手动模式，不再回到自动校准。
 - Image monitor 右侧状态现在用 `source/max/target` 区分原始接收帧率、历史最高接收帧率和用户设置的显示抽样帧率。
 - 当前真实采集路径保持解耦：只订阅 Discovery/Config 选好的 image 和 JointState topic，不启动相机、GELLO、follow 或机器人控制节点；输出格式对齐原 Hermes recorder，可直接形成 CALVIN-like session 根目录。
+- V2 已在当前机器做过真实采集验收：ROS graph 中 `/camera/color/image_raw` 约 28-30 Hz，`/wx250s/joint_states` 在线；使用 V2 recorder 以 10 Hz 录制 2 秒，输出路径为 `/tmp/robodataset_v2_live_test/raw_sessions/v2_live_test/v1/session_20260610_161406/training`，生成 19 个 `episode_*.npz` transition 和语言标注文件。
+- V2 Review/validator 可读取这次真实数据；单相机测试场景下状态为 warning，原因是当前 validator 仍把 `rgb_wrist` 视为默认缺失字段。
 
 ## 遇到的问题
 
@@ -140,6 +147,8 @@
 - 当前 `robodataset-studio/` 已是普通 Git 仓库，不再使用 `.git_local` 分离仓库方式。
 - `gello_widowx` 数据集路径在 Spaceman_Server 上存在；在 microsate_widowx 上该精确路径不存在。
 - 用户明确传感器节点控制不需要做；后续不要新增 `ros2 launch hermes_data_collection ...` 的启动/停止控制，只把它视为外部节点已启动后的数据来源参考。
+- 当前 V2 真实采集测试只使用了一个图像 topic，因此 Review 报 `missing_required: rgb_wrist`。这不是采集失败；后续需要让 validator 按当前配置里的 image streams 动态判断必需图像键，或在正式 2 相机采集时同时选择 wrist image topic。
+- 在沙箱内直接运行 `ros2 topic hz/echo` 会受到 ROS 日志目录和本地 socket 限制影响；实机检查应设置 `ROS_LOG_DIR=/tmp/ros_logs` 并在沙箱外运行，V2 启动器自身会自动 source ROS 环境。
 
 ## 待完成部分
 
@@ -147,6 +156,7 @@
   - 页面间状态流继续增强：Project -> Environment -> Discovery -> Config -> Recording -> Review -> Convert -> Upload。
 
 - 后端能力：
+  - Review/validator 的 required image keys 应从 `collection_config.yaml` 的 streams/cameras 动态生成，避免单相机配置被固定要求 `rgb_wrist`。
   - 真实监听式 ROS2 recorder 继续扩展到 action/通用数组 stream，并加入更严格同步策略。
   - 基于用户选择的 topic 完善 stream schema 映射，支持 JointState/action/Float32MultiArray 等非图像流作为记录数据来源。
   - NPZ merge 继续扩展语言 annotation 合并策略，进一步兼容 `merge_calvin_sessions.py`。
