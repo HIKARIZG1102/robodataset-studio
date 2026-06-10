@@ -125,8 +125,13 @@ case "${ENV_BACKEND}" in
     ;;
 esac
 
-"${ENV_PYTHON}" -m pip install --upgrade pip setuptools wheel
-"${ENV_PYTHON}" -m pip install -e "${ROOT_DIR}[dev,upload]"
+"${ENV_PYTHON}" -m pip install --upgrade pip setuptools wheel || {
+  echo "Warning: pip build-tool upgrade failed; continuing with the existing local environment." >&2
+}
+if ! "${ENV_PYTHON}" -m pip install -e "${ROOT_DIR}[dev,upload]"; then
+  echo "Editable install failed, retrying without build isolation for offline/local environments." >&2
+  "${ENV_PYTHON}" -m pip install --no-build-isolation -e "${ROOT_DIR}[dev,upload]"
+fi
 qt_install_desktop_dependencies_if_requested "${ENV_PYTHON}" || true
 
 cat > "${ROOT_DIR}/.robodataset_env" <<EOF

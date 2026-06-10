@@ -113,6 +113,26 @@ class SshUploader:
             client.close()
         return remote_path
 
+    def remote_space(self, connection: SshConnection) -> dict[str, int]:
+        client = self._connect_paramiko(connection)
+        try:
+            sftp = client.open_sftp()
+            try:
+                stats = sftp.statvfs(connection.remote_path)
+                block_size = int(getattr(stats, "f_frsize", 0) or getattr(stats, "f_bsize", 0) or 0)
+                total = int(stats.f_blocks) * block_size
+                free = int(stats.f_bfree) * block_size
+                available = int(stats.f_bavail) * block_size
+                return {
+                    "total_bytes": total,
+                    "free_bytes": free,
+                    "available_bytes": available,
+                }
+            finally:
+                sftp.close()
+        finally:
+            client.close()
+
     def _connect_paramiko(self, connection: SshConnection):
         import paramiko
 

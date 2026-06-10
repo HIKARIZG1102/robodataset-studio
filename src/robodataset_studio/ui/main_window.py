@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .i18n import apply_i18n
 from .pages import (
     AppContext,
     ConfigPage,
@@ -31,6 +32,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("RoboDataset Studio")
+        self.setProperty("i18n_title_key", "RoboDataset Studio")
         self.resize(1280, 820)
         self.ctx = AppContext()
         self._tool_windows: list[QMainWindow] = []
@@ -67,6 +69,8 @@ class MainWindow(QMainWindow):
         layout.addLayout(side, 1)
         layout.addWidget(self.stack, 5)
         self.setCentralWidget(root)
+        self.ctx.language_changed.connect(self.retranslate)
+        self.retranslate(self.ctx.state.language)
 
     def _config_workspace(self) -> QTabWidget:
         tabs = QTabWidget()
@@ -90,11 +94,18 @@ class MainWindow(QMainWindow):
     def _open_tool_window(self, title: str, page: QWidget) -> None:
         window = QMainWindow(self)
         window.setWindowTitle(f"RoboDataset Studio - {title}")
+        window.setProperty("i18n_title_key", f"RoboDataset Studio - {title}")
         window.resize(980, 640)
         window.setCentralWidget(page)
         self._tool_windows.append(window)
         window.destroyed.connect(lambda: self._tool_windows.remove(window) if window in self._tool_windows else None)
+        apply_i18n(window, self.ctx.state.language)
         window.show()
+
+    def retranslate(self, language: str) -> None:
+        apply_i18n(self, language)
+        for window in list(self._tool_windows):
+            apply_i18n(window, language)
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
         if self.inspector_page is not None:

@@ -11,15 +11,17 @@ from PySide6.QtWidgets import QApplication
 
 from robodataset_studio.dataset.merge_plan import CalvinMergePlanner, CalvinSessionMerger
 from robodataset_studio.dataset.recorder import MockRecorder
+from robodataset_studio.dataset.validator import DatasetValidator
 from robodataset_studio.core.config_library import ConfigLibrary
 from robodataset_studio.core.config_manager import ConfigManager
 from robodataset_studio.core.models import ProjectState
 from robodataset_studio.ros.episode_recorder import RosEpisodeRecorder, joint_state_to_robot_obs
 from robodataset_studio.ros.image_conversion import image_bytes_to_rgb
-from robodataset_studio.ui.pages import AppContext, DiscoveryPage, InspectorPage, SettingsPage, UploadPage
+from robodataset_studio.ui.pages import AppContext, ConfigPage, DiscoveryPage, InspectorPage, RecordingPage, ReviewPage, SettingsPage, UploadPage
 from robodataset_studio.ui.main_window import MainWindow
 from robodataset_studio.upload.manifest import UploadManifest
 from robodataset_studio.upload.ssh_uploader import SshConnection, SshUploader, parse_ssh_target
+from robodataset_studio.upload.ssh_profiles import SshProfile, SshProfileStore
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -73,6 +75,47 @@ def test_mock_recorder_writes_calvin_transition_files(tmp_path) -> None:
         assert data["rel_actions"].shape == (7,)
 
 
+def test_dataset_validator_flags_black_frame_quality_issue(tmp_path) -> None:
+    training = tmp_path / "training"
+    training.mkdir()
+    path = training / "episode_0000000.npz"
+    np.savez_compressed(
+        path,
+        rgb_static=np.zeros((224, 224, 3), dtype=np.uint8),
+        rgb_wrist=np.full((224, 224, 3), 128, dtype=np.uint8),
+        robot_obs=np.zeros((6,), dtype=np.float32),
+        rel_actions=np.zeros((7,), dtype=np.float32),
+        actions=np.zeros((7,), dtype=np.float32),
+    )
+
+    rows = DatasetValidator().scan_npz(training)
+    detail = DatasetValidator().describe_npz(path)
+
+    assert rows[0]["status"] == "warning"
+    assert rows[0]["quality"] == "black_frame:rgb_static"
+    assert "quality_issues: black_frame:rgb_static" in detail
+
+
+def test_dataset_validator_quality_report_counts_status_issues_and_marks() -> None:
+    rows = [
+        {"name": "episode_0000000.npz", "path": "a", "status": "ok", "quality": "-", "missing": ""},
+        {
+            "name": "episode_0000001.npz",
+            "path": "b",
+            "status": "warning",
+            "quality": "black_frame:rgb_static, action_dim:actions=6",
+            "missing": "",
+        },
+    ]
+
+    report = DatasetValidator().quality_report(rows, {"episode_0000001.npz": "bad"})
+
+    assert report["total"] == 2
+    assert report["by_status"] == {"ok": 1, "warning": 1, "error": 0}
+    assert report["issue_counts"] == {"action_dim:actions=6": 1, "black_frame:rgb_static": 1}
+    assert report["mark_counts"] == {"bad": 1, "unmarked": 1}
+
+
 def test_upload_manifest_roundtrip(tmp_path) -> None:
     payload = tmp_path / "payload.txt"
     payload.write_text("hello dataset\n", encoding="utf-8")
@@ -116,6 +159,29 @@ def test_ssh_connection_target_and_auth_mode() -> None:
     assert connection.auth_mode == "password"
 
 
+def test_ssh_profile_store_roundtrip_without_password(tmp_path) -> None:
+    store = SshProfileStore(tmp_path / "ssh_profiles.json")
+    store.save_profile(
+        SshProfile(
+            name="lab server",
+            lan_host="10.0.0.8",
+            wan_host="public.example.com",
+            port=2200,
+            username="robot",
+            key_path="/home/robot/.ssh/id_rsa",
+            remote_path="/data/calvin",
+        )
+    )
+
+    profile = store.load_profile("lab server")
+    raw = (tmp_path / "ssh_profiles.json").read_text(encoding="utf-8")
+
+    assert profile.lan_host == "10.0.0.8"
+    assert profile.port == 2200
+    assert profile.remote_path == "/data/calvin"
+    assert "password" not in raw.lower()
+
+
 def test_rsync_upload_uses_port_and_key(tmp_path) -> None:
     ctx = AppContext()
     local = tmp_path / "dataset"
@@ -150,6 +216,32 @@ def test_upload_page_builds_connection_from_split_fields() -> None:
     assert page.auth_hint.text() == "auth: password"
 
 
+def test_upload_page_saves_and_loads_server_profile_without_password(tmp_path) -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    ctx.ssh_profiles = SshProfileStore(tmp_path / "ssh_profiles.json")
+    page = UploadPage(ctx)
+    page.profile_name.setText("lab server")
+    page.lan_host.setText("10.0.0.5")
+    page.wan_host.setText("public.example.com")
+    page.port.setValue(2222)
+    page.username.setText("robot")
+    page.password.setText("secret")
+    page.key_path.setText("/home/robot/.ssh/id_rsa")
+    page.remote_path.setText("/data/calvin")
+
+    page.save_server_profile()
+    page.lan_host.clear()
+    page.password.setText("still-local")
+    page.load_server_profile()
+
+    assert app is not None
+    assert page.profile_select.currentText() == "lab server"
+    assert page.lan_host.text() == "10.0.0.5"
+    assert page.password.text() == ""
+    assert page.key_path.text() == "/home/robot/.ssh/id_rsa"
+
+
 def test_upload_page_remote_listing_table() -> None:
     app = QApplication.instance() or QApplication([])
     page = UploadPage(AppContext())
@@ -175,6 +267,41 @@ def test_upload_page_remote_path_breadcrumbs() -> None:
         ("dataset", "/data/dataset"),
         ("calvin", "/data/dataset/calvin"),
     ]
+
+
+def test_upload_page_local_size_and_format_bytes(tmp_path) -> None:
+    app = QApplication.instance() or QApplication([])
+    local = tmp_path / "dataset"
+    nested = local / "training"
+    nested.mkdir(parents=True)
+    (local / "a.bin").write_bytes(b"12345")
+    (nested / "b.bin").write_bytes(b"1234567")
+    page = UploadPage(AppContext())
+
+    assert app is not None
+    assert page._local_size_bytes(local) == 12
+    assert page._format_bytes(1536) == "1.50 KB"
+
+
+def test_upload_page_parses_rsync_progress() -> None:
+    app = QApplication.instance() or QApplication([])
+    page = UploadPage(AppContext())
+
+    summary = page._parse_rsync_progress(
+        [
+            "sending incremental file list",
+            "training/episode_0000001.npz",
+            "     12,345,678  45%   12.34MB/s    0:00:03",
+        ]
+    )
+
+    assert app is not None
+    assert summary == {
+        "file": "training/episode_0000001.npz",
+        "percent": 45,
+        "speed": "12.34MB/s",
+        "eta": "0:00:03",
+    }
 
 
 def test_joint_state_to_robot_obs_pads_to_output_dim() -> None:
@@ -218,6 +345,50 @@ def test_default_config_is_listener_only_without_action_topic() -> None:
     assert ConfigManager().validate(config) == []
 
 
+def test_config_page_quick_form_updates_yaml() -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    page = ConfigPage(ctx)
+
+    page.instruction.setText("pick up the white cube")
+    page.scene_description.setPlainText("physical tabletop scene with one white cube")
+    page.sample_rate.setValue(15)
+    page.episode_duration.setValue(8)
+    page.crop_enabled.setChecked(True)
+    page.crop_x.setValue(10)
+    page.crop_y.setValue(20)
+    page.crop_width.setValue(320)
+    page.crop_height.setValue(240)
+    page.resize_enabled.setChecked(True)
+    page.resize_width.setValue(256)
+    page.resize_height.setValue(256)
+    page.ai_validation_enabled.setChecked(True)
+    page.ai_base_url.setText("https://api.example.com/v1")
+    page.ai_model.setText("gpt-4.1")
+    page.ai_api_key_env.setText("ROBOT_DATA_AI_API_KEY")
+    page.ai_prompt.setPlainText("Return JSON warnings for missing dataset fields.")
+
+    page.apply_form_to_yaml()
+    config = ctx.config_manager.loads(page.editor.toPlainText())
+
+    assert app is not None
+    assert config["instruction"]["text"] == "pick up the white cube"
+    assert config["environment"]["description"] == "physical tabletop scene with one white cube"
+    assert config["recording"]["sample_rate_hz"] == 15
+    assert config["recording"]["episode_duration_sec"] == 8
+    assert config["cameras"][0]["crop"] == {"enabled": True, "x": 10, "y": 20, "width": 320, "height": 240}
+    assert config["cameras"][0]["resize"] == {"enabled": True, "width": 256, "height": 256}
+    assert config["streams"][0]["preview"]["crop"]["width"] == 320
+    assert config["ai_validation"] == {
+        "enabled": True,
+        "provider": "openai_compatible",
+        "base_url": "https://api.example.com/v1",
+        "api_key_env": "ROBOT_DATA_AI_API_KEY",
+        "model": "gpt-4.1",
+        "config_review_prompt": "Return JSON warnings for missing dataset fields.",
+    }
+
+
 def test_ros_recorder_writes_annotations_and_delta_actions(tmp_path) -> None:
     recorder = RosEpisodeRecorder()
     config = ConfigManager().build_default_config(ProjectState(), [])
@@ -253,6 +424,93 @@ def test_inspector_manual_preview_fps_survives_restart() -> None:
     assert page._auto_playback_deadline == 0.0
     assert page._effective_playback_fps == 30
     assert page.playback_timer.interval() == 33
+
+
+def test_recording_page_populates_capture_monitor_topics() -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    ctx.state.collection_config = ConfigManager().build_default_config(
+        ProjectState(),
+        [
+            {"name": "/camera/front/image_raw", "type": "sensor_msgs/msg/Image"},
+            {"name": "/joint_states", "type": "sensor_msgs/msg/JointState"},
+        ],
+    )
+    page = RecordingPage(ctx)
+
+    assert app is not None
+    assert len(page._monitor_slots) == 1
+    assert page._monitor_slots[0].topic == "/camera/front/image_raw"
+    page.close()
+
+
+def test_recording_page_limits_capture_monitors_to_four() -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    ctx.state.collection_config = {
+        "runtime": {"mode": "listener_only"},
+        "streams": [
+            {
+                "name": f"rgb_{index}",
+                "topic": f"/camera/{index}/image_raw",
+                "message_type": "sensor_msgs/msg/Image",
+                "modality": "rgb",
+                "source": "ros2_topic",
+                "training_role": "observation",
+            }
+            for index in range(5)
+        ],
+    }
+    page = RecordingPage(ctx)
+
+    assert app is not None
+    assert len(page._monitor_slots) == 4
+    assert [slot.topic for slot in page._monitor_slots] == [
+        "/camera/0/image_raw",
+        "/camera/1/image_raw",
+        "/camera/2/image_raw",
+        "/camera/3/image_raw",
+    ]
+    page.close()
+
+
+def test_review_page_filters_marks_and_exports_quality_report(tmp_path) -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    ctx.state.dataset_root = tmp_path
+    training = ctx.state.episodes_dir
+    training.mkdir(parents=True)
+    np.savez_compressed(
+        training / "episode_0000000.npz",
+        rgb_static=np.full((224, 224, 3), 128, dtype=np.uint8),
+        rgb_wrist=np.full((224, 224, 3), 128, dtype=np.uint8),
+        robot_obs=np.zeros((6,), dtype=np.float32),
+        rel_actions=np.zeros((7,), dtype=np.float32),
+        actions=np.zeros((7,), dtype=np.float32),
+    )
+    np.savez_compressed(
+        training / "episode_0000001.npz",
+        rgb_static=np.zeros((224, 224, 3), dtype=np.uint8),
+        rgb_wrist=np.full((224, 224, 3), 128, dtype=np.uint8),
+        robot_obs=np.zeros((6,), dtype=np.float32),
+        rel_actions=np.zeros((7,), dtype=np.float32),
+        actions=np.zeros((7,), dtype=np.float32),
+    )
+    page = ReviewPage(ctx)
+
+    page.scan()
+    page.status_filter.setCurrentText("warning")
+    page.mark_select.setCurrentText("bad")
+    page.mark_selected()
+    page.export_quality_report()
+    report = json.loads((ctx.state.raw_session_dir / "quality_report.json").read_text(encoding="utf-8"))
+
+    assert app is not None
+    assert page.table.rowCount() == 1
+    assert page.table.item(0, 0).text() == "episode_0000001.npz"
+    assert report["by_status"] == {"ok": 1, "warning": 1, "error": 0}
+    assert report["mark_counts"]["bad"] == 1
+    assert report["issue_counts"] == {"black_frame:rgb_static": 1}
 
 
 def test_discovery_topic_selection_uses_checkboxes() -> None:
@@ -299,6 +557,30 @@ def test_settings_language_toggle_updates_state() -> None:
     assert app is not None
     assert ctx.state.language == "en"
     assert page.language.currentText() == "English"
+
+
+def test_main_window_retranslates_navigation_and_tool_windows() -> None:
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    window.open_settings()
+
+    settings_window = window._tool_windows[-1]
+    settings_page = settings_window.centralWidget()
+    settings_page.toggle_language()
+
+    nav_labels = [window.nav.item(index).text() for index in range(window.nav.count())]
+
+    assert app is not None
+    assert window.windowTitle() == "RoboDataset Studio"
+    assert settings_window.windowTitle() == "RoboDataset Studio - Settings"
+    assert nav_labels == [
+        "1. Config & ROS Topics",
+        "2. Recording",
+        "3. Data Review",
+        "4. Conversion",
+        "5. Upload",
+    ]
+    window.close()
 
 
 def test_inspector_source_fps_is_separate_from_display_target() -> None:
