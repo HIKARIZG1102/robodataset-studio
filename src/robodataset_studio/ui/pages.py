@@ -1044,12 +1044,6 @@ class ConfigPage(QWidget):
         self.resize_height = QSpinBox()
         for spin in [self.crop_x, self.crop_y, self.crop_width, self.crop_height, self.resize_width, self.resize_height]:
             spin.setRange(0, 8192)
-        self.ai_validation_enabled = QCheckBox("Enable AI validation")
-        self.ai_base_url = QLineEdit()
-        self.ai_model = QLineEdit()
-        self.ai_api_key_env = QLineEdit()
-        self.ai_prompt = QPlainTextEdit()
-        self.ai_prompt.setMaximumHeight(90)
         new_config = QPushButton("New Config")
         load_library = QPushButton("Load From Library")
         save_library = QPushButton("Save To Library")
@@ -1112,11 +1106,6 @@ class ConfigPage(QWidget):
         resize_row.addWidget(QLabel("h"))
         resize_row.addWidget(self.resize_height)
         quick_form.addRow("Image resize", resize_row)
-        quick_form.addRow("AI validation", self.ai_validation_enabled)
-        quick_form.addRow("AI base URL", self.ai_base_url)
-        quick_form.addRow("AI model", self.ai_model)
-        quick_form.addRow("AI key env", self.ai_api_key_env)
-        quick_form.addRow("Config review prompt", self.ai_prompt)
         layout.addLayout(quick_form)
         layout.addWidget(self.status)
         layout.addWidget(self.editor)
@@ -1212,7 +1201,6 @@ class ConfigPage(QWidget):
         recording = config.get("recording", {})
         instruction = config.get("instruction", {})
         environment = config.get("environment", {})
-        ai_validation = config.get("ai_validation", {})
         first_camera = self._first_camera(config)
         crop = first_camera.get("crop", {}) if first_camera else {}
         resize = first_camera.get("resize", {}) if first_camera else {}
@@ -1230,11 +1218,6 @@ class ConfigPage(QWidget):
         self.resize_enabled.setChecked(bool(resize.get("enabled", False)))
         self.resize_width.setValue(int(resize.get("width", 224) or 0))
         self.resize_height.setValue(int(resize.get("height", 224) or 0))
-        self.ai_validation_enabled.setChecked(bool(ai_validation.get("enabled", False)))
-        self.ai_base_url.setText(str(ai_validation.get("base_url", "")))
-        self.ai_model.setText(str(ai_validation.get("model", "")))
-        self.ai_api_key_env.setText(str(ai_validation.get("api_key_env", "ROBOT_DATA_AI_API_KEY")))
-        self.ai_prompt.setPlainText(str(ai_validation.get("config_review_prompt", self._default_ai_prompt())))
         self._updating_form = False
 
     def apply_form_to_yaml(self) -> None:
@@ -1252,13 +1235,7 @@ class ConfigPage(QWidget):
         recording = config.setdefault("recording", {})
         recording["sample_rate_hz"] = int(self.sample_rate.value())
         recording["episode_duration_sec"] = int(self.episode_duration.value())
-        ai_validation = config.setdefault("ai_validation", {})
-        ai_validation["enabled"] = self.ai_validation_enabled.isChecked()
-        ai_validation["provider"] = ai_validation.get("provider") or "openai_compatible"
-        ai_validation["base_url"] = self.ai_base_url.text().strip()
-        ai_validation["api_key_env"] = self.ai_api_key_env.text().strip() or "ROBOT_DATA_AI_API_KEY"
-        ai_validation["model"] = self.ai_model.text().strip()
-        ai_validation["config_review_prompt"] = self.ai_prompt.toPlainText().strip()
+        config.pop("ai_validation", None)
 
         crop = {
             "enabled": self.crop_enabled.isChecked(),
@@ -1288,30 +1265,25 @@ class ConfigPage(QWidget):
         cameras = config.get("cameras", [])
         return cameras[0] if cameras and isinstance(cameras[0], dict) else {}
 
-    def _default_ai_prompt(self) -> str:
-        return (
-            "Check whether this collection_config.yaml is sufficient for robot dataset collection. "
-            "Focus on missing robot, camera, stream, instruction, scene, recording, and dataset fields. "
-            "Return structured JSON with severity, missing_fields, suspicious_fields, and recommended_changes."
-        )
-
     def validate(self) -> None:
         errors = self.ctx.config_manager.validate(self._current_config())
         self.status.setText("OK" if not errors else "Warnings: " + "; ".join(errors))
 
     def ai_match_config(self) -> None:
         config = self._current_config()
-        ai_cfg = config.get("ai_validation", {})
-        base_url = str(ai_cfg.get("base_url") or self.ai_base_url.text()).strip().rstrip("/")
-        model = str(ai_cfg.get("model") or self.ai_model.text()).strip()
-        api_key_env = str(ai_cfg.get("api_key_env") or self.ai_api_key_env.text() or "ROBOT_DATA_AI_API_KEY").strip()
-        api_key = os.environ.get(api_key_env, "")
+        base_url = self.ctx.state.ai_base_url.strip().rstrip("/")
+        model = self.ctx.state.ai_model.strip()
+        api_key = self.ctx.state.ai_api_key.strip()
+        ai_enabled = self.ctx.state.ai_enabled
         if not base_url or not model or not api_key:
             QMessageBox.warning(
                 self,
                 "AI Match Config",
-                f"Set AI base URL, model, and environment variable {api_key_env} before using AI matching.",
+                "Set AI base URL, model, and API key in Settings before using AI matching.",
             )
+            return
+        if not ai_enabled:
+            QMessageBox.warning(self, "AI Match Config", "Enable AI in Settings before using AI matching.")
             return
         payload = self._ai_match_payload(config, model)
         try:
@@ -1336,10 +1308,7 @@ class ConfigPage(QWidget):
             "last_graph_topics": self.ctx.last_graph.get("topics", []),
         }
         template = self.ctx.config_manager.build_default_config(self.ctx.state, [])
-        prompt = (
-            self.ai_prompt.toPlainText().strip()
-            or "Map selected ROS2 nodes/topics into the listener-only dataset collection config."
-        )
+        prompt = "Map selected ROS2 nodes/topics into the listener-only dataset collection config."
         user_content = {
             "request": prompt,
             "constraints": [
@@ -2537,8 +2506,15 @@ class SettingsPage(QWidget):
         self.switch_language.clicked.connect(self.toggle_language)
         self.ai_enabled = QComboBox()
         self.ai_enabled.addItems(["disabled", "enabled"])
-        self.ai_base = QLineEdit("")
-        self.ai_model = QLineEdit("")
+        self.ai_enabled.setCurrentText("enabled" if ctx.state.ai_enabled else "disabled")
+        self.ai_enabled.currentTextChanged.connect(self.save_ai_settings)
+        self.ai_base = QLineEdit(ctx.state.ai_base_url)
+        self.ai_base.textChanged.connect(self.save_ai_settings)
+        self.ai_model = QLineEdit(ctx.state.ai_model)
+        self.ai_model.textChanged.connect(self.save_ai_settings)
+        self.ai_key = QLineEdit(ctx.state.ai_api_key)
+        self.ai_key.setEchoMode(QLineEdit.Password)
+        self.ai_key.textChanged.connect(self.save_ai_settings)
         self.env_note = QLabel("Python env: project-local .venv or .conda-env")
         layout = QFormLayout(self)
         language_row = QHBoxLayout()
@@ -2549,10 +2525,12 @@ class SettingsPage(QWidget):
         layout.addRow("AI validation", self.ai_enabled)
         layout.addRow("OpenAI-compatible base URL", self.ai_base)
         layout.addRow("Model", self.ai_model)
+        layout.addRow("API key", self.ai_key)
         self.note = QTextEdit()
         self.note.setReadOnly(True)
-        self.note.setPlainText("API keys should be provided through environment variables, not saved in project YAML.")
+        self.note.setPlainText("AI settings are kept in Settings and are not written to collection_config.yaml.")
         layout.addRow(self.note)
+        self.save_ai_settings()
         self.ctx.language_changed.connect(self.retranslate)
         self.retranslate(self.ctx.state.language)
 
@@ -2562,10 +2540,16 @@ class SettingsPage(QWidget):
     def toggle_language(self) -> None:
         self.language.setCurrentText("English" if self.ctx.state.language == "zh" else "中文")
 
+    def save_ai_settings(self) -> None:
+        self.ctx.state.ai_enabled = self.ai_enabled.currentText() == "enabled"
+        self.ctx.state.ai_base_url = self.ai_base.text().strip()
+        self.ctx.state.ai_model = self.ai_model.text().strip()
+        self.ctx.state.ai_api_key = self.ai_key.text().strip()
+
     @Slot(str)
     def retranslate(self, language: str) -> None:
         apply_i18n(self, language)
         if language == "en":
-            self.note.setPlainText("API keys should be provided through environment variables, not saved in project YAML.")
+            self.note.setPlainText("AI settings are kept in Settings and are not written to collection_config.yaml.")
         else:
-            self.note.setPlainText("API key 应通过环境变量提供，不保存到项目 YAML 中。")
+            self.note.setPlainText("AI 设置只保存在 Settings，不写入 collection_config.yaml。")

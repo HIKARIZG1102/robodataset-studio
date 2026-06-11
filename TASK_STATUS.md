@@ -1,6 +1,6 @@
 # RoboDataset Studio Task Status
 
-更新时间：2026-06-11 17:44 Asia/Shanghai
+更新时间：2026-06-11 18:08 Asia/Shanghai
 
 ## 当前任务清单
 
@@ -88,6 +88,10 @@
 - [x] Config 页面增加可选 `AI Match Config` 按钮：在用户填写 OpenAI-compatible base URL、model、API key 环境变量后，可把选中的 node/topic 上下文、当前 YAML 和默认模板发送给 AI 辅助整理；API key 只从环境变量读取，不写入配置文件。
 - [x] 已用真实 ROS graph 验证从 `/camera/camera` node publishers 生成配置：输出 `rgb_static -> /camera/camera/color/image_raw` 和 `depth_1 -> /camera/camera/depth/image_rect_raw`，无 robot/action 槽位，`ConfigManager.validate()` 无错误。
 - [x] 修复 Discovery 生成配置后 Config 页不刷新的问题：`AppContext` 增加 `config_changed` 信号，生成配置后已打开的 Config 页会立即刷新 YAML 预览，不再停留在 `No config loaded`。
+- [x] 按历史 CALVIN-like episode 检查基础字段：`rgb_static`、可选 `rgb_wrist`、`robot_obs`、`rel_actions/actions` 和 `lang_annotations/auto_lang_ann.npy`；新配置生成只保留这类数据集/采集必要字段与用户选择的 ROS topic。
+- [x] `collection_config.yaml` 不再写入 API/base URL/key/model 等 AI 连接字段；旧 YAML 中的 `ai_validation` 加载时会被清理。
+- [x] Config 页面移除 AI URL/model/key 输入，AI Match 只从 Settings 读取全局 AI 设置；Settings 中 API key 仅保存在当前运行内存，不写入项目 YAML。
+- [x] 未填写 instruction、environment description、success condition 等用户输入项时，生成配置保持空字符串，不再自动填入 `catch the satellite` 或默认场景描述。
 
 ## 已完成项目
 

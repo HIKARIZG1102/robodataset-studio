@@ -91,11 +91,6 @@ TEXTS: TextMap = {
     "Image resize": {"zh": "图像缩放", "en": "Image resize"},
     "Enable crop": {"zh": "启用裁切", "en": "Enable crop"},
     "Enable resize": {"zh": "启用缩放", "en": "Enable resize"},
-    "Enable AI validation": {"zh": "启用 AI 校验", "en": "Enable AI validation"},
-    "AI base URL": {"zh": "AI Base URL", "en": "AI base URL"},
-    "AI model": {"zh": "AI 模型", "en": "AI model"},
-    "AI key env": {"zh": "AI key 环境变量", "en": "AI key env"},
-    "Config review prompt": {"zh": "配置审查 Prompt", "en": "Config review prompt"},
     "Listener Recording Console": {"zh": "监听式采集控制台", "en": "Listener Recording Console"},
     "This page listens to configured streams and writes dataset episodes. It does not send robot control commands.": {
         "zh": "本页面只监听已配置的数据流并写入 episode，不发送机器人控制命令。",
@@ -186,14 +181,15 @@ TEXTS: TextMap = {
     "AI validation": {"zh": "AI 校验", "en": "AI validation"},
     "OpenAI-compatible base URL": {"zh": "OpenAI-compatible Base URL", "en": "OpenAI-compatible base URL"},
     "Model": {"zh": "模型", "en": "Model"},
+    "API key": {"zh": "API key", "en": "API key"},
     "Switch / 切换": {"zh": "切换语言", "en": "Switch language"},
     "Python env: project-local .venv or .conda-env": {
         "zh": "Python 环境：项目本地 .venv 或 .conda-env",
         "en": "Python env: project-local .venv or .conda-env",
     },
-    "API keys should be provided through environment variables, not saved in project YAML.": {
-        "zh": "API key 应通过环境变量提供，不保存到项目 YAML 中。",
-        "en": "API keys should be provided through environment variables, not saved in project YAML.",
+    "AI settings are kept in Settings and are not written to collection_config.yaml.": {
+        "zh": "AI 设置只保存在 Settings，不写入 collection_config.yaml。",
+        "en": "AI settings are kept in Settings and are not written to collection_config.yaml.",
     },
 }
 

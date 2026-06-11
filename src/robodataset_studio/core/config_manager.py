@@ -104,9 +104,9 @@ class ConfigManager:
             },
             "environment": {
                 "type": state.environment,
-                "description": "physical WidowX + RealSense scene; external control nodes provide motion and sensor streams",
-                "workspace": "robotarm_control_ws",
-                "lighting": "unspecified",
+                "description": "",
+                "workspace": "",
+                "lighting": "",
                 "objects": [],
                 "notes": "",
             },
@@ -138,10 +138,10 @@ class ConfigManager:
                 },
             },
             "instruction": {
-                "text": "catch the satellite",
-                "language": "en",
-                "task_family": "manipulation",
-                "success_condition": "gripper reaches and grasps target object",
+                "text": "",
+                "language": "",
+                "task_family": "",
+                "success_condition": "",
             },
             "cameras": cameras,
             "streams": streams,
@@ -190,13 +190,6 @@ class ConfigManager:
                 "scene_file": None,
                 "asset_root": None,
             },
-            "ai_validation": {
-                "enabled": False,
-                "provider": "openai_compatible",
-                "base_url": "",
-                "api_key_env": "ROBOT_DATA_AI_API_KEY",
-                "model": "",
-            },
         }
         return config
 
@@ -205,7 +198,10 @@ class ConfigManager:
 
     def loads(self, text: str) -> dict[str, Any]:
         loaded = yaml.safe_load(text)
-        return loaded or {}
+        if isinstance(loaded, dict):
+            loaded.pop("ai_validation", None)
+            return loaded
+        return {}
 
     def validate(self, config: dict[str, Any]) -> list[str]:
         errors: list[str] = []

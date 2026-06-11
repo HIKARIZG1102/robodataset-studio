@@ -24,6 +24,10 @@ class ProjectState:
     conversion_outputs: list[Path] = field(default_factory=list)
     upload_targets: list[str] = field(default_factory=list)
     language: str = "zh"
+    ai_enabled: bool = False
+    ai_base_url: str = ""
+    ai_model: str = ""
+    ai_api_key: str = ""
 
     @property
     def raw_session_dir(self) -> Path:

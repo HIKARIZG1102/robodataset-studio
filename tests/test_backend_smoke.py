@@ -371,6 +371,10 @@ def test_default_config_is_listener_only_without_action_topic() -> None:
     assert config["dataset"]["calvin_like_transition_files"] is True
     assert config["dataset"]["language_annotation_file"] == "lang_annotations/auto_lang_ann.npy"
     assert config["environment"]["type"] == "physical"
+    assert config["environment"]["description"] == ""
+    assert config["instruction"]["text"] == ""
+    assert config["instruction"]["success_condition"] == ""
+    assert "ai_validation" not in config
     assert config["action"]["source"] == "derived_from_robot_obs"
     assert config["state"]["keys"][0]["source_topic"] == "/joint_states"
     assert ConfigManager().validate(config) == []
@@ -413,6 +417,7 @@ def test_default_config_keeps_camera_only_selection_camera_only() -> None:
     assert streams["depth_1"]["topic"] == "/camera/camera/depth/image_rect_raw"
     assert streams["depth_1"]["modality"] == "depth"
     assert streams["depth_1"]["calvin_key"] is None
+    assert "ai_validation" not in config
 
 
 def test_config_validation_requires_joint_state_key() -> None:
@@ -433,6 +438,20 @@ def test_empty_topic_selection_generates_empty_streams_not_template_defaults() -
     assert config["state"]["keys"] == []
     assert config["dataset"]["requires_robot_obs"] is False
     assert ConfigManager().validate(config) == ["missing cameras or streams"]
+
+
+def test_config_loader_drops_legacy_ai_validation_section() -> None:
+    config = ConfigManager().loads(
+        """
+project:
+  name: demo
+ai_validation:
+  base_url: https://api.example.com/v1
+  api_key_env: ROBOT_DATA_AI_API_KEY
+"""
+    )
+
+    assert config == {"project": {"name": "demo"}}
 
 
 def test_config_page_quick_form_updates_yaml() -> None:
@@ -456,11 +475,6 @@ def test_config_page_quick_form_updates_yaml() -> None:
     page.resize_enabled.setChecked(True)
     page.resize_width.setValue(256)
     page.resize_height.setValue(256)
-    page.ai_validation_enabled.setChecked(True)
-    page.ai_base_url.setText("https://api.example.com/v1")
-    page.ai_model.setText("gpt-4.1")
-    page.ai_api_key_env.setText("ROBOT_DATA_AI_API_KEY")
-    page.ai_prompt.setPlainText("Return JSON warnings for missing dataset fields.")
 
     page.apply_form_to_yaml()
     config = ctx.config_manager.loads(page.editor.toPlainText())
@@ -473,14 +487,7 @@ def test_config_page_quick_form_updates_yaml() -> None:
     assert config["cameras"][0]["crop"] == {"enabled": True, "x": 10, "y": 20, "width": 320, "height": 240}
     assert config["cameras"][0]["resize"] == {"enabled": True, "width": 256, "height": 256}
     assert config["streams"][0]["preview"]["crop"]["width"] == 320
-    assert config["ai_validation"] == {
-        "enabled": True,
-        "provider": "openai_compatible",
-        "base_url": "https://api.example.com/v1",
-        "api_key_env": "ROBOT_DATA_AI_API_KEY",
-        "model": "gpt-4.1",
-        "config_review_prompt": "Return JSON warnings for missing dataset fields.",
-    }
+    assert "ai_validation" not in config
 
 
 def test_config_page_new_config_keeps_streams_empty_without_selection() -> None:
@@ -789,6 +796,40 @@ def test_settings_language_toggle_updates_state() -> None:
     assert app is not None
     assert ctx.state.language == "en"
     assert page.language.currentText() == "English"
+
+
+def test_settings_ai_values_are_shared_without_yaml_fields(monkeypatch) -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    settings = SettingsPage(ctx)
+    settings.ai_enabled.setCurrentText("enabled")
+    settings.ai_base.setText("https://api.example.com/v1")
+    settings.ai_model.setText("gpt-4.1")
+    settings.ai_key.setText("secret-key")
+    config_page = ConfigPage(ctx)
+    ctx.state.collection_config = ConfigManager().build_default_config(
+        ProjectState(),
+        [{"name": "/camera/camera/color/image_raw", "type": "sensor_msgs/msg/Image"}],
+    )
+    config_page.load_context_config()
+    captured = {}
+
+    def fake_call(base_url, api_key, payload):
+        captured["base_url"] = base_url
+        captured["api_key"] = api_key
+        captured["payload"] = payload
+        return config_page.editor.toPlainText()
+
+    monkeypatch.setattr(config_page, "_call_openai_compatible_chat", fake_call)
+
+    config_page.ai_match_config()
+    config = ctx.config_manager.loads(config_page.editor.toPlainText())
+
+    assert app is not None
+    assert captured["base_url"] == "https://api.example.com/v1"
+    assert captured["api_key"] == "secret-key"
+    assert captured["payload"]["model"] == "gpt-4.1"
+    assert "ai_validation" not in config
 
 
 def test_main_window_retranslates_navigation_and_tool_windows() -> None:
