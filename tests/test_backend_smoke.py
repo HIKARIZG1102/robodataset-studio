@@ -15,6 +15,7 @@ from robodataset_studio.dataset.validator import DatasetValidator
 from robodataset_studio.core.config_library import ConfigLibrary
 from robodataset_studio.core.config_manager import ConfigManager
 from robodataset_studio.core.models import ProjectState
+from robodataset_studio.core.settings_store import UserSettingsStore
 from robodataset_studio.ros.episode_recorder import RosEpisodeRecorder, joint_state_to_robot_obs
 from robodataset_studio.ros.image_conversion import image_bytes_to_rgb
 from robodataset_studio.ui.pages import AppContext, ConfigPage, DiscoveryPage, InspectorPage, RecordingPage, ReviewPage, SettingsPage, UploadPage
@@ -24,6 +25,11 @@ from robodataset_studio.upload.ssh_uploader import SshConnection, SshUploader, p
 from robodataset_studio.upload.ssh_profiles import SshProfile, SshProfileStore
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+
+@pytest.fixture(autouse=True)
+def isolated_user_settings(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
 
 
 def test_rgb_image_conversion_respects_encoding() -> None:
@@ -965,7 +971,7 @@ def test_settings_ai_values_are_shared_without_yaml_fields(monkeypatch) -> None:
     settings = SettingsPage(ctx)
     settings.ai_enabled.setCurrentText("enabled")
     settings.ai_base.setText("https://api.example.com/v1")
-    settings.ai_model.setText("gpt-4.1")
+    settings.ai_model.setCurrentText("gpt-4.1")
     settings.ai_key.setText("secret-key")
     config_page = ConfigPage(ctx)
     ctx.state.collection_config = ConfigManager().build_default_config(
@@ -993,6 +999,82 @@ def test_settings_ai_values_are_shared_without_yaml_fields(monkeypatch) -> None:
     assert "ai_validation" not in config
 
 
+def test_settings_are_persisted_to_user_settings_store(tmp_path) -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    ctx.settings_store = UserSettingsStore(tmp_path / "settings.json")
+    settings = SettingsPage(ctx)
+    settings.ai_enabled.setCurrentText("enabled")
+    settings.ai_base.setText("https://api.example.com/v1")
+    settings.ai_model.setCurrentText("gpt-4.1")
+    settings.ai_key.setText("secret-key")
+    settings.language.setCurrentText("English")
+    settings.save_ai_settings()
+
+    restored = AppContext()
+    restored.settings_store = UserSettingsStore(tmp_path / "settings.json")
+    restored.load_user_settings()
+
+    assert app is not None
+    assert restored.state.language == "en"
+    assert restored.state.ai_enabled is True
+    assert restored.state.ai_base_url == "https://api.example.com/v1"
+    assert restored.state.ai_model == "gpt-4.1"
+    assert restored.state.ai_api_key == "secret-key"
+
+
+def test_settings_refresh_models_populates_model_combo(monkeypatch) -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    settings = SettingsPage(ctx)
+    settings.ai_base.setText("https://api.example.com/v1")
+    settings.ai_key.setText("secret-key")
+
+    monkeypatch.setattr(settings, "fetch_openai_compatible_models", lambda base_url, api_key: ["gpt-b", "gpt-a"])
+    settings.refresh_models()
+
+    assert app is not None
+    assert [settings.ai_model.itemText(index) for index in range(settings.ai_model.count())] == ["gpt-b", "gpt-a"]
+    assert ctx.state.ai_model == "gpt-b"
+    assert "2 model" in settings.model_status.text()
+
+
+def test_settings_refresh_models_reports_empty_list(monkeypatch) -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    settings = SettingsPage(ctx)
+    settings.ai_base.setText("https://api.example.com/v1")
+    settings.ai_key.setText("secret-key")
+
+    monkeypatch.setattr(settings, "fetch_openai_compatible_models", lambda base_url, api_key: [])
+    settings.refresh_models()
+
+    assert app is not None
+    assert settings.model_status.text() == "no available models"
+
+
+def test_settings_model_dropdown_refreshes_models(monkeypatch) -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    settings = SettingsPage(ctx)
+    settings.ai_base.setText("https://api.example.com/v1")
+    settings.ai_key.setText("secret-key")
+
+    called = {"count": 0}
+
+    def fake_fetch(base_url, api_key):  # type: ignore[no-untyped-def]
+        called["count"] += 1
+        return ["gpt-live"]
+
+    monkeypatch.setattr(settings, "fetch_openai_compatible_models", fake_fetch)
+    settings.ai_model.showPopup()
+    settings.ai_model.hidePopup()
+
+    assert app is not None
+    assert called["count"] == 1
+    assert settings.ai_model.currentText() == "gpt-live"
+
+
 def test_main_window_retranslates_navigation_and_tool_windows() -> None:
     app = QApplication.instance() or QApplication([])
     window = MainWindow()
@@ -1006,7 +1088,7 @@ def test_main_window_retranslates_navigation_and_tool_windows() -> None:
 
     assert app is not None
     assert window.windowTitle() == "RoboDataset Studio"
-    assert settings_window.windowTitle() == "RoboDataset Studio - Settings"
+    assert "Settings" in window._tool_windows_by_title
     assert nav_labels == [
         "1. Config & ROS Topics",
         "2. Recording",
@@ -1014,6 +1096,20 @@ def test_main_window_retranslates_navigation_and_tool_windows() -> None:
         "4. Conversion",
         "5. Upload",
     ]
+    window.close()
+
+
+def test_main_window_opens_single_settings_window() -> None:
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    window.open_settings()
+    first = window._tool_windows[-1]
+    window.open_settings()
+
+    assert app is not None
+    assert len(window._tool_windows) == 1
+    assert window._tool_windows_by_title["Settings"] is first
+    assert window._tool_windows[-1] is first
     window.close()
 
 

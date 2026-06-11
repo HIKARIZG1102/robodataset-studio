@@ -36,6 +36,7 @@ class MainWindow(QMainWindow):
         self.resize(1280, 820)
         self.ctx = AppContext()
         self._tool_windows: list[QMainWindow] = []
+        self._tool_windows_by_title: dict[str, QMainWindow] = {}
         self.inspector_page: InspectorPage | None = None
 
         self.nav = QListWidget()
@@ -89,16 +90,32 @@ class MainWindow(QMainWindow):
         self._open_tool_window("Process", ProcessPage(self.ctx))
 
     def open_settings(self) -> None:
-        self._open_tool_window("Settings", SettingsPage(self.ctx))
+        self._open_tool_window("Settings", SettingsPage(self.ctx), singleton=True)
 
-    def _open_tool_window(self, title: str, page: QWidget) -> None:
+    def _open_tool_window(self, title: str, page: QWidget, *, singleton: bool = False) -> None:
+        if singleton and title in self._tool_windows_by_title:
+            window = self._tool_windows_by_title[title]
+            window.show()
+            window.raise_()
+            window.activateWindow()
+            page.deleteLater()
+            return
         window = QMainWindow(self)
         window.setWindowTitle(f"RoboDataset Studio - {title}")
         window.setProperty("i18n_title_key", f"RoboDataset Studio - {title}")
         window.resize(980, 640)
         window.setCentralWidget(page)
         self._tool_windows.append(window)
-        window.destroyed.connect(lambda: self._tool_windows.remove(window) if window in self._tool_windows else None)
+        if singleton:
+            self._tool_windows_by_title[title] = window
+
+        def forget_window() -> None:
+            if window in self._tool_windows:
+                self._tool_windows.remove(window)
+            if self._tool_windows_by_title.get(title) is window:
+                self._tool_windows_by_title.pop(title, None)
+
+        window.destroyed.connect(forget_window)
         apply_i18n(window, self.ctx.state.language)
         window.show()
 

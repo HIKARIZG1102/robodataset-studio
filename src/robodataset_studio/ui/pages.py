@@ -44,6 +44,7 @@ from robodataset_studio.core.config_library import ConfigLibrary
 from robodataset_studio.core.environment import EnvironmentService
 from robodataset_studio.core.models import ProcessRecord, ProjectState
 from robodataset_studio.core.process_manager import ProcessManager
+from robodataset_studio.core.settings_store import UserSettingsStore
 from robodataset_studio.dataset.converter import Hdf5Converter
 from robodataset_studio.dataset.layout import CalvinLayoutScanner
 from robodataset_studio.dataset.merge_plan import CalvinMergePlanner, CalvinSessionMerger
@@ -65,6 +66,7 @@ class AppContext(QObject):
     def __init__(self) -> None:
         super().__init__()
         self.state = ProjectState()
+        self.settings_store = UserSettingsStore()
         self.config_manager = ConfigManager()
         self.config_library = ConfigLibrary()
         self.process_manager = ProcessManager()
@@ -79,6 +81,8 @@ class AppContext(QObject):
         self.session_merger = CalvinSessionMerger()
         self.ssh_profiles = SshProfileStore()
         self.last_graph: dict[str, list[dict[str, str]]] = {"nodes": [], "topics": [], "services": []}
+        self.settings_save_error: str = ""
+        self.load_user_settings()
 
     def has_config(self) -> bool:
         return bool(self.state.collection_config)
@@ -94,11 +98,55 @@ class AppContext(QObject):
         if self.state.language == language:
             return
         self.state.language = language
+        self.save_user_settings()
         self.language_changed.emit(language)
+
+    def load_user_settings(self) -> None:
+        settings = self.settings_store.load()
+        self.state.language = "en" if settings.get("language") == "en" else "zh"
+        ai = settings.get("ai", {})
+        if isinstance(ai, dict):
+            self.state.ai_enabled = bool(ai.get("enabled", False))
+            self.state.ai_base_url = str(ai.get("base_url", ""))
+            self.state.ai_model = str(ai.get("model", ""))
+            self.state.ai_api_key = str(ai.get("api_key", ""))
+
+    def save_user_settings(self) -> None:
+        settings = {
+            "language": self.state.language,
+            "ai": {
+                "enabled": self.state.ai_enabled,
+                "base_url": self.state.ai_base_url,
+                "model": self.state.ai_model,
+                "api_key": self.state.ai_api_key,
+            },
+        }
+        try:
+            self.settings_store.save(settings)
+        except OSError as exc:
+            self.settings_save_error = str(exc)
+        else:
+            self.settings_save_error = ""
 
     def set_collection_config(self, config: dict) -> None:
         self.state.collection_config = config
         self.config_changed.emit()
+
+
+class ModelComboBox(QComboBox):
+    def __init__(self) -> None:
+        super().__init__()
+        self.refresh_callback = None
+        self._show_refreshing = False
+
+    def showPopup(self) -> None:  # noqa: N802 - Qt API
+        if self.refresh_callback is not None and not self._show_refreshing:
+            self._show_refreshing = True
+            try:
+                self.refresh_callback()
+            finally:
+                self._show_refreshing = False
+        super().showPopup()
 
 
 class ImagePreviewWidget(QWidget):
@@ -2631,6 +2679,7 @@ class SettingsPage(QWidget):
     def __init__(self, ctx: AppContext) -> None:
         super().__init__()
         self.ctx = ctx
+        self._loading = False
         self.language = QComboBox()
         self.language.addItems(["中文", "English"])
         self.language.setCurrentText("中文" if ctx.state.language == "zh" else "English")
@@ -2643,11 +2692,21 @@ class SettingsPage(QWidget):
         self.ai_enabled.currentTextChanged.connect(self.save_ai_settings)
         self.ai_base = QLineEdit(ctx.state.ai_base_url)
         self.ai_base.textChanged.connect(self.save_ai_settings)
-        self.ai_model = QLineEdit(ctx.state.ai_model)
-        self.ai_model.textChanged.connect(self.save_ai_settings)
+        self.ai_model = ModelComboBox()
+        self.ai_model.setEditable(True)
+        self.ai_model.refresh_callback = self.refresh_models
+        if ctx.state.ai_model:
+            self.ai_model.addItem(ctx.state.ai_model)
+        self.ai_model.setCurrentText(ctx.state.ai_model)
+        self.ai_model.currentTextChanged.connect(self.save_ai_settings)
         self.ai_key = QLineEdit(ctx.state.ai_api_key)
         self.ai_key.setEchoMode(QLineEdit.Password)
         self.ai_key.textChanged.connect(self.save_ai_settings)
+        self.model_status = QLabel("")
+        refresh_models = QPushButton("Refresh models")
+        refresh_models.clicked.connect(self.refresh_models)
+        save_settings = QPushButton("Save")
+        save_settings.clicked.connect(self.save_ai_settings)
         self.env_note = QLabel("Python env: project-local .venv or .conda-env")
         layout = QFormLayout(self)
         language_row = QHBoxLayout()
@@ -2657,13 +2716,17 @@ class SettingsPage(QWidget):
         layout.addRow("Dependency env", self.env_note)
         layout.addRow("AI validation", self.ai_enabled)
         layout.addRow("OpenAI-compatible base URL", self.ai_base)
-        layout.addRow("Model", self.ai_model)
+        model_row = QHBoxLayout()
+        model_row.addWidget(self.ai_model)
+        model_row.addWidget(refresh_models)
+        layout.addRow("Model", model_row)
         layout.addRow("API key", self.ai_key)
+        layout.addRow("Model status", self.model_status)
+        layout.addRow("", save_settings)
         self.note = QTextEdit()
         self.note.setReadOnly(True)
         self.note.setPlainText("AI settings are kept in Settings and are not written to collection_config.yaml.")
         layout.addRow(self.note)
-        self.save_ai_settings()
         self.ctx.language_changed.connect(self.retranslate)
         self.retranslate(self.ctx.state.language)
 
@@ -2674,10 +2737,67 @@ class SettingsPage(QWidget):
         self.language.setCurrentText("English" if self.ctx.state.language == "zh" else "中文")
 
     def save_ai_settings(self) -> None:
+        if self._loading:
+            return
         self.ctx.state.ai_enabled = self.ai_enabled.currentText() == "enabled"
         self.ctx.state.ai_base_url = self.ai_base.text().strip()
-        self.ctx.state.ai_model = self.ai_model.text().strip()
+        self.ctx.state.ai_model = self.ai_model.currentText().strip()
         self.ctx.state.ai_api_key = self.ai_key.text().strip()
+        self.ctx.save_user_settings()
+        if self.ctx.settings_save_error:
+            self.model_status.setText(f"settings save failed: {self.ctx.settings_save_error}")
+
+    def refresh_models(self) -> None:
+        self.save_ai_settings()
+        base_url = self.ctx.state.ai_base_url.strip().rstrip("/")
+        api_key = self.ctx.state.ai_api_key.strip()
+        if not base_url or not api_key:
+            self.model_status.setText("base URL and API key required")
+            return
+        try:
+            models = self.fetch_openai_compatible_models(base_url, api_key)
+        except Exception as exc:
+            self.model_status.setText(f"model list failed: {exc}")
+            return
+        current = self.ai_model.currentText().strip()
+        self._loading = True
+        self.ai_model.clear()
+        if models:
+            self.ai_model.addItems(models)
+            self.ai_model.setCurrentText(current if current in models else models[0])
+            self.model_status.setText(f"{len(models)} model(s) available")
+        else:
+            self.ai_model.setEditText(current)
+            self.model_status.setText("no available models")
+        self._loading = False
+        self.save_ai_settings()
+
+    def fetch_openai_compatible_models(self, base_url: str, api_key: str) -> list[str]:
+        endpoint = base_url.rstrip("/") + "/models"
+        request = urlrequest.Request(
+            endpoint,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Accept": "application/json",
+            },
+            method="GET",
+        )
+        try:
+            with urlrequest.urlopen(request, timeout=15) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urlerror.HTTPError as exc:
+            raise RuntimeError(f"HTTP {exc.code}") from exc
+        except urlerror.URLError as exc:
+            raise RuntimeError(str(exc.reason)) from exc
+        data = payload.get("data", []) if isinstance(payload, dict) else []
+        models: list[str] = []
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict) and item.get("id"):
+                    models.append(str(item["id"]))
+                elif isinstance(item, str):
+                    models.append(item)
+        return list(dict.fromkeys(models))
 
     @Slot(str)
     def retranslate(self, language: str) -> None:

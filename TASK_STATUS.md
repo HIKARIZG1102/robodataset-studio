@@ -158,6 +158,8 @@
 - 已用当前真实 ROS graph 验证 pi0.5 双相机配置生成：`rgb_static -> /camera/camera/color/image_raw`，`rgb_wrist -> /camera/camera_wrist/color/image_raw`，`robot_obs -> /wx250s/joint_states`，`ConfigManager.validate()` 无错误。
 - 已扫描 Trash 中旧 CALVIN-like session：旧数据不记录显式秒数或 fps，只能按 `episode_*.npz` transition 数反推；常见 Trash session 为 31-78 个 transition，较长示例为 121 个 transition，若按旧 Hermes 常用 10Hz 估算约 3-12 秒。
 - V2 录制配置已新增停止策略：`recording.stop_mode=duration_sec|sample_count`，支持 0.1 秒步进的短时长录制，也支持直接按 `target_samples` 采同步样本；数据集预览会显示预计同步样本数和 transition 文件数。
+- Settings 窗口已改为单例，重复点击只激活已有窗口；语言、AI base URL、API key、模型和启用状态会保存到本机 `~/.config/robodataset-studio/settings.json`，不写入 `collection_config.yaml`。
+- AI 模型选择已改为可编辑下拉框：点击下拉或点击 Refresh models 会请求 OpenAI-compatible `/models`，有可用模型则填入列表，没有则显示 `no available models`。
 
 ## 遇到的问题
 
