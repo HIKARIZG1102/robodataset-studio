@@ -11,6 +11,7 @@ from uuid import uuid4
 import numpy as np
 
 from robodataset_studio.ros.image_conversion import image_bytes_to_rgb
+from robodataset_studio.core.config_manager import ConfigManager
 
 
 @dataclass
@@ -31,6 +32,7 @@ class RosEpisodeRecorder:
         duration_sec: float | None = None,
         target_samples: int | None = None,
     ) -> RosEpisodeResult:
+        ConfigManager().sync_core_schema(config)
         image_streams = [
             stream
             for stream in config.get("streams", [])

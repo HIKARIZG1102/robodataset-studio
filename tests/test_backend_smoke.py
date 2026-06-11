@@ -553,10 +553,34 @@ def test_default_config_is_listener_only_without_action_topic() -> None:
     assert config["instruction"]["success_condition"] == ""
     assert "ai_validation" not in config
     assert config["action"]["source"] == "derived_from_robot_obs"
+    schema = config["dataset"]["core_schema"]
+    assert schema["core_observation_keys"][0]["key"] == "rgb_static"
+    assert schema["core_state_keys"][0]["key"] == "robot_obs"
+    assert schema["core_action_keys"][0]["key"] == "rel_actions"
+    assert "collection_config" in schema["metadata_extension_keys"]
     assert config["action"]["dim"] == 0
     assert config["state"]["keys"][0]["source_topic"] == "/joint_states"
     assert config["state"]["keys"][0]["output_dim"] == 0
     assert ConfigManager().validate(config) == []
+
+
+def test_core_schema_tracks_extra_rgb_depth_and_joint_topics() -> None:
+    topics = [
+        {"name": "/camera/side/color/image_raw", "type": "sensor_msgs/msg/Image"},
+        {"name": "/camera/wrist/color/image_raw", "type": "sensor_msgs/msg/Image"},
+        {"name": "/camera/overhead/color/image_raw", "type": "sensor_msgs/msg/Image"},
+        {"name": "/camera/wrist/depth/image_rect_raw", "type": "sensor_msgs/msg/Image"},
+        {"name": "/wx250s/joint_states", "type": "sensor_msgs/msg/JointState"},
+    ]
+    config = ConfigManager().build_default_config(ProjectState(), topics)
+    schema = config["dataset"]["core_schema"]
+
+    assert [item["key"] for item in schema["core_observation_keys"]] == ["rgb_static", "rgb_wrist", "rgb_overhead"]
+    assert [item["key"] for item in schema["extension_data_keys"]] == ["depth_wrist"]
+    assert schema["core_state_keys"][0]["source_topic"] == "/wx250s/joint_states"
+    preview = ConfigManager().dataset_structure_preview(config)
+    assert "schema source: dataset.core_schema generated from current YAML" in preview
+    assert "depth_wrist: 480x640 uint16 <- /camera/wrist/depth/image_rect_raw" in preview
 
 
 def test_default_config_maps_pi05_camera_topics_to_static_and_wrist() -> None:
@@ -742,6 +766,7 @@ def test_config_page_quick_form_updates_yaml() -> None:
     assert config["cameras"][0]["resize"] == {"enabled": True, "width": 256, "height": 256}
     assert config["streams"][0]["preview"]["crop"]["width"] == 320
     assert "ai_validation" not in config
+    assert config["dataset"]["core_schema"]["core_observation_keys"][0]["key"] == "rgb_static"
 
 
 def test_project_fields_sync_between_project_and_config_pages() -> None:
@@ -822,6 +847,27 @@ def test_dataset_preview_reports_metadata_and_minimum_transition_samples() -> No
     assert "environment_info: json scalar" in preview
     assert "collection_config: json scalar" in preview
     assert "Metadata extension keys are optional sidecar fields" in preview
+
+
+def test_config_page_dataset_preview_follows_yaml_edits() -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    page = ConfigPage(ctx)
+    config = ConfigManager().build_default_config(
+        ProjectState(),
+        [{"name": "/camera/front/image_raw", "type": "sensor_msgs/msg/Image"}],
+    )
+    page.editor.setPlainText(ctx.config_manager.dumps(config))
+    assert "/camera/front/image_raw" in page.dataset_preview.toPlainText()
+
+    config["streams"][0]["name"] = "rgb_wrist"
+    config["streams"][0]["calvin_key"] = "rgb_wrist"
+    config["streams"][0]["topic"] = "/camera/wrist/color/image_raw"
+    page.editor.setPlainText(ctx.config_manager.dumps(config))
+
+    assert app is not None
+    assert "rgb_wrist" in page.dataset_preview.toPlainText()
+    assert "/camera/wrist/color/image_raw" in page.dataset_preview.toPlainText()
 
 
 def test_config_page_saves_loads_and_manages_yaml_library(tmp_path) -> None:
@@ -1291,6 +1337,9 @@ def test_ai_match_prompt_uses_settings_form_values_and_topic_info(monkeypatch) -
     assert "sample from /wx250s/joint_states" in prompt
     assert "node info for /camera_node" in prompt
     assert "param_a: value_a" in prompt
+    assert "calvin_core_keys" in prompt
+    assert "Every configured core field must be reflected in dataset.core_schema" in prompt
+    assert "sensor_msgs/msg/JointState topics map to robot_obs" in prompt
 
     config_page.finish_default_ai_prompt({"prompt": prompt}, None)
     assert "sample from /camera/camera/color/image_raw" in config_page.ai_prompt.toPlainText()

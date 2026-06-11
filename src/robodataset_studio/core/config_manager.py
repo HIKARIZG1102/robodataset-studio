@@ -11,6 +11,15 @@ from .models import ProjectState
 
 
 class ConfigManager:
+    METADATA_EXTENSION_KEYS = [
+        "episode_metadata",
+        "collection_config",
+        "task_info",
+        "environment_info",
+        "robot_info",
+        "stream_schema",
+    ]
+
     def build_default_config(self, state: ProjectState, topics: list[dict[str, str]] | None = None) -> dict[str, Any]:
         topics = topics or []
         image_topics = [t for t in topics if "Image" in t.get("type", "") or "image" in t.get("name", "").lower()]
@@ -130,6 +139,7 @@ class ConfigManager:
                 "episode_prefix": "episode_",
                 "write_language_annotations": True,
                 "language_annotation_file": "lang_annotations/auto_lang_ann.npy",
+                "core_schema": {},
             },
             "recording": {
                 "sample_rate_hz": 10,
@@ -143,6 +153,7 @@ class ConfigManager:
                 "auto_drop_invalid_actions": True,
             },
         }
+        self.sync_core_schema(config)
         return config
 
     def dumps(self, config: dict[str, Any]) -> str:
@@ -186,6 +197,132 @@ class ConfigManager:
     def clone(self, config: dict[str, Any]) -> dict[str, Any]:
         return deepcopy(config)
 
+    def sync_core_schema(self, config: dict[str, Any]) -> dict[str, Any]:
+        dataset = config.setdefault("dataset", {})
+        dataset["core_schema"] = self.build_core_schema(config)
+        return config
+
+    def build_core_schema(self, config: dict[str, Any]) -> dict[str, Any]:
+        dataset = config.get("dataset", {})
+        streams = config.get("streams", [])
+        observations: list[dict[str, Any]] = []
+        extension_streams: list[dict[str, Any]] = []
+        if isinstance(streams, list):
+            for stream in streams:
+                if not isinstance(stream, dict):
+                    continue
+                key = str(stream.get("calvin_key") or "").strip()
+                stream_name = str(stream.get("name") or stream.get("topic") or "").strip()
+                record = {
+                    "key": key or stream_name,
+                    "stream_name": stream_name,
+                    "topic": stream.get("topic", ""),
+                    "message_type": stream.get("message_type", ""),
+                    "modality": stream.get("modality", ""),
+                    "role": stream.get("training_role", "observation"),
+                    "dtype": stream.get("dtype", "auto"),
+                    "shape": stream.get("shape", ["auto"]),
+                    "required": bool(stream.get("required", True)),
+                }
+                if key:
+                    observations.append(record)
+                elif stream_name:
+                    extension_streams.append(record)
+        state_keys = []
+        raw_state_keys = config.get("state", {}).get("keys", [])
+        if isinstance(raw_state_keys, list):
+            for state_key in raw_state_keys:
+                if not isinstance(state_key, dict):
+                    continue
+                state_keys.append(
+                    {
+                        "key": state_key.get("name", "robot_obs"),
+                        "source_topic": state_key.get("source_topic", ""),
+                        "message_type": state_key.get("type", ""),
+                        "dtype": "float32",
+                        "dim": state_key.get("output_dim") or "auto",
+                        "fields": state_key.get("fields", []),
+                        "joint_order": state_key.get("joint_order", []),
+                        "required": bool(dataset.get("requires_robot_obs", False)),
+                    }
+                )
+        action_cfg = config.get("action", {}) if isinstance(config.get("action", {}), dict) else {}
+        action_dim = action_cfg.get("dim") or "auto"
+        actions = []
+        if dataset.get("requires_actions", False):
+            actions = [
+                {
+                    "key": action_cfg.get("name", "rel_actions"),
+                    "source": action_cfg.get("source", ""),
+                    "source_topic": action_cfg.get("source_topic", ""),
+                    "dtype": "float32",
+                    "dim": action_dim,
+                    "format": action_cfg.get("format", ""),
+                    "fields": action_cfg.get("fields", []),
+                    "required": True,
+                },
+                {
+                    "key": "actions",
+                    "source": action_cfg.get("name", "rel_actions"),
+                    "dtype": "float32",
+                    "dim": action_dim,
+                    "format": action_cfg.get("format", ""),
+                    "required": True,
+                },
+            ]
+        timestamp_keys = []
+        for item in [*observations, *extension_streams]:
+            key = item.get("key")
+            if key:
+                timestamp_keys.append(f"{key}_timestamp")
+        if state_keys:
+            timestamp_keys.append("joint_state_timestamp")
+        if actions:
+            timestamp_keys.append("action_timestamp")
+        return {
+            "name": "calvin_like_transition_v1",
+            "description": "Each episode_*.npz is one synchronized transition. Core keys are configurable through streams/state/action.",
+            "core_observation_keys": observations,
+            "core_state_keys": state_keys,
+            "core_action_keys": actions,
+            "optional_core_keys": {
+                "timestamps": timestamp_keys,
+                "camera_info": [f"camera_info_{item.get('key')}" for item in observations if item.get("message_type") == "sensor_msgs/msg/Image"],
+                "episode_metadata": ["episode_metadata"],
+            },
+            "extension_data_keys": extension_streams,
+            "metadata_extension_keys": list(self.METADATA_EXTENSION_KEYS),
+            "strict_loader_policy": "consume only configured core_observation_keys/core_state_keys/core_action_keys; ignore or strip extension_data_keys and metadata_extension_keys",
+        }
+
+    def dataset_schema_notes(self, config: dict[str, Any]) -> str:
+        schema = self.build_core_schema(config)
+        return yaml.safe_dump(
+            {
+                "calvin_core_keys": {
+                    "observations": schema["core_observation_keys"],
+                    "state": schema["core_state_keys"],
+                    "actions": schema["core_action_keys"],
+                },
+                "extensible_optional_keys": schema["optional_core_keys"],
+                "non_core_extensions": {
+                    "data_streams": schema["extension_data_keys"],
+                    "metadata": schema["metadata_extension_keys"],
+                },
+                "matching_rules": [
+                    "sensor_msgs/msg/Image color/rgb topics with wrist/hand/ee names map to rgb_wrist unless already used.",
+                    "sensor_msgs/msg/Image color/rgb topics with overhead/top/ceiling names map to rgb_overhead.",
+                    "first other color/rgb image topic maps to rgb_static; additional RGB topics map to rgb_1, rgb_2, etc.",
+                    "depth image topics map to depth_* extension streams with calvin_key null unless the user explicitly promotes them.",
+                    "sensor_msgs/msg/JointState topics map to robot_obs and define robot.joint_count, state.output_dim, joint_order when echo data reveals joint names.",
+                    "rel_actions/actions dimensions should follow config.action.dim or the robot_obs output_dim plus configured gripper convention.",
+                    "Do not invent core state/action keys when no selected JointState/action topic exists.",
+                ],
+            },
+            allow_unicode=True,
+            sort_keys=False,
+        )
+
     def _state_keys(self, joint_topic: str | None) -> list[dict[str, Any]]:
         if not joint_topic:
             return []
@@ -208,6 +345,7 @@ class ConfigManager:
         return name.endswith("/joint_states") or name == "/joint_states"
 
     def dataset_structure_preview(self, config: dict[str, Any]) -> str:
+        schema = self.build_core_schema(config)
         recording = config.get("recording", {})
         sample_rate = float(recording.get("sample_rate_hz") or 10)
         stop_mode = str(recording.get("stop_mode") or "duration_sec")
@@ -228,21 +366,24 @@ class ConfigManager:
         lines = [
             "collection_config.yaml",
             estimate,
+            "schema source: dataset.core_schema generated from current YAML",
             f"{config.get('dataset', {}).get('split', 'training')}/",
             "  episode_0000000.npz",
             "    CALVIN-compatible core fields:",
         ]
-        for stream in config.get("streams", []):
-            if not isinstance(stream, dict):
-                lines.append(f"      malformed stream entry: {type(stream).__name__}")
-                continue
-            key = stream.get("calvin_key") or stream.get("name")
+        raw_streams = config.get("streams", [])
+        if isinstance(raw_streams, list):
+            for stream in raw_streams:
+                if not isinstance(stream, dict):
+                    lines.append(f"      malformed stream entry: {type(stream).__name__}")
+        for item in schema["core_observation_keys"]:
+            key = item.get("key")
             if not key:
                 continue
-            shape = stream.get("shape") or ["auto"]
+            shape = item.get("shape") or ["auto"]
             shape_text = "x".join(str(part) for part in shape)
-            dtype = stream.get("dtype", "auto")
-            topic = stream.get("topic", "")
+            dtype = item.get("dtype", "auto")
+            topic = item.get("topic", "")
             lines.append(f"      {key}: {shape_text} {dtype} <- {topic}")
         state_keys = config.get("state", {}).get("keys", [])
         if not isinstance(state_keys, list):
@@ -250,22 +391,31 @@ class ConfigManager:
         for state_key in state_keys:
             if not isinstance(state_key, dict):
                 lines.append(f"      malformed state key entry: {type(state_key).__name__}")
-                continue
-            dim = state_key.get("output_dim") or "auto"
-            lines.append(f"      {state_key.get('name', 'robot_obs')}: ({dim},) float32 <- {state_key.get('source_topic', '')}")
-        if config.get("dataset", {}).get("requires_actions", False):
-            dim = config.get("action", {}).get("dim") or "auto"
-            lines.append(f"      rel_actions: ({dim},) float32")
-            lines.append(f"      actions: ({dim},) float32")
+        for item in schema["core_state_keys"]:
+            lines.append(f"      {item.get('key', 'robot_obs')}: ({item.get('dim', 'auto')},) float32 <- {item.get('source_topic', '')}")
+        for item in schema["core_action_keys"]:
+            lines.append(f"      {item.get('key')}: ({item.get('dim', 'auto')},) float32")
+        extension_streams = schema.get("extension_data_keys", [])
+        if extension_streams:
+            lines.append("    Configured non-core extension data fields:")
+            for item in extension_streams:
+                shape = item.get("shape") or ["auto"]
+                shape_text = "x".join(str(part) for part in shape)
+                lines.append(f"      {item.get('key')}: {shape_text} {item.get('dtype', 'auto')} <- {item.get('topic', '')}")
+        optional_keys = schema.get("optional_core_keys", {})
+        optional_flat = []
+        if isinstance(optional_keys, dict):
+            for values in optional_keys.values():
+                if isinstance(values, list):
+                    optional_flat.extend(str(value) for value in values if value)
+        if optional_flat:
+            lines.append("    Optional configurable CALVIN-like keys:")
+            for key in optional_flat:
+                lines.append(f"      {key}")
         lines.extend(
             [
                 "    RoboDataset metadata extensions:",
-                "      episode_metadata: json scalar",
-                "      collection_config: json scalar",
-                "      task_info: json scalar",
-                "      environment_info: json scalar",
-                "      robot_info: json scalar",
-                "      stream_schema: json scalar",
+                *[f"      {key}: json scalar" for key in schema["metadata_extension_keys"]],
             ]
         )
         if config.get("dataset", {}).get("write_language_annotations", True):
