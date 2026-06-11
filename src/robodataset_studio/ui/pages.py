@@ -140,12 +140,6 @@ class ModelComboBox(QComboBox):
         self._show_refreshing = False
 
     def showPopup(self) -> None:  # noqa: N802 - Qt API
-        if self.refresh_callback is not None and not self._show_refreshing:
-            self._show_refreshing = True
-            try:
-                self.refresh_callback()
-            finally:
-                self._show_refreshing = False
         super().showPopup()
 
 
@@ -156,12 +150,21 @@ class AIModelListWorker(QObject):
         super().__init__()
         self.base_url = base_url
         self.api_key = api_key
+        self.cancelled = False
+
+    def cancel(self) -> None:
+        self.cancelled = True
 
     @Slot()
     def run(self) -> None:
         try:
-            self.finished.emit(fetch_openai_compatible_models(self.base_url, self.api_key), None)
+            models = fetch_openai_compatible_models(self.base_url, self.api_key)
+            if self.cancelled:
+                return
+            self.finished.emit(models, None)
         except Exception as exc:
+            if self.cancelled:
+                return
             self.finished.emit([], exc)
 
 
@@ -2811,13 +2814,16 @@ class SettingsPage(QWidget):
         self._model_worker.finished.connect(self.finish_model_refresh)
         self._model_worker.finished.connect(self._model_thread.quit)
         self._model_worker.finished.connect(self._model_worker.deleteLater)
+        self._model_thread.finished.connect(self._clear_model_thread)
         self._model_thread.finished.connect(self._model_thread.deleteLater)
         self._model_thread.start()
 
-    @Slot(object, object)
-    def finish_model_refresh(self, models: object, error: object) -> None:
+    def _clear_model_thread(self) -> None:
         self._model_thread = None
         self._model_worker = None
+
+    @Slot(object, object)
+    def finish_model_refresh(self, models: object, error: object) -> None:
         if error is not None:
             self.model_status.setText(f"model list failed: {error}")
             return
@@ -2837,6 +2843,21 @@ class SettingsPage(QWidget):
 
     def fetch_openai_compatible_models(self, base_url: str, api_key: str) -> list[str]:
         return fetch_openai_compatible_models(base_url, api_key)
+
+    def stop_model_refresh(self) -> None:
+        if self._model_worker is not None:
+            self._model_worker.cancel()
+        if self._model_thread is not None:
+            self._model_thread.quit()
+            if not self._model_thread.wait(1500):
+                self._model_thread.terminate()
+                self._model_thread.wait(1500)
+        self._model_thread = None
+        self._model_worker = None
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        self.stop_model_refresh()
+        super().closeEvent(event)
 
     @Slot(str)
     def retranslate(self, language: str) -> None:

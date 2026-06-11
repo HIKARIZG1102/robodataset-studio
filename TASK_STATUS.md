@@ -161,6 +161,7 @@
 - Settings 窗口已改为单例，重复点击只激活已有窗口；语言、AI base URL、API key、模型和启用状态会保存到本机 `~/.config/robodataset-studio/settings.json`，不写入 `collection_config.yaml`。
 - AI 模型选择已改为可编辑下拉框：点击下拉或点击 Refresh models 会请求 OpenAI-compatible `/models`，有可用模型则填入列表，没有则显示 `no available models`。
 - AI 模型列表刷新已改为后台线程执行，点击模型下拉箭头不再在 Qt 主线程同步等待网络请求；避免模型已找到但 UI 卡住，并降低 X11 clipboard selection 警告对交互的影响。
+- 已进一步收敛 Settings/AI 模型选择稳定性：模型下拉只展示已有列表，不再自动发网络请求；`Refresh models` 显式触发后台刷新，Settings 关闭时会取消并清理模型刷新线程，避免退出或关闭窗口时触发 segfault。
 
 ## 遇到的问题
 

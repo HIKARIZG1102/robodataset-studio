@@ -1051,23 +1051,18 @@ def test_settings_refresh_models_reports_empty_list(monkeypatch) -> None:
     assert settings.model_status.text() == "no available models"
 
 
-def test_settings_model_dropdown_refreshes_models(monkeypatch) -> None:
+def test_settings_model_dropdown_does_not_start_network_refresh(monkeypatch) -> None:
     app = QApplication.instance() or QApplication([])
     ctx = AppContext()
     settings = SettingsPage(ctx)
     settings.ai_base.setText("https://api.example.com/v1")
     settings.ai_key.setText("secret-key")
-    called = {"count": 0}
-
-    def fake_refresh() -> None:
-        called["count"] += 1
-
-    settings.ai_model.refresh_callback = fake_refresh
+    settings.ai_model.refresh_callback = lambda: pytest.fail("dropdown should not fetch models")
     settings.ai_model.showPopup()
     settings.ai_model.hidePopup()
 
     assert app is not None
-    assert called["count"] == 1
+    assert settings._model_thread is None
 
 
 def test_settings_refresh_models_starts_background_worker() -> None:
@@ -1084,6 +1079,20 @@ def test_settings_refresh_models_starts_background_worker() -> None:
     assert settings.model_status.text() == "loading models..."
     settings._model_thread.quit()
     settings._model_thread.wait(1000)
+
+
+def test_settings_close_stops_background_model_worker() -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    settings = SettingsPage(ctx)
+    settings.ai_base.setText("https://api.example.com/v1")
+    settings.ai_key.setText("secret-key")
+
+    settings.refresh_models()
+    settings.close()
+
+    assert app is not None
+    assert settings._model_thread is None
 
 
 def test_main_window_retranslates_navigation_and_tool_windows() -> None:
