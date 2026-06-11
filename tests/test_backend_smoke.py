@@ -75,6 +75,38 @@ def test_mock_recorder_writes_calvin_transition_files(tmp_path) -> None:
         assert data["rel_actions"].shape == (7,)
 
 
+def test_ros_recorder_sample_count_controls_transition_count(tmp_path) -> None:
+    recorder = RosEpisodeRecorder()
+    config = ConfigManager().build_default_config(
+        ProjectState(),
+        [
+            {"name": "/camera/front/image_raw", "type": "sensor_msgs/msg/Image"},
+            {"name": "/joint_states", "type": "sensor_msgs/msg/JointState"},
+        ],
+    )
+    config["recording"]["stop_mode"] = "sample_count"
+    config["recording"]["target_samples"] = 6
+
+    def capture_streams(image_streams, joint_streams, steps, sample_rate):  # type: ignore[no-untyped-def]
+        frames = {
+            "rgb_static": [
+                np.full((4, 4, 3), index, dtype=np.uint8)
+                for index in range(steps)
+            ]
+        }
+        states = {"robot_obs": [np.full((3,), index, dtype=np.float32) for index in range(steps)]}
+        return frames, states
+
+    recorder._capture_streams = capture_streams  # type: ignore[method-assign]
+    result = recorder.record_episode(config, tmp_path / "training", 0)
+
+    assert result.steps == 5
+    assert len(list((tmp_path / "training").glob("episode_*.npz"))) == 5
+    with np.load(tmp_path / "training" / "episode_0000004.npz", allow_pickle=True) as data:
+        assert data["rgb_static"].shape == (4, 4, 3)
+        assert data["rel_actions"].shape == (3,)
+
+
 def test_dataset_validator_flags_black_frame_quality_issue(tmp_path) -> None:
     training = tmp_path / "training"
     training.mkdir()
@@ -522,7 +554,9 @@ def test_config_page_quick_form_updates_yaml() -> None:
     page.robot_base_frame.setText("base")
     page.robot_ee_frame.setText("ee")
     page.sample_rate.setValue(15)
-    page.episode_duration.setValue(8)
+    page.stop_mode.setCurrentIndex(page.stop_mode.findData("sample_count"))
+    page.episode_duration.setValue(0.5)
+    page.target_samples.setValue(8)
     page.crop_enabled.setChecked(True)
     page.crop_x.setValue(10)
     page.crop_y.setValue(20)
@@ -557,7 +591,9 @@ def test_config_page_quick_form_updates_yaml() -> None:
     assert config["robot"]["base_frame"] == "base"
     assert config["robot"]["end_effector_frame"] == "ee"
     assert config["recording"]["sample_rate_hz"] == 15
-    assert config["recording"]["episode_duration_sec"] == 8
+    assert config["recording"]["stop_mode"] == "sample_count"
+    assert config["recording"]["episode_duration_sec"] == 0.5
+    assert config["recording"]["target_samples"] == 8
     assert config["cameras"][0]["crop"] == {"enabled": True, "x": 10, "y": 20, "width": 320, "height": 240}
     assert config["cameras"][0]["resize"] == {"enabled": True, "width": 256, "height": 256}
     assert config["streams"][0]["preview"]["crop"]["width"] == 320

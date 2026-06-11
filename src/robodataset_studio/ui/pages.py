@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QMessageBox,
     QPushButton,
+    QDoubleSpinBox,
     QSpinBox,
     QPlainTextEdit,
     QSizePolicy,
@@ -265,7 +266,8 @@ class RosRecordingWorker(QObject):
         config: dict,
         episodes_dir: Path,
         episode_index: int,
-        duration_sec: float,
+        duration_sec: float | None = None,
+        target_samples: int | None = None,
     ) -> None:
         super().__init__()
         self.recorder = recorder
@@ -273,6 +275,7 @@ class RosRecordingWorker(QObject):
         self.episodes_dir = episodes_dir
         self.episode_index = episode_index
         self.duration_sec = duration_sec
+        self.target_samples = target_samples
 
     @Slot()
     def run(self) -> None:
@@ -282,6 +285,7 @@ class RosRecordingWorker(QObject):
                 self.episodes_dir,
                 self.episode_index,
                 duration_sec=self.duration_sec,
+                target_samples=self.target_samples,
             )
         except Exception as exc:
             self.finished.emit(None, exc)
@@ -1056,9 +1060,17 @@ class ConfigPage(QWidget):
         self.sample_rate = QSpinBox()
         self.sample_rate.setRange(1, 240)
         self.sample_rate.setSuffix(" Hz")
-        self.episode_duration = QSpinBox()
-        self.episode_duration.setRange(1, 3600)
+        self.stop_mode = QComboBox()
+        self.stop_mode.addItem("Duration", "duration_sec")
+        self.stop_mode.addItem("Sample count", "sample_count")
+        self.episode_duration = QDoubleSpinBox()
+        self.episode_duration.setRange(0.1, 3600.0)
+        self.episode_duration.setDecimals(1)
+        self.episode_duration.setSingleStep(0.1)
         self.episode_duration.setSuffix(" sec")
+        self.target_samples = QSpinBox()
+        self.target_samples.setRange(1, 1_000_000)
+        self.target_samples.setSuffix(" samples")
         self.crop_enabled = QCheckBox("Enable crop")
         self.crop_x = QSpinBox()
         self.crop_y = QSpinBox()
@@ -1156,7 +1168,9 @@ class ConfigPage(QWidget):
         widget = QWidget()
         quick_form = QFormLayout(widget)
         quick_form.addRow("Sample rate", self.sample_rate)
+        quick_form.addRow("Stop mode", self.stop_mode)
         quick_form.addRow("Episode duration", self.episode_duration)
+        quick_form.addRow("Target samples", self.target_samples)
         crop_row = QHBoxLayout()
         crop_row.addWidget(self.crop_enabled)
         crop_row.addWidget(QLabel("x"))
@@ -1260,7 +1274,11 @@ class ConfigPage(QWidget):
         self.robot_base_frame.setText(str(robot.get("base_frame", "")))
         self.robot_ee_frame.setText(str(robot.get("end_effector_frame", "")))
         self.sample_rate.setValue(int(recording.get("sample_rate_hz") or 10))
-        self.episode_duration.setValue(int(recording.get("episode_duration_sec") or 2))
+        stop_mode = str(recording.get("stop_mode") or "duration_sec")
+        stop_index = self.stop_mode.findData(stop_mode)
+        self.stop_mode.setCurrentIndex(stop_index if stop_index >= 0 else 0)
+        self.episode_duration.setValue(float(recording.get("episode_duration_sec") or 2.0))
+        self.target_samples.setValue(int(recording.get("target_samples") or max(int(self.sample_rate.value() * self.episode_duration.value()), 1)))
         self.crop_enabled.setChecked(bool(crop.get("enabled", False)))
         self.crop_x.setValue(int(crop.get("x", 0) or 0))
         self.crop_y.setValue(int(crop.get("y", 0) or 0))
@@ -1317,7 +1335,9 @@ class ConfigPage(QWidget):
         instruction["success_condition"] = self.success_condition.text().strip()
         recording = config.setdefault("recording", {})
         recording["sample_rate_hz"] = int(self.sample_rate.value())
-        recording["episode_duration_sec"] = int(self.episode_duration.value())
+        recording["stop_mode"] = str(self.stop_mode.currentData() or "duration_sec")
+        recording["episode_duration_sec"] = float(self.episode_duration.value())
+        recording["target_samples"] = int(self.target_samples.value())
         config.pop("ai_validation", None)
 
         crop = {
@@ -1483,10 +1503,19 @@ class RecordingPage(QWidget):
         self.streams = QTableWidget(0, 6)
         self.streams.setHorizontalHeaderLabels(["Name", "Modality", "Source", "Topic/Endpoint", "Role", "Runtime"])
         self.monitor_grid = QHBoxLayout()
-        self.duration = QSpinBox()
-        self.duration.setRange(1, 600)
-        self.duration.setValue(2)
+        self.stop_mode = QComboBox()
+        self.stop_mode.addItem("Duration", "duration_sec")
+        self.stop_mode.addItem("Sample count", "sample_count")
+        self.duration = QDoubleSpinBox()
+        self.duration.setRange(0.1, 600.0)
+        self.duration.setDecimals(1)
+        self.duration.setSingleStep(0.1)
+        self.duration.setValue(2.0)
         self.duration.setSuffix(" sec")
+        self.target_samples = QSpinBox()
+        self.target_samples.setRange(1, 1_000_000)
+        self.target_samples.setValue(20)
+        self.target_samples.setSuffix(" samples")
         refresh = QPushButton("Refresh Listener Plan")
         refresh.clicked.connect(self.refresh_plan)
         record_mock = QPushButton("Simulate Listener Episode")
@@ -1501,8 +1530,12 @@ class RecordingPage(QWidget):
         layout.addWidget(QLabel("Capture monitors"))
         layout.addLayout(self.monitor_grid)
         controls = QHBoxLayout()
+        controls.addWidget(QLabel("Stop mode"))
+        controls.addWidget(self.stop_mode)
         controls.addWidget(QLabel("Duration"))
         controls.addWidget(self.duration)
+        controls.addWidget(QLabel("Samples"))
+        controls.addWidget(self.target_samples)
         controls.addWidget(record_ros)
         controls.addWidget(record_mock)
         layout.addLayout(controls)
@@ -1512,6 +1545,12 @@ class RecordingPage(QWidget):
     def refresh_plan(self) -> None:
         streams = self.ctx.state.collection_config.get("streams", []) if self.ctx.has_config() else []
         runtime = self.ctx.state.collection_config.get("runtime", {}) if self.ctx.has_config() else {}
+        recording = self.ctx.state.collection_config.get("recording", {}) if self.ctx.has_config() else {}
+        stop_mode = str(recording.get("stop_mode") or "duration_sec")
+        stop_index = self.stop_mode.findData(stop_mode)
+        self.stop_mode.setCurrentIndex(stop_index if stop_index >= 0 else 0)
+        self.duration.setValue(float(recording.get("episode_duration_sec") or self.duration.value()))
+        self.target_samples.setValue(int(recording.get("target_samples") or self.target_samples.value()))
         mode = runtime.get("mode", "listener_only")
         self.streams.setRowCount(len(streams))
         for row, stream in enumerate(streams):
@@ -1554,12 +1593,20 @@ class RecordingPage(QWidget):
             QMessageBox.warning(self, "Recording active", "A ROS2 recording is already running.")
             return
         self._recording_thread = QThread(self)
+        stop_mode = str(self.stop_mode.currentData() or "duration_sec")
+        target_samples = int(self.target_samples.value()) if stop_mode == "sample_count" else None
+        duration_sec = float(self.duration.value()) if stop_mode == "duration_sec" else None
+        recording = self.ctx.state.collection_config.setdefault("recording", {})
+        recording["stop_mode"] = stop_mode
+        recording["episode_duration_sec"] = float(self.duration.value())
+        recording["target_samples"] = int(self.target_samples.value())
         self._recording_worker = RosRecordingWorker(
             self.ctx.ros_recorder,
             self.ctx.state.collection_config,
             self.ctx.state.episodes_dir,
             self.episode_index,
-            float(self.duration.value()),
+            duration_sec=duration_sec,
+            target_samples=target_samples,
         )
         self._recording_worker.moveToThread(self._recording_thread)
         self._recording_thread.started.connect(self._recording_worker.run)

@@ -133,6 +133,9 @@ class ConfigManager:
             },
             "recording": {
                 "sample_rate_hz": 10,
+                "stop_mode": "duration_sec",
+                "episode_duration_sec": 2.0,
+                "target_samples": 20,
                 "sync_policy": "nearest_timestamp",
                 "max_frame_lag_ms": 100,
                 "min_episode_steps": 5,
@@ -198,8 +201,21 @@ class ConfigManager:
         return name.endswith("/joint_states") or name == "/joint_states"
 
     def dataset_structure_preview(self, config: dict[str, Any]) -> str:
+        recording = config.get("recording", {})
+        sample_rate = float(recording.get("sample_rate_hz") or 10)
+        stop_mode = str(recording.get("stop_mode") or "duration_sec")
+        if stop_mode == "sample_count":
+            sample_count = int(recording.get("target_samples") or 0)
+            estimate = f"recording target: {sample_count} synchronized samples"
+        else:
+            duration = float(recording.get("episode_duration_sec") or 0)
+            sample_count = int(round(sample_rate * duration)) if duration > 0 else 0
+            estimate = f"recording target: {duration:g}s x {sample_rate:g}Hz ~= {sample_count} synchronized samples"
+        if config.get("dataset", {}).get("requires_actions", False) and sample_count > 0:
+            estimate += f", about {max(sample_count - 1, 0)} transition files"
         lines = [
             "collection_config.yaml",
+            estimate,
             f"{config.get('dataset', {}).get('split', 'training')}/",
             "  episode_0000000.npz",
         ]

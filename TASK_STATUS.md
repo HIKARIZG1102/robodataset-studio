@@ -156,6 +156,8 @@
 - V2 Review/validator 可读取这次真实数据；单相机测试场景下状态为 warning，原因是当前 validator 仍把 `rgb_wrist` 视为默认缺失字段。
 - V2 全流程测试已完成：`/tmp/robodataset_v2_full_flow/raw_sessions/v2_full_flow_test/v1/session_20260611_150734` 包含 29 个 transition、`collection_config.yaml` 和 `upload_manifest.json`；本地 manifest 校验 `ok=true`，文件数 31，总大小约 44.6 MB；远端可用空间约 773 GB；SSH/SFTP 上传 32 个文件后，远端按 manifest 校验 31 个文件，`missing=[]`、`mismatched=[]`、`ok=true`。
 - 已用当前真实 ROS graph 验证 pi0.5 双相机配置生成：`rgb_static -> /camera/camera/color/image_raw`，`rgb_wrist -> /camera/camera_wrist/color/image_raw`，`robot_obs -> /wx250s/joint_states`，`ConfigManager.validate()` 无错误。
+- 已扫描 Trash 中旧 CALVIN-like session：旧数据不记录显式秒数或 fps，只能按 `episode_*.npz` transition 数反推；常见 Trash session 为 31-78 个 transition，较长示例为 121 个 transition，若按旧 Hermes 常用 10Hz 估算约 3-12 秒。
+- V2 录制配置已新增停止策略：`recording.stop_mode=duration_sec|sample_count`，支持 0.1 秒步进的短时长录制，也支持直接按 `target_samples` 采同步样本；数据集预览会显示预计同步样本数和 transition 文件数。
 
 ## 遇到的问题
 
@@ -187,6 +189,7 @@
   - Upload 后端需要把本次手工验证过的 SFTP fallback 固化到 UI：密码认证时可上传目录、展示进度、检查远端空间，并执行远端 manifest hash 校验。
   - Upload 后端继续补 `rsync --partial` / 断点续传策略，尤其针对大数据集和中断恢复。
   - 真实监听式 ROS2 recorder 继续扩展到 action/通用数组 stream，并加入更严格同步策略。
+  - 真实采集还需要在本机再做一次短样本数模式验收，例如 `sample_count=6` 或 `sample_count=20`，确认 UI 采集页和真实 ROS2 topic 输出的 transition 数符合预期。
   - 基于用户选择的 topic 完善 stream schema 映射，支持 JointState/action/Float32MultiArray 等非图像流作为记录数据来源。
   - AI Match Config 需要后续增加流式状态、结果 diff 预览、失败重试和更严格 schema 校验；当前只作为手动点击的辅助整理工具。
   - NPZ merge 继续扩展语言 annotation 合并策略，进一步兼容 `merge_calvin_sessions.py`。

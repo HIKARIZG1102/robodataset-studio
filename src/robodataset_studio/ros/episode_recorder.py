@@ -29,6 +29,7 @@ class RosEpisodeRecorder:
         episode_index: int,
         *,
         duration_sec: float | None = None,
+        target_samples: int | None = None,
     ) -> RosEpisodeResult:
         image_streams = [
             stream
@@ -45,8 +46,16 @@ class RosEpisodeRecorder:
 
         recording = config.get("recording", {})
         sample_rate = float(recording.get("sample_rate_hz") or 10)
-        duration = float(duration_sec or recording.get("episode_duration_sec") or 2.0)
-        steps = max(int(sample_rate * duration), int(recording.get("min_episode_steps") or 1))
+        min_steps = int(recording.get("min_episode_steps") or 1)
+        configured_stop_mode = str(recording.get("stop_mode") or "duration_sec")
+        if target_samples is None and configured_stop_mode == "sample_count":
+            configured_samples = recording.get("target_samples")
+            target_samples = int(configured_samples) if configured_samples else None
+        if target_samples is not None:
+            steps = max(int(target_samples), min_steps)
+        else:
+            duration = float(duration_sec if duration_sec is not None else recording.get("episode_duration_sec") or 2.0)
+            steps = max(int(round(sample_rate * duration)), min_steps)
 
         frames, states = self._capture_streams(image_streams, joint_streams, steps, sample_rate)
         warnings: list[str] = []
