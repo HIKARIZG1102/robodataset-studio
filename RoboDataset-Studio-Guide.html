@@ -29,7 +29,94 @@
   <pre><code>cd /home/microsate/robotarm_control_ws/ROBODATASET/robodataset-studio
 ./RoboDataset-Studio.sh</code></pre>
 
-  <h2>1. 配置与 ROS Topic</h2>
+  <h2>1. 从零开始的完整按键流程</h2>
+  <p>这一节按真实手操顺序写。先照这个顺序跑通一次，再看后面的按钮说明。</p>
+
+  <h3>1.1 启动外部 ROS2 数据源</h3>
+  <ol>
+    <li>在 RoboDataset Studio 外部终端启动 WidowX 驱动，使 <code>/wx250s/joint_states</code> 或你的机器人状态 topic 正常发布。</li>
+    <li>启动 RealSense 或其它相机节点，使图像 topic 正常发布，例如 <code>/camera/camera/color/image_raw</code>、<code>/camera/camera_wrist/color/image_raw</code>。</li>
+    <li>如果要用 GELLO 控制机器人，单独启动 GELLO publisher 和 follow 节点。RoboDataset Studio 不负责控制机器人，只监听 topic 采集数据。</li>
+    <li>确认 ROS2 环境已经 source 完成后，再启动软件。</li>
+  </ol>
+
+  <h3>1.2 打开软件并建立项目</h3>
+  <ol>
+    <li>启动软件后，左侧默认停在 <b>1. 配置与 ROS Topic</b>。</li>
+    <li>进入顶部 <b>Project</b> tab。</li>
+    <li>填写 <b>Task name</b>。这是当前数据集任务名，也会参与 YAML 和 session 目录命名。</li>
+    <li>填写 <b>Version</b>，例如 <code>v1</code>。也可以留空；留空时配置里保持空，运行时目录会使用安全默认值。</li>
+    <li>可选填写 <b>Operator</b>。</li>
+    <li>在 <b>Dataset root</b> 填写或点击 <b>Browse</b> 选择数据输出根目录。</li>
+    <li>点击 <b>Save Project</b>。Project 页和 Config 页里的项目名称、版本会同步到同一份状态。</li>
+  </ol>
+
+  <h3>1.3 发现并勾选 ROS2 topic</h3>
+  <ol>
+    <li>进入顶部 <b>Discovery</b> tab。</li>
+    <li>点击 <b>Discover ROS2 Graph</b>，等待 topic 和 node 列表刷新。</li>
+    <li>在 topic 列表里勾选本次要记录的数据源。</li>
+    <li>至少应勾选一个图像 topic，例如 wrist/base camera 的 <code>sensor_msgs/msg/Image</code>。</li>
+    <li>如果要生成可训练的动作/状态数据，还应勾选机器人状态 topic，例如 <code>/wx250s/joint_states [sensor_msgs/msg/JointState]</code>。</li>
+    <li>不要勾选不需要采集的 topic。YAML 会按勾选项生成，没勾选的内容不应进入数据集结构。</li>
+    <li>点击 <b>Generate Listener Config From Selected Topics</b>，软件会根据勾选 topic 生成 listener-only YAML。</li>
+  </ol>
+
+  <h3>1.4 检查 topic 是否真的在发布</h3>
+  <ol>
+    <li>进入顶部 <b>Inspector</b> tab。</li>
+    <li>点击 <b>Refresh from Discovery</b>，把 Discovery 里发现的 topic 同步到 Inspector 的下拉框。</li>
+    <li>在 <b>Topic</b> 下拉框选择机器人或图像 topic。</li>
+    <li>点击 <b>Start topic echo</b>，确认能看到一帧真实消息；看完后点击 <b>Stop topic echo</b>。</li>
+    <li>点击 <b>Start topic hz</b>，确认频率合理；看完后点击 <b>Stop topic hz</b>。</li>
+    <li>在 <b>Image monitor topic</b> 选择图像 topic，点击 <b>Start image monitor</b> 预览画面。</li>
+    <li>如果画面黑屏、卡死、只有 replay topic，先回外部终端检查相机是否启动、serial 是否正确、ROS_DOMAIN_ID/RMW 是否一致。</li>
+  </ol>
+
+  <h3>1.5 补全并保存 YAML 配置</h3>
+  <ol>
+    <li>进入顶部 <b>Config</b> tab。</li>
+    <li>查看 <b>Selected ROS2 topics</b>，确认这里只包含刚才勾选的 topic。如果这里还有旧 topic，返回 Discovery 清空或重新勾选后再刷新。</li>
+    <li>在 <b>Project</b>、<b>Environment</b>、<b>Robot</b>、<b>Instruction</b>、<b>Recording/Image</b> 表单里补全需要的信息。所有可选字段都可以留空，留空会在 YAML 中保持空值。</li>
+    <li>点击 <b>Apply Form To YAML</b>，把表单内容写回下方 <b>collection_config.yaml</b> 编辑器。</li>
+    <li>检查 <b>Dataset structure preview</b>。这里预览未来会生成的 <code>episode_*.npz</code> 字段、图像尺寸、状态维度、动作维度和 metadata 扩展。</li>
+    <li>如需重新按当前勾选 topic 生成配置，点击 <b>Refresh Config From Selected Topics</b>。这会按当前 topic 重建 streams/state/action，并尽量保留表单中的可编辑字段。</li>
+    <li>点击 <b>Validate</b>，确认配置没有明显缺失。</li>
+    <li>点击 <b>Save YAML Library</b> 或 <b>Save YAML</b>，配置只会保存到工程相对目录 <code>config_library/*.yaml</code>。</li>
+    <li>注意：保存 YAML 配置库时不会写入采集 session。真正的 <code>collection_config.yaml</code> 只会在采集页点击 <b>Start Recording</b> 后写入对应 session。</li>
+  </ol>
+
+  <h3>1.6 采集真实数据</h3>
+  <ol>
+    <li>点击左侧 <b>2. 采集</b>。</li>
+    <li>在 <b>Saved YAML</b> 下拉框选择刚保存的 YAML。</li>
+    <li>点击 <b>Load YAML</b>，载入采集计划。载入后，监听计划和图像监控会按 YAML 刷新。</li>
+    <li>点击 <b>Refresh Listener Plan</b>，确认 streams、状态 topic、输出目录和预计数量都符合当前 YAML。</li>
+    <li>点击 <b>Check Nodes</b>。这个检查在后台执行，会对配置里的 topic 做 topic info、echo once、topic hz；前端不会被阻塞。</li>
+    <li>确认采集页的监控画面正常显示。如果有多个图像 stream，会出现多个 capture monitor。</li>
+    <li>选择 <b>Stop mode</b>：
+      <ul>
+        <li><b>Manual</b>：手动开始和停止。不会显示 Duration 和 Samples，也不会显示预计 episode 数。</li>
+        <li><b>Duration</b>：按秒数采集，只显示 Duration 输入。</li>
+        <li><b>Sample count</b>：按同步样本数采集，只显示 Samples 输入。</li>
+      </ul>
+    </li>
+    <li>确认旁边小字提示的采集帧率和预计样本/episode 数。Manual 模式只提示采集帧率。</li>
+    <li>点击 <b>Start Recording</b> 开始采集。软件会先暂停监控预览，避免和 recorder 同时监听同一批 ROS2 topic 导致底层崩溃；随后写入本次 session 的 <code>collection_config.yaml</code> 并开始录制。</li>
+    <li>Manual 模式下，完成动作示教后点击 <b>Stop Recording</b>。Duration 和 Sample count 模式会在满足条件后自动停止。</li>
+    <li>录制结束后，监控预览会恢复。底部状态会显示 session 输出路径和生成结果。</li>
+  </ol>
+
+  <h3>1.7 Review、转换和上传</h3>
+  <ol>
+    <li>点击左侧 <b>3. 数据 Review</b>。</li>
+    <li>点击 <b>Scan Episodes</b>，检查当前 session 里生成的 <code>training/episode_*.npz</code>。</li>
+    <li>点击 <b>Scan CALVIN Layout</b>，确认 CALVIN-like 目录结构和 annotation 文件是否存在。</li>
+    <li>如需合并或转 HDF5，点击左侧 <b>4. 数据转换</b>，按顺序使用 <b>Build Merge Dry Run</b>、<b>Merge NPZ Sessions</b>、<b>Convert NPZ to HDF5</b>。</li>
+    <li>如需上传服务器，点击左侧 <b>5. 上传</b>，先配置服务器，再 <b>Connect and list</b> 浏览远端目录，最后 <b>Start rsync upload</b> 上传。</li>
+  </ol>
+
+  <h2>2. 配置与 ROS Topic 按钮说明</h2>
   <h3>Project 页</h3>
   <table>
     <tr><th>控件</th><th>作用</th></tr>
@@ -74,7 +161,7 @@
 
   <p class="note">YAML 配置库固定在 RoboDataset Studio 工程相对目录 <code>config_library/</code>。采集 session 里的 <code>collection_config.yaml</code> 只会在点击 Start Recording 后写入。</p>
 
-  <h2>2. 采集页</h2>
+  <h2>3. 采集页按钮说明</h2>
   <table>
     <tr><th>控件</th><th>作用</th></tr>
     <tr><td>Saved YAML</td><td>选择配置库里的 YAML。Config 页保存新 YAML 后，此处会同步刷新。</td></tr>
@@ -98,7 +185,7 @@
 
   <p class="ok">建议流程：Load YAML -> Check Nodes -> 确认监控画面 -> 选择 Stop mode -> Start Recording -> 完成后进入 Review。</p>
 
-  <h2>3. 数据 Review</h2>
+  <h2>4. 数据 Review 按钮说明</h2>
   <table>
     <tr><th>控件</th><th>作用</th></tr>
     <tr><td>Scan Episodes</td><td>扫描当前 session 的 <code>training/episode_*.npz</code>。</td></tr>
@@ -107,10 +194,10 @@
     <tr><td>Inspect HDF5</td><td>查看转换后的 HDF5 摘要。</td></tr>
   </table>
 
-  <h2>4. 数据转换</h2>
+  <h2>5. 数据转换</h2>
   <p>Convert 页用于把 raw session 合并到 CALVIN-like merged 目录，并生成 HDF5。HDF5 会把 metadata 放入 attrs，训练数组只保留核心字段。</p>
 
-  <h2>5. 上传</h2>
+  <h2>6. 上传</h2>
   <p>Upload 页用于配置 SSH 目标、预览远端目录、创建文件夹、上传数据集并做 manifest 校验。密码不会保存到 profile。</p>
 
   <h2>数据格式说明</h2>
