@@ -740,6 +740,30 @@ def test_discovery_topic_selection_uses_checkboxes() -> None:
     assert page._selected_topics() == [ctx.last_graph["topics"][1]]
 
 
+def test_discovery_generated_config_refreshes_open_config_page(monkeypatch) -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    discovery = DiscoveryPage(ctx)
+    config_page = ConfigPage(ctx)
+    ctx.last_graph = {
+        "nodes": [],
+        "topics": [
+            {"name": "/camera/camera/color/image_raw", "type": "sensor_msgs/msg/Image"},
+        ],
+        "services": [],
+    }
+    discovery.populate_graph(ctx.last_graph)
+    discovery.topics.item(0, 0).setCheckState(Qt.Checked)
+    monkeypatch.setattr("robodataset_studio.ui.pages.QMessageBox.information", lambda *args, **kwargs: None)
+
+    discovery.generate_config()
+
+    assert app is not None
+    assert "rgb_static" in config_page.editor.toPlainText()
+    assert "/camera/camera/color/image_raw" in config_page.editor.toPlainText()
+    assert "No config loaded" not in config_page.status.text()
+
+
 def test_main_window_has_review_as_separate_step() -> None:
     app = QApplication.instance() or QApplication([])
     window = MainWindow()

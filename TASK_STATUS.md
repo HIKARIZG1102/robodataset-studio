@@ -1,6 +1,6 @@
 # RoboDataset Studio Task Status
 
-更新时间：2026-06-11 17:07 Asia/Shanghai
+更新时间：2026-06-11 17:44 Asia/Shanghai
 
 ## 当前任务清单
 
@@ -87,6 +87,7 @@
 - [x] 深度图 topic 不再伪装成 RGB：例如 `/camera/camera/depth/image_rect_raw` 会生成 `modality=depth`、`encoding=16UC1`、`calvin_key=null`，不会写入 CALVIN RGB 必需键。
 - [x] Config 页面增加可选 `AI Match Config` 按钮：在用户填写 OpenAI-compatible base URL、model、API key 环境变量后，可把选中的 node/topic 上下文、当前 YAML 和默认模板发送给 AI 辅助整理；API key 只从环境变量读取，不写入配置文件。
 - [x] 已用真实 ROS graph 验证从 `/camera/camera` node publishers 生成配置：输出 `rgb_static -> /camera/camera/color/image_raw` 和 `depth_1 -> /camera/camera/depth/image_rect_raw`，无 robot/action 槽位，`ConfigManager.validate()` 无错误。
+- [x] 修复 Discovery 生成配置后 Config 页不刷新的问题：`AppContext` 增加 `config_changed` 信号，生成配置后已打开的 Config 页会立即刷新 YAML 预览，不再停留在 `No config loaded`。
 
 ## 已完成项目
 
@@ -179,5 +180,6 @@
   - SSH 上传继续扩展远端剩余空间检查、保存服务器配置和更完整的上传进度解析。
 
 - 工程化：
+  - 暂不引入 FastAPI：当前目标是本机 PySide6 桌面采集软件，ROS2 订阅、配置、采集、Review、上传都在同一进程内更直接；等需要浏览器 UI、远程多机控制、REST API 或训练服务器常驻服务时再拆 FastAPI 后端。
   - 后续考虑补 AppImage/deb 打包，让启动体验更接近普通软件。
   - 持续补充自动化 smoke tests / pytest，覆盖 GUI 状态流和 ROS worker 清理。

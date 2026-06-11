@@ -59,6 +59,7 @@ from robodataset_studio.upload.ssh_profiles import SshProfile, SshProfileStore
 
 class AppContext(QObject):
     language_changed = Signal(str)
+    config_changed = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -93,6 +94,10 @@ class AppContext(QObject):
             return
         self.state.language = language
         self.language_changed.emit(language)
+
+    def set_collection_config(self, config: dict) -> None:
+        self.state.collection_config = config
+        self.config_changed.emit()
 
 
 class ImagePreviewWidget(QWidget):
@@ -440,9 +445,7 @@ class DiscoveryPage(QWidget):
                 "Select one or more topics, or select a node that has publishers, before generating collection_config.yaml.",
             )
             return
-        self.ctx.state.collection_config = self.ctx.config_manager.build_default_config(
-            self.ctx.state, topics
-        )
+        self.ctx.set_collection_config(self.ctx.config_manager.build_default_config(self.ctx.state, topics))
         self.ctx.state.selected_streams = topics
         QMessageBox.information(
             self,
@@ -1117,12 +1120,20 @@ class ConfigPage(QWidget):
         layout.addLayout(quick_form)
         layout.addWidget(self.status)
         layout.addWidget(self.editor)
+        self.ctx.config_changed.connect(self.load_context_config)
         self.refresh_library()
         if self.ctx.state.collection_config:
-            self.editor.setPlainText(self.ctx.config_manager.dumps(self.ctx.state.collection_config))
-            self.reload_form_from_yaml()
+            self.load_context_config()
         else:
             self.status.setText("No config loaded. Use Discovery to generate a config from selected topics or a selected node.")
+
+    @Slot()
+    def load_context_config(self) -> None:
+        if not self.ctx.state.collection_config:
+            return
+        self.editor.setPlainText(self.ctx.config_manager.dumps(self.ctx.state.collection_config))
+        self.reload_form_from_yaml()
+        self.status.setText("Loaded generated config from selected ROS2 node/topic choices.")
 
     def refresh_library(self) -> None:
         selected = self.library.currentText()
