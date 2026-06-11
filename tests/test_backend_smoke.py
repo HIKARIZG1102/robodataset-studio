@@ -391,10 +391,33 @@ def test_default_config_maps_pi05_camera_topics_to_static_and_wrist() -> None:
     assert streams["rgb_wrist"]["topic"] == "/camera/camera_wrist/color/image_raw"
     assert streams["rgb_wrist"]["calvin_key"] == "rgb_wrist"
     assert config["state"]["keys"][0]["source_topic"] == "/wx250s/joint_states"
+    assert config["dataset"]["requires_robot_obs"] is True
+    assert config["dataset"]["requires_actions"] is True
+
+
+def test_default_config_keeps_camera_only_selection_camera_only() -> None:
+    topics = [
+        {"name": "/camera/camera/color/image_raw", "type": "sensor_msgs/msg/Image"},
+        {"name": "/camera/camera/depth/image_rect_raw", "type": "sensor_msgs/msg/Image"},
+    ]
+
+    config = ConfigManager().build_default_config(ProjectState(), topics)
+    streams = {stream["name"]: stream for stream in config["streams"]}
+
+    assert config["state"]["keys"] == []
+    assert config["action"]["source"] == "not_configured"
+    assert config["dataset"]["requires_robot_obs"] is False
+    assert config["dataset"]["requires_actions"] is False
+    assert streams["rgb_static"]["topic"] == "/camera/camera/color/image_raw"
+    assert streams["rgb_static"]["modality"] == "rgb"
+    assert streams["depth_1"]["topic"] == "/camera/camera/depth/image_rect_raw"
+    assert streams["depth_1"]["modality"] == "depth"
+    assert streams["depth_1"]["calvin_key"] is None
 
 
 def test_config_validation_requires_joint_state_key() -> None:
-    config = ConfigManager().build_default_config(ProjectState(), [])
+    config = ConfigManager().build_default_config(ProjectState(), None)
+    config["dataset"]["requires_robot_obs"] = True
     config["state"]["keys"] = []
 
     errors = ConfigManager().validate(config)
@@ -402,9 +425,23 @@ def test_config_validation_requires_joint_state_key() -> None:
     assert "missing required JointState state key for robot_obs" in errors
 
 
+def test_empty_topic_selection_generates_empty_streams_not_template_defaults() -> None:
+    config = ConfigManager().build_default_config(ProjectState(), [])
+
+    assert config["streams"] == []
+    assert config["cameras"] == []
+    assert config["state"]["keys"] == []
+    assert config["dataset"]["requires_robot_obs"] is False
+    assert ConfigManager().validate(config) == ["missing cameras or streams"]
+
+
 def test_config_page_quick_form_updates_yaml() -> None:
     app = QApplication.instance() or QApplication([])
     ctx = AppContext()
+    ctx.state.collection_config = ConfigManager().build_default_config(
+        ProjectState(),
+        [{"name": "/camera/camera/color/image_raw", "type": "sensor_msgs/msg/Image"}],
+    )
     page = ConfigPage(ctx)
 
     page.instruction.setText("pick up the white cube")
@@ -446,9 +483,24 @@ def test_config_page_quick_form_updates_yaml() -> None:
     }
 
 
+def test_config_page_new_config_keeps_streams_empty_without_selection() -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    page = ConfigPage(ctx)
+
+    page.new_config()
+    config = ctx.config_manager.loads(page.editor.toPlainText())
+
+    assert app is not None
+    assert config["streams"] == []
+    assert config["cameras"] == []
+    assert config["state"]["keys"] == []
+    assert config["dataset"]["requires_robot_obs"] is False
+
+
 def test_ros_recorder_writes_annotations_and_delta_actions(tmp_path) -> None:
     recorder = RosEpisodeRecorder()
-    config = ConfigManager().build_default_config(ProjectState(), [])
+    config = ConfigManager().build_default_config(ProjectState(), None)
     config["instruction"]["text"] = "catch the satellite"
     robot_obs = np.array(
         [
@@ -593,6 +645,7 @@ def test_recording_page_preflight_requires_joint_state_key() -> None:
         ProjectState(),
         [{"name": "/camera/camera/color/image_raw", "type": "sensor_msgs/msg/Image"}],
     )
+    ctx.state.collection_config["dataset"]["requires_robot_obs"] = True
     ctx.state.collection_config["state"]["keys"] = []
     ctx.discovery.discover = lambda: {  # type: ignore[method-assign]
         "nodes": [],
@@ -605,6 +658,27 @@ def test_recording_page_preflight_requires_joint_state_key() -> None:
 
     assert app is not None
     assert "configuration has no JointState state key for robot_obs" in errors
+    page.close()
+
+
+def test_recording_page_preflight_allows_camera_only_config() -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    ctx.state.collection_config = ConfigManager().build_default_config(
+        ProjectState(),
+        [{"name": "/camera/camera/color/image_raw", "type": "sensor_msgs/msg/Image"}],
+    )
+    ctx.discovery.discover = lambda: {  # type: ignore[method-assign]
+        "nodes": [],
+        "topics": [{"name": "/camera/camera/color/image_raw", "type": "sensor_msgs/msg/Image"}],
+        "services": [],
+    }
+    page = RecordingPage(ctx)
+
+    errors = page.preflight_recording()
+
+    assert app is not None
+    assert errors == []
     page.close()
 
 

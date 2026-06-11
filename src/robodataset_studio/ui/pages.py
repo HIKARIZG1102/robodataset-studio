@@ -9,6 +9,7 @@ import threading
 import time
 from dataclasses import dataclass
 from uuid import uuid4
+from urllib import error as urlerror, request as urlrequest
 
 import numpy as np
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
@@ -425,7 +426,20 @@ class DiscoveryPage(QWidget):
 
     def generate_config(self) -> None:
         selected_topics = self._selected_topics()
-        topics = selected_topics or self.ctx.last_graph.get("topics", [])
+        topics = selected_topics
+        source = "selected topic(s)"
+        if not topics:
+            node = self.ctx.state.selected_nodes[0] if self.ctx.state.selected_nodes else ""
+            if node:
+                topics = self.ctx.discovery.node_publishers(node)
+                source = f"publisher topic(s) from node {node}"
+        if not topics:
+            QMessageBox.warning(
+                self,
+                "Config",
+                "Select one or more topics, or select a node that has publishers, before generating collection_config.yaml.",
+            )
+            return
         self.ctx.state.collection_config = self.ctx.config_manager.build_default_config(
             self.ctx.state, topics
         )
@@ -433,7 +447,7 @@ class DiscoveryPage(QWidget):
         QMessageBox.information(
             self,
             "Config",
-            f"listener-only collection_config.yaml generated from {len(topics)} topic(s). Open Config page to edit/save.",
+            f"listener-only collection_config.yaml generated from {len(topics)} {source}. Open Config page to edit/save.",
         )
 
     def select_node(self, row: int) -> None:
@@ -1040,6 +1054,7 @@ class ConfigPage(QWidget):
         generate = QPushButton("Generate Default")
         apply_form = QPushButton("Apply Form To YAML")
         reload_form = QPushButton("Reload Form From YAML")
+        ai_match = QPushButton("AI Match Config")
         validate = QPushButton("Validate")
         save = QPushButton("Save collection_config.yaml")
         new_config.clicked.connect(self.new_config)
@@ -1049,6 +1064,7 @@ class ConfigPage(QWidget):
         generate.clicked.connect(self.generate)
         apply_form.clicked.connect(self.apply_form_to_yaml)
         reload_form.clicked.connect(self.reload_form_from_yaml)
+        ai_match.clicked.connect(self.ai_match_config)
         validate.clicked.connect(self.validate)
         save.clicked.connect(self.save)
         layout = QVBoxLayout(self)
@@ -1066,6 +1082,7 @@ class ConfigPage(QWidget):
         row.addWidget(generate)
         row.addWidget(reload_form)
         row.addWidget(apply_form)
+        row.addWidget(ai_match)
         row.addWidget(validate)
         row.addWidget(save)
         layout.addLayout(row)
@@ -1101,7 +1118,11 @@ class ConfigPage(QWidget):
         layout.addWidget(self.status)
         layout.addWidget(self.editor)
         self.refresh_library()
-        self.generate()
+        if self.ctx.state.collection_config:
+            self.editor.setPlainText(self.ctx.config_manager.dumps(self.ctx.state.collection_config))
+            self.reload_form_from_yaml()
+        else:
+            self.status.setText("No config loaded. Use Discovery to generate a config from selected topics or a selected node.")
 
     def refresh_library(self) -> None:
         selected = self.library.currentText()
@@ -1115,19 +1136,18 @@ class ConfigPage(QWidget):
 
     def generate(self) -> None:
         if not self.ctx.state.collection_config:
-            self.ctx.state.collection_config = self.ctx.config_manager.build_default_config(
-                self.ctx.state, self.ctx.last_graph.get("topics", [])
-            )
+            self.new_config()
+            return
         self.editor.setPlainText(self.ctx.config_manager.dumps(self.ctx.state.collection_config))
         self.reload_form_from_yaml()
 
     def new_config(self) -> None:
         self.ctx.state.collection_config = self.ctx.config_manager.build_default_config(
-            self.ctx.state, self.ctx.state.selected_streams or self.ctx.last_graph.get("topics", [])
+            self.ctx.state, self.ctx.state.selected_streams or []
         )
         self.editor.setPlainText(self.ctx.config_manager.dumps(self.ctx.state.collection_config))
         self.reload_form_from_yaml()
-        self.status.setText("New config generated from current selected topics.")
+        self.status.setText("New config skeleton generated. Use Discovery to populate streams from selected ROS2 topics.")
 
     def load_library_config(self) -> None:
         name = self.library.currentText().strip()
@@ -1214,6 +1234,8 @@ class ConfigPage(QWidget):
         except Exception as exc:
             QMessageBox.warning(self, "Config YAML", f"Cannot apply form because YAML is invalid:\n{exc}")
             return
+        if not config:
+            config = self.ctx.config_manager.build_default_config(self.ctx.state, [])
         config.setdefault("instruction", {})["text"] = self.instruction.text().strip()
         config.setdefault("environment", {})["description"] = self.scene_description.toPlainText().strip()
         recording = config.setdefault("recording", {})
@@ -1265,6 +1287,114 @@ class ConfigPage(QWidget):
     def validate(self) -> None:
         errors = self.ctx.config_manager.validate(self._current_config())
         self.status.setText("OK" if not errors else "Warnings: " + "; ".join(errors))
+
+    def ai_match_config(self) -> None:
+        config = self._current_config()
+        ai_cfg = config.get("ai_validation", {})
+        base_url = str(ai_cfg.get("base_url") or self.ai_base_url.text()).strip().rstrip("/")
+        model = str(ai_cfg.get("model") or self.ai_model.text()).strip()
+        api_key_env = str(ai_cfg.get("api_key_env") or self.ai_api_key_env.text() or "ROBOT_DATA_AI_API_KEY").strip()
+        api_key = os.environ.get(api_key_env, "")
+        if not base_url or not model or not api_key:
+            QMessageBox.warning(
+                self,
+                "AI Match Config",
+                f"Set AI base URL, model, and environment variable {api_key_env} before using AI matching.",
+            )
+            return
+        payload = self._ai_match_payload(config, model)
+        try:
+            content = self._call_openai_compatible_chat(base_url, api_key, payload)
+        except Exception as exc:
+            QMessageBox.warning(self, "AI Match Config", f"AI matching failed:\n{exc}")
+            return
+        matched = self._extract_config_from_ai_text(content)
+        if not matched:
+            self.status.setText("AI returned text, but no parseable YAML/JSON config was found.")
+            self.editor.setPlainText(self.editor.toPlainText() + "\n\n# AI response:\n" + content)
+            return
+        self.ctx.state.collection_config = matched
+        self.editor.setPlainText(self.ctx.config_manager.dumps(matched))
+        self.reload_form_from_yaml()
+        self.status.setText("AI matched config loaded into preview. Validate before saving.")
+
+    def _ai_match_payload(self, config: dict, model: str) -> dict:
+        selected_context = {
+            "selected_nodes": self.ctx.state.selected_nodes,
+            "selected_streams": self.ctx.state.selected_streams,
+            "last_graph_topics": self.ctx.last_graph.get("topics", []),
+        }
+        template = self.ctx.config_manager.build_default_config(self.ctx.state, [])
+        prompt = (
+            self.ai_prompt.toPlainText().strip()
+            or "Map selected ROS2 nodes/topics into the listener-only dataset collection config."
+        )
+        user_content = {
+            "request": prompt,
+            "constraints": [
+                "Return only one complete YAML config or one JSON object.",
+                "Use only selected nodes/topics unless a field is explicitly metadata or empty.",
+                "Do not invent robot_obs/action streams when no JointState topic is selected.",
+                "Classify depth image topics as depth streams with calvin_key null, not RGB.",
+                "Keep runtime listener-only and never enable robot command publishing.",
+            ],
+            "selected_ros_context": selected_context,
+            "current_config": config,
+            "default_template": template,
+        }
+        return {
+            "model": model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You convert ROS2 graph selections into safe listener-only robot dataset YAML configs.",
+                },
+                {"role": "user", "content": json.dumps(user_content, ensure_ascii=False, indent=2)},
+            ],
+            "temperature": 0,
+        }
+
+    def _call_openai_compatible_chat(self, base_url: str, api_key: str, payload: dict) -> str:
+        endpoint = base_url
+        if not endpoint.endswith("/chat/completions"):
+            endpoint = endpoint.rstrip("/") + "/chat/completions"
+        data = json.dumps(payload).encode("utf-8")
+        req = urlrequest.Request(
+            endpoint,
+            data=data,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urlrequest.urlopen(req, timeout=60) as response:
+                body = response.read().decode("utf-8")
+        except urlerror.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"HTTP {exc.code}: {body[:800]}") from exc
+        parsed = json.loads(body)
+        choices = parsed.get("choices", [])
+        if not choices:
+            raise RuntimeError("AI response has no choices")
+        message = choices[0].get("message", {})
+        content = message.get("content", "")
+        if isinstance(content, list):
+            parts = [part.get("text", "") for part in content if isinstance(part, dict)]
+            content = "\n".join(parts)
+        return str(content)
+
+    def _extract_config_from_ai_text(self, text: str) -> dict:
+        cleaned = text.strip()
+        fence = re.search(r"```(?:yaml|yml|json)?\s*(.*?)```", cleaned, flags=re.DOTALL | re.IGNORECASE)
+        if fence:
+            cleaned = fence.group(1).strip()
+        try:
+            loaded = self.ctx.config_manager.loads(cleaned)
+        except Exception:
+            return {}
+        return loaded if isinstance(loaded, dict) else {}
 
     def save(self) -> None:
         config = self._current_config()
@@ -1401,7 +1531,7 @@ class RecordingPage(QWidget):
             for state_key in config.get("state", {}).get("keys", [])
             if state_key.get("type") == "sensor_msgs/msg/JointState" and state_key.get("source_topic")
         ]
-        if not state_keys:
+        if config.get("dataset", {}).get("requires_robot_obs", False) and not state_keys:
             errors.append("configuration has no JointState state key for robot_obs")
         for state_key in state_keys:
             topic = str(state_key.get("source_topic") or "")

@@ -12,21 +12,19 @@ from .models import ProjectState
 
 class ConfigManager:
     def build_default_config(self, state: ProjectState, topics: list[dict[str, str]] | None = None) -> dict[str, Any]:
+        use_template_defaults = topics is None
         topics = topics or []
         image_topics = [t for t in topics if "Image" in t.get("type", "") or "image" in t.get("name", "").lower()]
         joint_candidates = [t for t in topics if "JointState" in t.get("type", "") or "joint" in t.get("name", "").lower()]
         joint_topic = next((t["name"] for t in joint_candidates), None)
         action_topic = next((t["name"] for t in topics if "action" in t.get("name", "").lower()), None)
         gripper_topic = next((t["name"] for t in topics if "gripper" in t.get("name", "").lower()), None)
-        if not joint_topic:
-            joint_topic = "/wx250s/joint_states"
-
         cameras = []
         streams = []
         used_image_names: set[str] = set()
         static_assigned = False
         for idx, topic in enumerate(image_topics[:4]):
-            role, name, static_assigned = self._image_role_and_key(topic["name"], idx, static_assigned)
+            role, name, modality, encoding, shape, static_assigned = self._image_role_and_key(topic["name"], idx, static_assigned)
             name = self._unique_stream_name(name, used_image_names)
             used_image_names.add(name)
             camera = {
@@ -34,28 +32,28 @@ class ConfigManager:
                 "role": role,
                 "topic": topic["name"],
                 "type": topic.get("type", "sensor_msgs/msg/Image"),
-                "encoding": "rgb8",
+                "encoding": encoding,
                 "fps_target": 10,
                 "crop": {"enabled": False, "x": 0, "y": 0, "width": 640, "height": 480},
-                "resize": {"enabled": True, "width": 224, "height": 224},
+                "resize": {"enabled": modality == "rgb", "width": 224, "height": 224},
             }
             cameras.append(camera)
             streams.append({
                 "name": name,
-                "modality": "rgb",
+                "modality": modality,
                 "source": "ros2_topic",
                 "topic": topic["name"],
                 "message_type": camera["type"],
-                "dtype": "uint8",
-                "shape": [480, 640, 3],
-                "encoding": "rgb8",
+                "dtype": "uint16" if modality == "depth" else "uint8",
+                "shape": shape,
+                "encoding": encoding,
                 "training_role": "observation",
-                "calvin_key": name,
+                "calvin_key": name if modality == "rgb" else None,
                 "required": True,
-                "preview": {"renderer": "image_rgb"},
+                "preview": {"renderer": "image_depth" if modality == "depth" else "image_rgb"},
             })
 
-        if not cameras:
+        if use_template_defaults and not topics:
             cameras = [
                 {
                     "name": "rgb_static",
@@ -147,23 +145,10 @@ class ConfigManager:
             },
             "cameras": cameras,
             "streams": streams,
-            "state": {
-                "keys": [
-                    {
-                        "name": "robot_obs",
-                        "source_topic": joint_topic,
-                        "type": "sensor_msgs/msg/JointState",
-                        "output_dim": 6,
-                        "fields": ["joint_position"],
-                        "joint_order": ["waist", "shoulder", "elbow", "forearm_roll", "wrist_angle", "wrist_rotate"],
-                    }
-                ]
-                if joint_topic
-                else []
-            },
+            "state": {"keys": self._state_keys(joint_topic)},
             "action": {
                 "name": "rel_actions",
-                "source": "derived_from_robot_obs",
+                "source": "derived_from_robot_obs" if joint_topic else "not_configured",
                 "source_topic": joint_topic,
                 "source_action_topic": action_topic,
                 "gripper_state_topic": gripper_topic,
@@ -182,6 +167,8 @@ class ConfigManager:
                 "npz_schema": "calvin_style",
                 "calvin_like_transition_files": True,
                 "hdf5_schema": "pi05_calvin_hdf5",
+                "requires_robot_obs": bool(joint_topic),
+                "requires_actions": bool(joint_topic),
                 "cache_root": str(state.raw_session_dir),
                 "merged_root": str(state.merged_dir),
                 "split": "training",
@@ -227,9 +214,11 @@ class ConfigManager:
                 errors.append(f"missing required section: {key}")
         if not config.get("cameras") and not config.get("streams"):
             errors.append("missing cameras or streams")
-        state_keys = config.get("state", {}).get("keys", [])
-        if not any(key.get("type") == "sensor_msgs/msg/JointState" and key.get("source_topic") for key in state_keys):
-            errors.append("missing required JointState state key for robot_obs")
+        dataset = config.get("dataset", {})
+        if dataset.get("requires_robot_obs", False):
+            state_keys = config.get("state", {}).get("keys", [])
+            if not any(key.get("type") == "sensor_msgs/msg/JointState" and key.get("source_topic") for key in state_keys):
+                errors.append("missing required JointState state key for robot_obs")
         runtime = config.get("runtime", {})
         if runtime.get("publishes_robot_commands") is True:
             errors.append("runtime.publishes_robot_commands must stay false for listener-only recording")
@@ -242,15 +231,33 @@ class ConfigManager:
     def clone(self, config: dict[str, Any]) -> dict[str, Any]:
         return deepcopy(config)
 
-    def _image_role_and_key(self, topic_name: str, idx: int, static_assigned: bool) -> tuple[str, str, bool]:
+    def _state_keys(self, joint_topic: str | None) -> list[dict[str, Any]]:
+        if not joint_topic:
+            return []
+        return [
+            {
+                "name": "robot_obs",
+                "source_topic": joint_topic,
+                "type": "sensor_msgs/msg/JointState",
+                "output_dim": 6,
+                "fields": ["joint_position"],
+                "joint_order": ["waist", "shoulder", "elbow", "forearm_roll", "wrist_angle", "wrist_rotate"],
+            }
+        ]
+
+    def _image_role_and_key(self, topic_name: str, idx: int, static_assigned: bool) -> tuple[str, str, str, str, list[int], bool]:
         lowered = topic_name.lower()
+        if "depth" in lowered:
+            name = "depth_wrist" if "wrist" in lowered else "depth_static" if not static_assigned else f"depth_{idx}"
+            role = "wrist" if "wrist" in lowered else "base" if not static_assigned else "external"
+            return role, name, "depth", "16UC1", [480, 640], static_assigned
         if "wrist" in lowered or "hand" in lowered or "ee" in lowered:
-            return "wrist", "rgb_wrist", static_assigned
+            return "wrist", "rgb_wrist", "rgb", "rgb8", [480, 640, 3], static_assigned
         if "overhead" in lowered or "top" in lowered or "ceiling" in lowered:
-            return "overhead", "rgb_overhead", static_assigned
+            return "overhead", "rgb_overhead", "rgb", "rgb8", [480, 640, 3], static_assigned
         if not static_assigned:
-            return "base", "rgb_static", True
-        return "external", f"rgb_{idx}", static_assigned
+            return "base", "rgb_static", "rgb", "rgb8", [480, 640, 3], True
+        return "external", f"rgb_{idx}", "rgb", "rgb8", [480, 640, 3], static_assigned
 
     def _unique_stream_name(self, name: str, used: set[str]) -> str:
         if name not in used:

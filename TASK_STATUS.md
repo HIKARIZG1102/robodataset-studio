@@ -1,6 +1,6 @@
 # RoboDataset Studio Task Status
 
-更新时间：2026-06-11 16:05 Asia/Shanghai
+更新时间：2026-06-11 17:07 Asia/Shanghai
 
 ## 当前任务清单
 
@@ -82,6 +82,11 @@
 - [x] 修复手操采集易失败的配置问题：自动按 topic 名将 `/camera/camera/color/image_raw` 映射为 `rgb_static`，将 `/camera/camera_wrist/color/image_raw` 映射为 `rgb_wrist`，并在未显式选择 JointState 时默认要求 `/wx250s/joint_states`。
 - [x] Recording 增加启动前 preflight：录制前刷新 ROS graph，检查配置中的 image topic 和 JointState topic 是否在线且类型正确；缺 topic 时在 UI 中直接提示具体缺失项，不再等 recorder 报 `no image frames were captured`。
 - [x] Review/validator 改为按 `collection_config.yaml` 中的 streams 动态判断必需图像键，避免单相机配置固定误报 `rgb_wrist`。
+- [x] 修正 Config 预览生成语义：Discovery 只用勾选 topic 生成配置；如果没有勾选 topic，则可从当前选中 node 的 publishers 生成；不再把全 ROS graph 或默认 `/wx250s/joint_states` 自动塞进配置。
+- [x] camera-only 配置已作为合法采集配置：只选相机 topic/node 时，`state.keys=[]`、`action.source=not_configured`、`dataset.requires_robot_obs=false`、`dataset.requires_actions=false`，录制和 Review 不再要求 `robot_obs/rel_actions/actions`。
+- [x] 深度图 topic 不再伪装成 RGB：例如 `/camera/camera/depth/image_rect_raw` 会生成 `modality=depth`、`encoding=16UC1`、`calvin_key=null`，不会写入 CALVIN RGB 必需键。
+- [x] Config 页面增加可选 `AI Match Config` 按钮：在用户填写 OpenAI-compatible base URL、model、API key 环境变量后，可把选中的 node/topic 上下文、当前 YAML 和默认模板发送给 AI 辅助整理；API key 只从环境变量读取，不写入配置文件。
+- [x] 已用真实 ROS graph 验证从 `/camera/camera` node publishers 生成配置：输出 `rgb_static -> /camera/camera/color/image_raw` 和 `depth_1 -> /camera/camera/depth/image_rect_raw`，无 robot/action 槽位，`ConfigManager.validate()` 无错误。
 
 ## 已完成项目
 
@@ -155,6 +160,7 @@
 - 用户明确传感器节点控制不需要做；后续不要新增 `ros2 launch hermes_data_collection ...` 的启动/停止控制，只把它视为外部节点已启动后的数据来源参考。
 - 历史问题：V2 真实采集测试只使用一个图像 topic 时，Review 曾固定误报 `missing_required: rgb_wrist`；当前已改为按配置动态判断必需图像键。
 - 在沙箱内直接运行 `ros2 topic hz/echo` 会受到 ROS 日志目录和本地 socket 限制影响；实机检查应设置 `ROS_LOG_DIR=/tmp/ros_logs` 并在沙箱外运行，V2 启动器自身会自动 source ROS 环境。
+- 开发模式下如果用 `PYTHONPATH=src` 覆盖 ROS 的 `PYTHONPATH`，`ros2` Python entrypoint 可能报 `No package metadata was found for ros2cli`；当前 `RosGraphDiscovery` 已在子进程环境中补齐 `/opt/ros/humble` Python 路径，并优先使用 `--no-daemon` 查询 node/topic。
 - 当前系统未安装 `sshpass`，因此密码认证场景下不能直接非交互运行 `rsync`；本次全流程使用 Paramiko SFTP 完成上传和远端 hash 校验。后续应在 V2 上传后端中补齐“密码认证下的 rsync/断点续传”能力，或在 UI 中明确提示安装 `sshpass` / 使用 SSH key。
 - Paramiko 当前 SFTP client 不保证提供 `statvfs`，远端空间检查需要 fallback 到 `ssh df -PB1 <path>`。
 
@@ -168,6 +174,7 @@
   - Upload 后端继续补 `rsync --partial` / 断点续传策略，尤其针对大数据集和中断恢复。
   - 真实监听式 ROS2 recorder 继续扩展到 action/通用数组 stream，并加入更严格同步策略。
   - 基于用户选择的 topic 完善 stream schema 映射，支持 JointState/action/Float32MultiArray 等非图像流作为记录数据来源。
+  - AI Match Config 需要后续增加流式状态、结果 diff 预览、失败重试和更严格 schema 校验；当前只作为手动点击的辅助整理工具。
   - NPZ merge 继续扩展语言 annotation 合并策略，进一步兼容 `merge_calvin_sessions.py`。
   - SSH 上传继续扩展远端剩余空间检查、保存服务器配置和更完整的上传进度解析。
 

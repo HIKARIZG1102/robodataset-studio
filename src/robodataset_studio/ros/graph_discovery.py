@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
+import sys
 
 
 class RosGraphDiscovery:
@@ -19,22 +21,29 @@ class RosGraphDiscovery:
         }
 
     def _run(self, command: list[str]) -> list[str]:
+        commands = [self._without_daemon(command)]
+        if commands[0] != command:
+            commands.append(command)
         try:
             env = os.environ.copy()
             env.setdefault("ROS_LOG_DIR", "/tmp/ros_logs")
             env.setdefault("RMW_IMPLEMENTATION", "rmw_cyclonedds_cpp")
+            self._ensure_ros_pythonpath(env)
             os.makedirs(env["ROS_LOG_DIR"], exist_ok=True)
-            result = subprocess.run(
-                self._without_daemon(command),
-                capture_output=True,
-                text=True,
-                timeout=8,
-                check=False,
-                env=env,
-            )
+            for candidate in commands:
+                result = subprocess.run(
+                    candidate,
+                    capture_output=True,
+                    text=True,
+                    timeout=8,
+                    check=False,
+                    env=env,
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
         except Exception:
             return []
-        return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        return []
 
     def _topics(self) -> list[dict[str, str]]:
         lines = self._run(["ros2", "topic", "list", "-t"])
@@ -61,12 +70,48 @@ class RosGraphDiscovery:
                 info["subscription_count"] = self._parse_count(line)
         return info
 
+    def node_publishers(self, node_name: str) -> list[dict[str, str]]:
+        lines = self._run(["ros2", "node", "info", node_name])
+        publishers: list[dict[str, str]] = []
+        in_publishers = False
+        for line in lines:
+            if line == "Publishers:":
+                in_publishers = True
+                continue
+            if re.match(r"^[A-Z][A-Za-z ]+:$", line):
+                if in_publishers:
+                    break
+                continue
+            if not in_publishers:
+                continue
+            match = re.match(r"(?P<name>/\S+):\s+(?P<type>\S+)", line)
+            if match:
+                publishers.append({"name": match.group("name"), "type": match.group("type")})
+        return publishers
+
     def _without_daemon(self, command: list[str]) -> list[str]:
-        if len(command) >= 3 and command[:2] == ["ros2", "topic"] and "--no-daemon" not in command:
+        if command[:3] == ["ros2", "topic", "list"] and "--no-daemon" not in command:
             return [*command, "--no-daemon"]
-        if len(command) >= 3 and command[:2] == ["ros2", "node"] and "--no-daemon" not in command:
+        if command[:3] == ["ros2", "node", "list"] and "--no-daemon" not in command:
+            return [*command, "--no-daemon"]
+        if command[:3] == ["ros2", "node", "info"] and "--no-daemon" not in command:
             return [*command, "--no-daemon"]
         return command
+
+    def _ensure_ros_pythonpath(self, env: dict[str, str]) -> None:
+        ros2_path = shutil.which("ros2")
+        if not ros2_path or "/opt/ros/" not in ros2_path:
+            return
+        ros_root = ros2_path.split("/bin/ros2", 1)[0]
+        major_minor = f"python{sys.version_info.major}.{sys.version_info.minor}"
+        candidates = [
+            os.path.join(ros_root, "lib", major_minor, "site-packages"),
+            os.path.join(ros_root, "local", "lib", major_minor, "dist-packages"),
+        ]
+        existing = [path for path in env.get("PYTHONPATH", "").split(os.pathsep) if path]
+        prepend = [path for path in candidates if os.path.isdir(path) and path not in existing]
+        if prepend:
+            env["PYTHONPATH"] = os.pathsep.join([*prepend, *existing])
 
     def _parse_count(self, line: str) -> int:
         try:

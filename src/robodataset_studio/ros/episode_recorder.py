@@ -76,13 +76,16 @@ class RosEpisodeRecorder:
         for name, array in list(arrays.items()):
             arrays[name] = array[:actual_steps]
 
-        if "robot_obs" not in arrays:
+        dataset_cfg = config.get("dataset", {})
+        requires_actions = bool(dataset_cfg.get("requires_actions", True))
+        if "robot_obs" not in arrays and requires_actions:
             state_dim = int(config.get("action", {}).get("dim") or 7) - 1
             arrays["robot_obs"] = np.zeros((actual_steps, max(state_dim, 1)), dtype=np.float32)
             primary_state_name = "robot_obs"
-        actions = self._derive_actions(config, arrays[primary_state_name], actual_steps)
-        arrays["rel_actions"] = actions
-        arrays["actions"] = actions.copy()
+        if "robot_obs" in arrays and requires_actions:
+            actions = self._derive_actions(config, arrays[primary_state_name], actual_steps)
+            arrays["rel_actions"] = actions
+            arrays["actions"] = actions.copy()
 
         metadata = {
             "mock": False,
@@ -99,9 +102,9 @@ class RosEpisodeRecorder:
             "warnings": warnings,
         }
         episodes_dir.mkdir(parents=True, exist_ok=True)
-        transition_count = max(actual_steps - 1, 0)
+        transition_count = max(actual_steps - 1, 0) if requires_actions else actual_steps
         if transition_count <= 0:
-            raise RuntimeError("at least 2 synchronized samples are required to write CALVIN transition files")
+            raise RuntimeError("at least 1 synchronized sample is required to write dataset files")
         first_path = episodes_dir / f"episode_{episode_index:07d}.npz"
         for offset in range(transition_count):
             transition = {
@@ -109,8 +112,9 @@ class RosEpisodeRecorder:
                 for name, array in arrays.items()
                 if name not in {"rel_actions", "actions"}
             }
-            transition["rel_actions"] = arrays["rel_actions"][offset]
-            transition["actions"] = arrays["actions"][offset]
+            if requires_actions:
+                transition["rel_actions"] = arrays["rel_actions"][offset]
+                transition["actions"] = arrays["actions"][offset]
             transition["episode_metadata"] = np.array(json.dumps({**metadata, "transition_index": offset}, ensure_ascii=False))
             path = episodes_dir / f"episode_{episode_index + offset:07d}.npz"
             self._write_npz_atomic(path, transition)

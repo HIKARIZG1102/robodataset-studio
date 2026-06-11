@@ -137,15 +137,24 @@ class DatasetValidator:
     def required_fields(self, config: dict[str, Any] | None = None) -> list[str]:
         if not config:
             return list(REQUIRED_FIELDS)
-        fields = ["robot_obs", "rel_actions", "actions"]
+        dataset_cfg = config.get("dataset", {})
+        requires_robot_obs = bool(dataset_cfg.get("requires_robot_obs", True))
+        requires_actions = bool(dataset_cfg.get("requires_actions", True))
+        fields = []
         for stream in config.get("streams", []):
             if stream.get("message_type") != "sensor_msgs/msg/Image":
                 continue
             if stream.get("required", True) is False:
                 continue
+            if stream.get("calvin_key") is None:
+                continue
             key = str(stream.get("calvin_key") or stream.get("name") or "").strip()
             if key and key not in fields:
-                fields.insert(max(len(fields) - 3, 0), key)
+                fields.append(key)
+        if requires_robot_obs:
+            fields.append("robot_obs")
+        if requires_actions:
+            fields.extend(["rel_actions", "actions"])
         return fields
 
     def image_fields(self, config: dict[str, Any] | None = None) -> list[str]:
@@ -154,6 +163,8 @@ class DatasetValidator:
         fields = []
         for stream in config.get("streams", []):
             if stream.get("message_type") != "sensor_msgs/msg/Image":
+                continue
+            if stream.get("calvin_key") is None:
                 continue
             key = str(stream.get("calvin_key") or stream.get("name") or "").strip()
             if key and key not in fields:
