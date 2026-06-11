@@ -21,7 +21,7 @@ from robodataset_studio.core.settings_store import UserSettingsStore
 from robodataset_studio.ros.episode_recorder import RosEpisodeRecorder, joint_state_to_robot_obs
 from robodataset_studio.ros.graph_discovery import RosGraphDiscovery
 from robodataset_studio.ros.image_conversion import image_bytes_to_rgb
-from robodataset_studio.ui.pages import AppContext, ConfigPage, DiscoveryPage, InspectorPage, ProjectPage, RecordingPage, ReviewPage, SettingsPage, UploadPage
+from robodataset_studio.ui.pages import AppContext, ConfigPage, DiscoveryPage, InspectorPage, ProjectPage, RecordingPage, RecordingPreflightWorker, ReviewPage, SettingsPage, UploadPage
 from robodataset_studio.ui.main_window import MainWindow
 from robodataset_studio.upload.manifest import UploadManifest
 from robodataset_studio.upload.ssh_uploader import SshConnection, SshUploader, parse_ssh_target
@@ -1006,6 +1006,65 @@ def test_recording_page_populates_capture_monitor_topics() -> None:
     assert len(page._monitor_slots) == 1
     assert page._monitor_slots[0].topic == "/camera/front/image_raw"
     page.close()
+
+
+def test_recording_page_loads_saved_yaml_and_updates_plan(tmp_path, monkeypatch) -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    ctx.config_library = ConfigLibrary(tmp_path / "config_library")
+    config = ConfigManager().build_default_config(
+        ProjectState(),
+        [
+            {"name": "/camera/front/image_raw", "type": "sensor_msgs/msg/Image"},
+            {"name": "/joint_states", "type": "sensor_msgs/msg/JointState"},
+        ],
+    )
+    config["recording"]["sample_rate_hz"] = 5
+    config["recording"]["episode_duration_sec"] = 2.0
+    ctx.config_library.save_text("record_plan", ConfigManager().dumps(config))
+    started = []
+    monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
+    monkeypatch.setattr(RecordingPage, "start_capture_monitor", lambda self, slot: started.append(slot.topic))
+    page = RecordingPage(ctx)
+    page.config_library_select.setCurrentText("record_plan")
+
+    page.load_selected_yaml()
+
+    assert app is not None
+    assert ctx.state.collection_config["streams"][0]["topic"] == "/camera/front/image_raw"
+    assert "estimated episode_*.npz files: 9" in page.plan_summary.text()
+    assert "/camera/front/image_raw" in started
+    page.close()
+
+
+def test_recording_page_async_node_check_reports_echo_and_hz(monkeypatch) -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    config = ConfigManager().build_default_config(
+        ProjectState(),
+        [
+            {"name": "/camera/front/image_raw", "type": "sensor_msgs/msg/Image"},
+            {"name": "/joint_states", "type": "sensor_msgs/msg/JointState"},
+        ],
+    )
+    ctx.state.collection_config = config
+    ctx.discovery.topic_info = lambda topic: {  # type: ignore[method-assign]
+        "name": topic,
+        "type": "sensor_msgs/msg/JointState" if topic == "/joint_states" else "sensor_msgs/msg/Image",
+        "publisher_count": 1,
+        "subscription_count": 0,
+    }
+    ctx.discovery.topic_echo_once = lambda topic, max_chars=1200: f"sample {topic}"  # type: ignore[method-assign]
+    ctx.discovery.topic_hz = lambda topic, window=10, max_chars=1200: f"average rate: 10.0 {topic}"  # type: ignore[method-assign]
+
+    worker = RecordingPreflightWorker(ctx.discovery, config)
+    result = worker._check()
+
+    assert app is not None
+    assert result["errors"] == []
+    assert len(result["rows"]) == 2
+    assert all(row["ok"] for row in result["rows"])
+    assert "average rate" in result["rows"][0]["hz"]
 
 
 def test_recording_page_limits_capture_monitors_to_four() -> None:

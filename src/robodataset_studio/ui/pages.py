@@ -632,6 +632,88 @@ class RosRecordingWorker(QObject):
         self.finished.emit(result, None)
 
 
+class RecordingPreflightWorker(QObject):
+    finished = Signal(object, object)
+
+    def __init__(self, discovery: RosGraphDiscovery, config: dict) -> None:
+        super().__init__()
+        self.discovery = discovery
+        self.config = config
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            result = self._check()
+        except Exception as exc:
+            self.finished.emit(None, exc)
+            return
+        self.finished.emit(result, None)
+
+    def _check(self) -> dict[str, object]:
+        topics = self._configured_topics()
+        rows = []
+        errors = []
+        for item in topics:
+            topic = str(item.get("topic", ""))
+            expected_type = str(item.get("expected_type", ""))
+            info = self.discovery.topic_info(topic) if topic else None
+            echo = self.discovery.topic_echo_once(topic, max_chars=1200) if topic else ""
+            hz = self.discovery.topic_hz(topic, window=10, max_chars=1200) if topic else ""
+            actual_type = str(info.get("type", "") if isinstance(info, dict) else "")
+            publisher_count = int(info.get("publisher_count", 0) if isinstance(info, dict) else 0)
+            ok = bool(topic and actual_type == expected_type and publisher_count > 0 and echo)
+            if not ok:
+                errors.append(
+                    f"{item.get('label', topic)}: {topic or '-'} expected={expected_type or '-'} "
+                    f"actual={actual_type or '-'} publishers={publisher_count} echo={'ok' if echo else 'empty'}"
+                )
+            rows.append(
+                {
+                    **item,
+                    "actual_type": actual_type,
+                    "publisher_count": publisher_count,
+                    "echo": echo,
+                    "hz": hz,
+                    "ok": ok,
+                }
+            )
+        return {"rows": rows, "errors": errors}
+
+    def _configured_topics(self) -> list[dict[str, str]]:
+        items: list[dict[str, str]] = []
+        for stream in self.config.get("streams", []):
+            if not isinstance(stream, dict):
+                continue
+            topic = str(stream.get("topic") or "")
+            message_type = str(stream.get("message_type") or "")
+            if topic and message_type:
+                items.append(
+                    {
+                        "label": str(stream.get("name") or stream.get("calvin_key") or topic),
+                        "topic": topic,
+                        "expected_type": message_type,
+                        "kind": "stream",
+                    }
+                )
+        state_keys = self.config.get("state", {}).get("keys", [])
+        if isinstance(state_keys, list):
+            for state_key in state_keys:
+                if not isinstance(state_key, dict):
+                    continue
+                topic = str(state_key.get("source_topic") or "")
+                message_type = str(state_key.get("type") or "")
+                if topic and message_type:
+                    items.append(
+                        {
+                            "label": str(state_key.get("name") or "robot_obs"),
+                            "topic": topic,
+                            "expected_type": message_type,
+                            "kind": "state",
+                        }
+                    )
+        return items
+
+
 @dataclass
 class CaptureMonitorSlot:
     stream_name: str
@@ -2184,13 +2266,20 @@ class RecordingPage(QWidget):
         self.episode_index = 0
         self._recording_thread: QThread | None = None
         self._recording_worker: RosRecordingWorker | None = None
+        self._preflight_thread: QThread | None = None
+        self._preflight_worker: RecordingPreflightWorker | None = None
         self._monitor_slots: list[CaptureMonitorSlot] = []
+        self._manual_recording_requested = False
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
+        self.config_library_select = QComboBox()
+        self.config_library_select.setEditable(True)
+        self.plan_summary = QLabel("")
         self.streams = QTableWidget(0, 6)
         self.streams.setHorizontalHeaderLabels(["Name", "Modality", "Source", "Topic/Endpoint", "Role", "Runtime"])
         self.monitor_grid = QHBoxLayout()
         self.stop_mode = QComboBox()
+        self.stop_mode.addItem("Manual", "manual")
         self.stop_mode.addItem("Duration", "duration_sec")
         self.stop_mode.addItem("Sample count", "sample_count")
         self.duration = QDoubleSpinBox()
@@ -2203,16 +2292,32 @@ class RecordingPage(QWidget):
         self.target_samples.setRange(1, 1_000_000)
         self.target_samples.setValue(20)
         self.target_samples.setSuffix(" samples")
+        load_yaml = QPushButton("Load YAML")
         refresh = QPushButton("Refresh Listener Plan")
+        check_nodes = QPushButton("Check Nodes")
         refresh.clicked.connect(self.refresh_plan)
+        load_yaml.clicked.connect(self.load_selected_yaml)
+        check_nodes.clicked.connect(self.check_nodes_async)
+        self.stop_mode.currentIndexChanged.connect(lambda _index: self.plan_summary.setText(self.recording_plan_summary()))
+        self.duration.valueChanged.connect(lambda _value: self.plan_summary.setText(self.recording_plan_summary()))
+        self.target_samples.valueChanged.connect(lambda _value: self.plan_summary.setText(self.recording_plan_summary()))
         record_mock = QPushButton("Simulate Listener Episode")
-        record_ros = QPushButton("Record ROS2 Episode")
+        record_ros = QPushButton("Start Recording")
+        stop_ros = QPushButton("Stop Recording")
         record_mock.clicked.connect(self.record_mock)
         record_ros.clicked.connect(self.record_ros)
+        stop_ros.clicked.connect(self.stop_recording_request)
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("Listener Recording Console"))
         layout.addWidget(QLabel("This page listens to configured streams and writes dataset episodes. It does not send robot control commands."))
-        layout.addWidget(refresh)
+        yaml_row = QHBoxLayout()
+        yaml_row.addWidget(QLabel("Saved YAML"))
+        yaml_row.addWidget(self.config_library_select, 1)
+        yaml_row.addWidget(load_yaml)
+        yaml_row.addWidget(refresh)
+        yaml_row.addWidget(check_nodes)
+        layout.addLayout(yaml_row)
+        layout.addWidget(self.plan_summary)
         layout.addWidget(self.streams)
         layout.addWidget(QLabel("Capture monitors"))
         layout.addLayout(self.monitor_grid)
@@ -2224,9 +2329,37 @@ class RecordingPage(QWidget):
         controls.addWidget(QLabel("Samples"))
         controls.addWidget(self.target_samples)
         controls.addWidget(record_ros)
+        controls.addWidget(stop_ros)
         controls.addWidget(record_mock)
         layout.addLayout(controls)
         layout.addWidget(self.log)
+        self.refresh_config_library()
+        self.refresh_plan()
+
+    def refresh_config_library(self) -> None:
+        current = self.config_library_select.currentText().strip()
+        self.config_library_select.blockSignals(True)
+        self.config_library_select.clear()
+        names = [path.stem for path in self.ctx.config_library.list_configs()]
+        self.config_library_select.addItems(names)
+        if current:
+            self.config_library_select.setCurrentText(current)
+        self.config_library_select.blockSignals(False)
+
+    def load_selected_yaml(self) -> None:
+        name = self.config_library_select.currentText().strip()
+        if not name:
+            QMessageBox.warning(self, "Load YAML", "Select a saved YAML config first.")
+            return
+        try:
+            text = self.ctx.config_library.load_text(name)
+            config = self.ctx.config_manager.loads(text)
+            self.ctx.config_manager.sync_core_schema(config)
+        except Exception as exc:
+            QMessageBox.warning(self, "Load YAML", f"Cannot load YAML config:\n{exc}")
+            return
+        self.ctx.set_collection_config(config)
+        self.log.appendPlainText(f"loaded YAML for recording: {name}")
         self.refresh_plan()
 
     def refresh_plan(self) -> None:
@@ -2257,6 +2390,32 @@ class RecordingPage(QWidget):
             if stream.get("message_type") == "sensor_msgs/msg/Image" and stream.get("topic")
         ][:4]
         self.rebuild_capture_monitors(image_streams)
+        self.plan_summary.setText(self.recording_plan_summary())
+        if os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+            self.start_all_capture_monitors()
+
+    def recording_plan_summary(self) -> str:
+        if not self.ctx.has_config():
+            return "No YAML loaded."
+        recording = self.ctx.state.collection_config.get("recording", {})
+        sample_rate = float(recording.get("sample_rate_hz") or 10)
+        stop_mode = str(self.stop_mode.currentData() or recording.get("stop_mode") or "duration_sec")
+        requires_actions = bool(self.ctx.state.collection_config.get("dataset", {}).get("requires_actions", False))
+        min_steps = int(recording.get("min_episode_steps") or 1)
+        minimum_samples = max(min_steps, 2 if requires_actions else 1)
+        if stop_mode == "sample_count":
+            samples = max(int(self.target_samples.value()), minimum_samples)
+            mode_text = f"sample count {samples}"
+        elif stop_mode == "manual":
+            samples = max(int(self.target_samples.value()), minimum_samples)
+            mode_text = f"manual stop, preview budget {samples} samples"
+        else:
+            duration = float(self.duration.value())
+            requested = int(round(sample_rate * duration)) if duration > 0 else 0
+            samples = max(requested, minimum_samples) if duration > 0 else 0
+            mode_text = f"{duration:g}s x {sample_rate:g}Hz ~= {samples} samples"
+        transitions = max(samples - 1, 0) if requires_actions else samples
+        return f"Plan: {mode_text}; estimated episode_*.npz files: {transitions}; output: {self.ctx.state.episodes_dir}"
 
     def record_mock(self) -> None:
         if not self.ctx.has_config():
@@ -2266,23 +2425,68 @@ class RecordingPage(QWidget):
         self.episode_index += 1
         self.log.appendPlainText(f"recorded: {path}")
 
+    def check_nodes_async(self) -> None:
+        if not self.ctx.has_config():
+            QMessageBox.warning(self, "Missing config", "Load YAML before checking nodes.")
+            return
+        if self._preflight_thread is not None:
+            self.log.appendPlainText("node check is already running")
+            return
+        self._preflight_thread = QThread(self)
+        self._preflight_worker = RecordingPreflightWorker(self.ctx.discovery, self.ctx.state.collection_config)
+        self._preflight_worker.moveToThread(self._preflight_thread)
+        self._preflight_thread.started.connect(self._preflight_worker.run)
+        self._preflight_worker.finished.connect(self.finish_node_check)
+        self._preflight_worker.finished.connect(self._preflight_thread.quit)
+        self._preflight_worker.finished.connect(self._preflight_worker.deleteLater)
+        self._preflight_thread.finished.connect(self._clear_preflight_thread)
+        self._preflight_thread.finished.connect(self._preflight_thread.deleteLater)
+        self._preflight_thread.start()
+        self.log.appendPlainText("node/topic check started in background")
+
+    @Slot(object, object)
+    def finish_node_check(self, result: object, error: object) -> None:
+        if error is not None:
+            self.log.appendPlainText(f"node/topic check failed: {error}")
+            return
+        if not isinstance(result, dict):
+            self.log.appendPlainText("node/topic check failed: unexpected result")
+            return
+        rows = result.get("rows", [])
+        errors = result.get("errors", [])
+        self.log.appendPlainText("node/topic check result:")
+        if isinstance(rows, list):
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                status = "OK" if row.get("ok") else "FAIL"
+                hz = str(row.get("hz") or "").replace("\n", " | ")
+                echo = "echo=ok" if row.get("echo") else "echo=empty"
+                self.log.appendPlainText(
+                    f"- {status} {row.get('label')}: {row.get('topic')} "
+                    f"type={row.get('actual_type') or '-'} pub={row.get('publisher_count')} {echo} hz={hz or '-'}"
+                )
+        if isinstance(errors, list) and errors:
+            self.log.appendPlainText("check errors:\n" + "\n".join(f"- {error}" for error in errors))
+        elif not errors:
+            self.log.appendPlainText("all configured topics passed basic info/echo/hz checks")
+
+    def _clear_preflight_thread(self) -> None:
+        self._preflight_thread = None
+        self._preflight_worker = None
+
     def record_ros(self) -> None:
         if not self.ctx.has_config():
             QMessageBox.warning(self, "Missing config", "Generate and save collection_config.yaml before recording.")
-            return
-        errors = self.preflight_recording()
-        if errors:
-            message = "Recording preflight failed:\n" + "\n".join(f"- {error}" for error in errors)
-            QMessageBox.warning(self, "Recording preflight failed", message)
-            self.log.appendPlainText(message)
             return
         if self._recording_thread is not None:
             QMessageBox.warning(self, "Recording active", "A ROS2 recording is already running.")
             return
         self._recording_thread = QThread(self)
         stop_mode = str(self.stop_mode.currentData() or "duration_sec")
-        target_samples = int(self.target_samples.value()) if stop_mode == "sample_count" else None
+        target_samples = int(self.target_samples.value()) if stop_mode in {"sample_count", "manual"} else None
         duration_sec = float(self.duration.value()) if stop_mode == "duration_sec" else None
+        self._manual_recording_requested = stop_mode == "manual"
         recording = self.ctx.state.collection_config.setdefault("recording", {})
         recording["stop_mode"] = stop_mode
         recording["episode_duration_sec"] = float(self.duration.value())
@@ -2302,7 +2506,14 @@ class RecordingPage(QWidget):
         self._recording_worker.finished.connect(self._recording_worker.deleteLater)
         self._recording_thread.finished.connect(self._recording_thread.deleteLater)
         self._recording_thread.start()
-        self.log.appendPlainText("started ROS2 recording in background")
+        self.log.appendPlainText(f"started ROS2 recording in background ({self.recording_plan_summary()})")
+
+    def stop_recording_request(self) -> None:
+        if self._recording_thread is None:
+            self.log.appendPlainText("no active recording to stop")
+            return
+        self._manual_recording_requested = False
+        self.log.appendPlainText("stop requested; current recorder will finish at the configured sample budget")
 
     def preflight_recording(self) -> list[str]:
         config = self.ctx.state.collection_config
@@ -2370,6 +2581,7 @@ class RecordingPage(QWidget):
     def finish_ros_recording(self, result: object, error: object) -> None:
         self._recording_thread = None
         self._recording_worker = None
+        self._manual_recording_requested = False
         if error is not None:
             QMessageBox.warning(self, "ROS2 recording failed", str(error))
             self.log.appendPlainText(f"recording failed: {error}")
@@ -2382,6 +2594,7 @@ class RecordingPage(QWidget):
         self.log.appendPlainText(
             f"recorded real ROS2 CALVIN transitions: {result.path.parent} count={result.steps} streams={', '.join(result.streams)}{warning_text}"
         )
+        self.plan_summary.setText(self.recording_plan_summary())
 
     def rebuild_capture_monitors(self, image_streams: list[dict]) -> None:
         self.stop_all_capture_monitors()
@@ -2454,6 +2667,8 @@ class RecordingPage(QWidget):
         if not slot.topic:
             QMessageBox.warning(self, "Capture monitor", "Choose an image topic from the listener plan first.")
             return
+        if slot.thread is not None:
+            return
         self.stop_capture_monitor(slot, clear_display=False)
         slot.thread = QThread(self)
         slot.worker = RosImagePreviewWorker(slot.topic)
@@ -2471,6 +2686,11 @@ class RecordingPage(QWidget):
         slot.timer.start()
         slot.thread.start()
         self.log.appendPlainText(f"capture monitor subscribed: {slot.stream_name} {slot.topic}")
+
+    def start_all_capture_monitors(self) -> None:
+        for slot in self._monitor_slots:
+            if slot.topic and slot.thread is None:
+                self.start_capture_monitor(slot)
 
     def stop_capture_monitor(self, slot: CaptureMonitorSlot, clear_display: bool = True) -> None:
         if slot.worker is not None:
@@ -2529,6 +2749,14 @@ class RecordingPage(QWidget):
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
         self.stop_all_capture_monitors()
+        if self._preflight_thread is not None:
+            self._preflight_thread.quit()
+            self._preflight_thread.wait(1500)
+            self._preflight_thread = None
+            self._preflight_worker = None
+        if self._recording_thread is not None:
+            self._recording_thread.quit()
+            self._recording_thread.wait(1500)
         super().closeEvent(event)
 
 

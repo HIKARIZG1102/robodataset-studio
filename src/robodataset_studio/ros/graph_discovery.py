@@ -74,6 +74,10 @@ class RosGraphDiscovery:
         lines = self._run(["ros2", "topic", "echo", "--once", topic_name], timeout=4)
         return self._truncate("\n".join(lines), max_chars)
 
+    def topic_hz(self, topic_name: str, window: int = 10, max_chars: int = 2000) -> str:
+        lines = self._run(["ros2", "topic", "hz", topic_name, "--window", str(window)], timeout=6)
+        return self._truncate("\n".join(lines), max_chars)
+
     def node_info(self, node_name: str, max_chars: int = 4000) -> str:
         lines = self._run(["ros2", "node", "info", node_name], timeout=6)
         return self._truncate("\n".join(lines), max_chars)
