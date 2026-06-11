@@ -1035,8 +1035,27 @@ def test_ai_match_prompt_uses_settings_form_values_and_topic_info(monkeypatch) -
     assert "node info for /camera_node" in prompt
     assert "param_a: value_a" in prompt
 
-    config_page.build_default_ai_prompt()
+    config_page.finish_default_ai_prompt({"prompt": prompt}, None)
     assert "sample from /camera/camera/color/image_raw" in config_page.ai_prompt.toPlainText()
+
+
+def test_default_ai_prompt_runs_in_background_and_closes_cleanly(monkeypatch) -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    ctx.state.selected_streams = [{"name": "/camera/camera/color/image_raw", "type": "sensor_msgs/msg/Image"}]
+    ctx.discovery.topic_info = lambda topic: {"name": topic, "type": "sensor_msgs/msg/Image", "publisher_count": 1, "subscription_count": 0}  # type: ignore[method-assign]
+    ctx.discovery.topic_echo_once = lambda topic: "sample image header"  # type: ignore[method-assign]
+    config_page = ConfigPage(ctx)
+    ctx.state.collection_config = ConfigManager().build_default_config(ProjectState(), ctx.state.selected_streams)
+    config_page.load_context_config()
+
+    config_page.build_default_ai_prompt()
+
+    assert app is not None
+    assert config_page._prompt_thread is not None
+    assert "Generating default AI prompt" in config_page.ai_prompt.toPlainText()
+    config_page.close()
+    assert config_page._prompt_thread is None
 
 
 def test_ai_match_preview_and_replace_are_separate() -> None:

@@ -223,6 +223,132 @@ class AIConfigMatchWorker(QObject):
             self.finished.emit("", exc)
 
 
+class AIConfigPromptWorker(QObject):
+    finished = Signal(object, object)
+
+    def __init__(
+        self,
+        discovery: RosGraphDiscovery,
+        config: dict,
+        model: str,
+        selected_nodes: list[str],
+        selected_streams: list[dict],
+        last_graph_topics: list[dict],
+        user_form_values: dict,
+        standard_template: dict,
+        dataset_schema_notes: str,
+    ) -> None:
+        super().__init__()
+        self.discovery = discovery
+        self.config = config
+        self.model = model
+        self.selected_nodes = selected_nodes
+        self.selected_streams = selected_streams
+        self.last_graph_topics = last_graph_topics
+        self.user_form_values = user_form_values
+        self.standard_template = standard_template
+        self.dataset_schema_notes = dataset_schema_notes
+        self.cancelled = False
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            payload, prompt = build_ai_match_payload_snapshot(
+                self.discovery,
+                self.config,
+                self.model,
+                self.selected_nodes,
+                self.selected_streams,
+                self.last_graph_topics,
+                self.user_form_values,
+                self.standard_template,
+                self.dataset_schema_notes,
+            )
+            if self.cancelled:
+                return
+            self.finished.emit({"payload": payload, "prompt": prompt}, None)
+        except Exception as exc:
+            if self.cancelled:
+                return
+            self.finished.emit({}, exc)
+
+
+def build_ai_match_payload_snapshot(
+    discovery: RosGraphDiscovery,
+    config: dict,
+    model: str,
+    selected_nodes: list[str],
+    selected_streams: list[dict],
+    last_graph_topics: list[dict],
+    user_form_values: dict,
+    standard_template: dict,
+    dataset_schema_notes: str,
+) -> tuple[dict, str]:
+    topic_infos = []
+    for topic in selected_streams:
+        name = str(topic.get("name") or "")
+        info = discovery.topic_info(name) if name else None
+        echo = discovery.topic_echo_once(name) if name else ""
+        topic_infos.append({"selected": topic, "topic_info": info or {}, "echo_once": echo})
+    node_details = []
+    for node_name in selected_nodes:
+        node_details.append(
+            {
+                "name": node_name,
+                "node_info": discovery.node_info(node_name),
+                "parameter_sample": discovery.node_params(node_name),
+                "publishers": discovery.node_publishers(node_name),
+            }
+        )
+    selected_context = {
+        "selected_nodes": selected_nodes,
+        "selected_node_details": node_details,
+        "selected_streams": selected_streams,
+        "selected_topic_info": topic_infos,
+        "last_graph_topics": last_graph_topics,
+    }
+    prompt = (
+        "Map selected ROS2 nodes/topics into a complete listener-only dataset collection config. "
+        "Use the user's project, environment, robot, instruction, recording, crop, and resize values. "
+        "Infer image tracks from selected image topics, including rgb_static, rgb_wrist, rgb_overhead, depth, or extra tracks. "
+        "Infer robot_obs and action dimensions only from selected JointState topics or provided topic info. "
+        "Describe nodes/topics in robot/environment descriptions when useful. "
+        "Return only YAML matching the standard config shape."
+    )
+    user_content = {
+        "request": prompt,
+        "constraints": [
+            "Return only one complete YAML config or one JSON object.",
+            "Use only selected nodes/topics unless a field is explicitly metadata or empty.",
+            "Do not invent robot_obs/action streams when no JointState topic is selected.",
+            "Classify depth image topics as depth streams with calvin_key null, not RGB.",
+            "Keep runtime listener-only and never enable robot command publishing.",
+            "Keep collection_config.yaml free of AI API fields.",
+            "If an optional user field is blank, keep it blank unless selected ROS context proves a value.",
+        ],
+        "selected_ros_context": selected_context,
+        "user_form_values": user_form_values,
+        "current_config": config,
+        "standard_config_template": standard_template,
+        "dataset_schema_notes": dataset_schema_notes,
+    }
+    prompt_text = json.dumps(user_content, ensure_ascii=False, indent=2)
+    return {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": "You convert ROS2 graph selections into safe listener-only robot dataset YAML configs.",
+            },
+            {"role": "user", "content": prompt_text},
+        ],
+        "temperature": 0,
+    }, prompt_text
+
+
 def call_openai_compatible_chat(base_url: str, api_key: str, payload: dict, timeout_sec: int = 60) -> str:
     endpoint = base_url
     if not endpoint.endswith("/chat/completions"):
@@ -1186,6 +1312,8 @@ class ConfigPage(QWidget):
         super().__init__()
         self.ctx = ctx
         self._updating_form = False
+        self._prompt_thread: QThread | None = None
+        self._prompt_worker: AIConfigPromptWorker | None = None
         self._ai_thread: QThread | None = None
         self._ai_worker: AIConfigMatchWorker | None = None
         self.editor = QPlainTextEdit()
@@ -1561,9 +1689,46 @@ class ConfigPage(QWidget):
     def build_default_ai_prompt(self) -> None:
         config = self._current_config()
         model = self.ctx.state.ai_model.strip() or "model"
-        _, prompt_text = self._ai_match_payload(config, model)
-        self.ai_prompt.setPlainText(prompt_text)
-        self.status.setText("Default AI prompt generated from current form and selected ROS context.")
+        if self._prompt_thread is not None:
+            self.status.setText("Default AI prompt is already being generated.")
+            return
+        self.ai_prompt.setPlainText("Generating default AI prompt...")
+        self.status.setText("Generating default AI prompt in background.")
+        self._prompt_thread = QThread(self)
+        self._prompt_worker = AIConfigPromptWorker(
+            self.ctx.discovery,
+            config,
+            model,
+            list(self.ctx.state.selected_nodes),
+            [dict(topic) for topic in self.ctx.state.selected_streams],
+            [dict(topic) for topic in self.ctx.last_graph.get("topics", [])],
+            self._ai_user_form_values(),
+            self.ctx.config_manager.build_default_config(self.ctx.state, []),
+            self.ctx.config_manager.dataset_structure_preview(config),
+        )
+        self._prompt_worker.moveToThread(self._prompt_thread)
+        self._prompt_thread.started.connect(self._prompt_worker.run)
+        self._prompt_worker.finished.connect(self.finish_default_ai_prompt)
+        self._prompt_worker.finished.connect(self._prompt_thread.quit)
+        self._prompt_worker.finished.connect(self._prompt_worker.deleteLater)
+        self._prompt_thread.finished.connect(self._clear_prompt_thread)
+        self._prompt_thread.finished.connect(self._prompt_thread.deleteLater)
+        self._prompt_thread.start()
+
+    @Slot(object, object)
+    def finish_default_ai_prompt(self, result: object, error: object) -> None:
+        if error is not None:
+            self.ai_prompt.setPlainText(f"Default prompt failed:\n{error}")
+            self.status.setText(f"Default prompt failed: {error}")
+            return
+        if isinstance(result, dict):
+            prompt_text = str(result.get("prompt", ""))
+            self.ai_prompt.setPlainText(prompt_text)
+            self.status.setText("Default AI prompt generated from current form and selected ROS context.")
+
+    def _clear_prompt_thread(self) -> None:
+        self._prompt_thread = None
+        self._prompt_worker = None
 
     def send_ai_prompt(self) -> None:
         config = self._current_config()
@@ -1586,8 +1751,8 @@ class ConfigPage(QWidget):
             return
         prompt_text = self.ai_prompt.toPlainText().strip()
         if not prompt_text:
-            _, prompt_text = self._ai_match_payload(config, model)
-            self.ai_prompt.setPlainText(prompt_text)
+            self.status.setText("Generate or enter an AI prompt before sending.")
+            return
         payload = self._ai_payload_from_prompt(prompt_text, model)
         self.ai_preview.setPlainText("AI match running...")
         self.status.setText("AI match running in background.")
@@ -1626,67 +1791,17 @@ class ConfigPage(QWidget):
 
     def _ai_match_payload(self, config: dict, model: str) -> tuple[dict, str]:
         self._apply_form_values(config)
-        topic_infos = []
-        for topic in self.ctx.state.selected_streams:
-            name = str(topic.get("name") or "")
-            info = self.ctx.discovery.topic_info(name) if name else None
-            echo = self.ctx.discovery.topic_echo_once(name) if name else ""
-            topic_infos.append({"selected": topic, "topic_info": info or {}, "echo_once": echo})
-        node_details = []
-        for node_name in self.ctx.state.selected_nodes:
-            node_details.append(
-                {
-                    "name": node_name,
-                    "node_info": self.ctx.discovery.node_info(node_name),
-                    "parameter_sample": self.ctx.discovery.node_params(node_name),
-                    "publishers": self.ctx.discovery.node_publishers(node_name),
-                }
-            )
-        selected_context = {
-            "selected_nodes": self.ctx.state.selected_nodes,
-            "selected_node_details": node_details,
-            "selected_streams": self.ctx.state.selected_streams,
-            "selected_topic_info": topic_infos,
-            "last_graph_topics": self.ctx.last_graph.get("topics", []),
-        }
-        template = self.ctx.config_manager.build_default_config(self.ctx.state, [])
-        prompt = (
-            "Map selected ROS2 nodes/topics into a complete listener-only dataset collection config. "
-            "Use the user's project, environment, robot, instruction, recording, crop, and resize values. "
-            "Infer image tracks from selected image topics, including rgb_static, rgb_wrist, rgb_overhead, depth, or extra tracks. "
-            "Infer robot_obs and action dimensions only from selected JointState topics or provided topic info. "
-            "Describe nodes/topics in robot/environment descriptions when useful. "
-            "Return only YAML matching the standard config shape."
+        return build_ai_match_payload_snapshot(
+            self.ctx.discovery,
+            config,
+            model,
+            list(self.ctx.state.selected_nodes),
+            [dict(topic) for topic in self.ctx.state.selected_streams],
+            [dict(topic) for topic in self.ctx.last_graph.get("topics", [])],
+            self._ai_user_form_values(),
+            self.ctx.config_manager.build_default_config(self.ctx.state, []),
+            self.ctx.config_manager.dataset_structure_preview(config),
         )
-        user_content = {
-            "request": prompt,
-            "constraints": [
-                "Return only one complete YAML config or one JSON object.",
-                "Use only selected nodes/topics unless a field is explicitly metadata or empty.",
-                "Do not invent robot_obs/action streams when no JointState topic is selected.",
-                "Classify depth image topics as depth streams with calvin_key null, not RGB.",
-                "Keep runtime listener-only and never enable robot command publishing.",
-                "Keep collection_config.yaml free of AI API fields.",
-                "If an optional user field is blank, keep it blank unless selected ROS context proves a value.",
-            ],
-            "selected_ros_context": selected_context,
-            "user_form_values": self._ai_user_form_values(),
-            "current_config": config,
-            "standard_config_template": template,
-            "dataset_schema_notes": self.ctx.config_manager.dataset_structure_preview(config),
-        }
-        prompt_text = json.dumps(user_content, ensure_ascii=False, indent=2)
-        return {
-            "model": model,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "You convert ROS2 graph selections into safe listener-only robot dataset YAML configs.",
-                },
-                {"role": "user", "content": prompt_text},
-            ],
-            "temperature": 0,
-        }, prompt_text
 
     def _ai_payload_from_prompt(self, prompt_text: str, model: str) -> dict:
         return {
@@ -1716,6 +1831,15 @@ class ConfigPage(QWidget):
         self.status.setText("Replaced collection_config.yaml preview with AI config.")
 
     def stop_ai_match(self) -> None:
+        if self._prompt_worker is not None:
+            self._prompt_worker.cancel()
+        if self._prompt_thread is not None:
+            self._prompt_thread.quit()
+            if not self._prompt_thread.wait(1500):
+                self._prompt_thread.terminate()
+                self._prompt_thread.wait(1500)
+        self._prompt_thread = None
+        self._prompt_worker = None
         if self._ai_worker is not None:
             self._ai_worker.cancel()
         if self._ai_thread is not None:
