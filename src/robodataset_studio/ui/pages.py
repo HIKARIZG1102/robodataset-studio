@@ -149,6 +149,50 @@ class ModelComboBox(QComboBox):
         super().showPopup()
 
 
+class AIModelListWorker(QObject):
+    finished = Signal(object, object)
+
+    def __init__(self, base_url: str, api_key: str) -> None:
+        super().__init__()
+        self.base_url = base_url
+        self.api_key = api_key
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            self.finished.emit(fetch_openai_compatible_models(self.base_url, self.api_key), None)
+        except Exception as exc:
+            self.finished.emit([], exc)
+
+
+def fetch_openai_compatible_models(base_url: str, api_key: str) -> list[str]:
+    endpoint = base_url.rstrip("/") + "/models"
+    request = urlrequest.Request(
+        endpoint,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Accept": "application/json",
+        },
+        method="GET",
+    )
+    try:
+        with urlrequest.urlopen(request, timeout=15) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urlerror.HTTPError as exc:
+        raise RuntimeError(f"HTTP {exc.code}") from exc
+    except urlerror.URLError as exc:
+        raise RuntimeError(str(exc.reason)) from exc
+    data = payload.get("data", []) if isinstance(payload, dict) else []
+    models: list[str] = []
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict) and item.get("id"):
+                models.append(str(item["id"]))
+            elif isinstance(item, str):
+                models.append(item)
+    return list(dict.fromkeys(models))
+
+
 class ImagePreviewWidget(QWidget):
     sampled = Signal(int, int, int, int, int)
 
@@ -2680,6 +2724,8 @@ class SettingsPage(QWidget):
         super().__init__()
         self.ctx = ctx
         self._loading = False
+        self._model_thread: QThread | None = None
+        self._model_worker: AIModelListWorker | None = None
         self.language = QComboBox()
         self.language.addItems(["中文", "English"])
         self.language.setCurrentText("中文" if ctx.state.language == "zh" else "English")
@@ -2754,18 +2800,35 @@ class SettingsPage(QWidget):
         if not base_url or not api_key:
             self.model_status.setText("base URL and API key required")
             return
-        try:
-            models = self.fetch_openai_compatible_models(base_url, api_key)
-        except Exception as exc:
-            self.model_status.setText(f"model list failed: {exc}")
+        if self._model_thread is not None:
+            self.model_status.setText("loading models...")
             return
+        self.model_status.setText("loading models...")
+        self._model_thread = QThread(self)
+        self._model_worker = AIModelListWorker(base_url, api_key)
+        self._model_worker.moveToThread(self._model_thread)
+        self._model_thread.started.connect(self._model_worker.run)
+        self._model_worker.finished.connect(self.finish_model_refresh)
+        self._model_worker.finished.connect(self._model_thread.quit)
+        self._model_worker.finished.connect(self._model_worker.deleteLater)
+        self._model_thread.finished.connect(self._model_thread.deleteLater)
+        self._model_thread.start()
+
+    @Slot(object, object)
+    def finish_model_refresh(self, models: object, error: object) -> None:
+        self._model_thread = None
+        self._model_worker = None
+        if error is not None:
+            self.model_status.setText(f"model list failed: {error}")
+            return
+        model_list = [str(model) for model in models] if isinstance(models, list) else []
         current = self.ai_model.currentText().strip()
         self._loading = True
         self.ai_model.clear()
-        if models:
-            self.ai_model.addItems(models)
-            self.ai_model.setCurrentText(current if current in models else models[0])
-            self.model_status.setText(f"{len(models)} model(s) available")
+        if model_list:
+            self.ai_model.addItems(model_list)
+            self.ai_model.setCurrentText(current if current in model_list else model_list[0])
+            self.model_status.setText(f"{len(model_list)} model(s) available")
         else:
             self.ai_model.setEditText(current)
             self.model_status.setText("no available models")
@@ -2773,31 +2836,7 @@ class SettingsPage(QWidget):
         self.save_ai_settings()
 
     def fetch_openai_compatible_models(self, base_url: str, api_key: str) -> list[str]:
-        endpoint = base_url.rstrip("/") + "/models"
-        request = urlrequest.Request(
-            endpoint,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Accept": "application/json",
-            },
-            method="GET",
-        )
-        try:
-            with urlrequest.urlopen(request, timeout=15) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except urlerror.HTTPError as exc:
-            raise RuntimeError(f"HTTP {exc.code}") from exc
-        except urlerror.URLError as exc:
-            raise RuntimeError(str(exc.reason)) from exc
-        data = payload.get("data", []) if isinstance(payload, dict) else []
-        models: list[str] = []
-        if isinstance(data, list):
-            for item in data:
-                if isinstance(item, dict) and item.get("id"):
-                    models.append(str(item["id"]))
-                elif isinstance(item, str):
-                    models.append(item)
-        return list(dict.fromkeys(models))
+        return fetch_openai_compatible_models(base_url, api_key)
 
     @Slot(str)
     def retranslate(self, language: str) -> None:

@@ -160,6 +160,7 @@
 - V2 录制配置已新增停止策略：`recording.stop_mode=duration_sec|sample_count`，支持 0.1 秒步进的短时长录制，也支持直接按 `target_samples` 采同步样本；数据集预览会显示预计同步样本数和 transition 文件数。
 - Settings 窗口已改为单例，重复点击只激活已有窗口；语言、AI base URL、API key、模型和启用状态会保存到本机 `~/.config/robodataset-studio/settings.json`，不写入 `collection_config.yaml`。
 - AI 模型选择已改为可编辑下拉框：点击下拉或点击 Refresh models 会请求 OpenAI-compatible `/models`，有可用模型则填入列表，没有则显示 `no available models`。
+- AI 模型列表刷新已改为后台线程执行，点击模型下拉箭头不再在 Qt 主线程同步等待网络请求；避免模型已找到但 UI 卡住，并降低 X11 clipboard selection 警告对交互的影响。
 
 ## 遇到的问题
 

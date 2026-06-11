@@ -1030,8 +1030,7 @@ def test_settings_refresh_models_populates_model_combo(monkeypatch) -> None:
     settings.ai_base.setText("https://api.example.com/v1")
     settings.ai_key.setText("secret-key")
 
-    monkeypatch.setattr(settings, "fetch_openai_compatible_models", lambda base_url, api_key: ["gpt-b", "gpt-a"])
-    settings.refresh_models()
+    settings.finish_model_refresh(["gpt-b", "gpt-a"], None)
 
     assert app is not None
     assert [settings.ai_model.itemText(index) for index in range(settings.ai_model.count())] == ["gpt-b", "gpt-a"]
@@ -1046,8 +1045,7 @@ def test_settings_refresh_models_reports_empty_list(monkeypatch) -> None:
     settings.ai_base.setText("https://api.example.com/v1")
     settings.ai_key.setText("secret-key")
 
-    monkeypatch.setattr(settings, "fetch_openai_compatible_models", lambda base_url, api_key: [])
-    settings.refresh_models()
+    settings.finish_model_refresh([], None)
 
     assert app is not None
     assert settings.model_status.text() == "no available models"
@@ -1059,20 +1057,33 @@ def test_settings_model_dropdown_refreshes_models(monkeypatch) -> None:
     settings = SettingsPage(ctx)
     settings.ai_base.setText("https://api.example.com/v1")
     settings.ai_key.setText("secret-key")
-
     called = {"count": 0}
 
-    def fake_fetch(base_url, api_key):  # type: ignore[no-untyped-def]
+    def fake_refresh() -> None:
         called["count"] += 1
-        return ["gpt-live"]
 
-    monkeypatch.setattr(settings, "fetch_openai_compatible_models", fake_fetch)
+    settings.ai_model.refresh_callback = fake_refresh
     settings.ai_model.showPopup()
     settings.ai_model.hidePopup()
 
     assert app is not None
     assert called["count"] == 1
-    assert settings.ai_model.currentText() == "gpt-live"
+
+
+def test_settings_refresh_models_starts_background_worker() -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    settings = SettingsPage(ctx)
+    settings.ai_base.setText("https://api.example.com/v1")
+    settings.ai_key.setText("secret-key")
+
+    settings.refresh_models()
+
+    assert app is not None
+    assert settings._model_thread is not None
+    assert settings.model_status.text() == "loading models..."
+    settings._model_thread.quit()
+    settings._model_thread.wait(1000)
 
 
 def test_main_window_retranslates_navigation_and_tool_windows() -> None:
