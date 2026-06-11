@@ -12,6 +12,7 @@ __pycache__/
 config_library/*.yaml
 config_library/*.yml
 !config_library/.gitkeep
+!config_library/trash_calvin_widowx_2cam.yaml
 build/
 dist/
 *.egg-info/

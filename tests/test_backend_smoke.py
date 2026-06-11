@@ -237,6 +237,18 @@ def test_config_library_roundtrip_and_delete(tmp_path) -> None:
     assert library.list_configs() == []
 
 
+def test_builtin_trash_calvin_yaml_loads_and_validates() -> None:
+    library = ConfigLibrary()
+    text = library.load_text("trash_calvin_widowx_2cam")
+    config = ConfigManager().loads(text)
+
+    assert "trash_calvin_widowx_2cam.yaml" in [path.name for path in library.list_configs()]
+    assert ConfigManager().validate(config) == []
+    assert [stream["calvin_key"] for stream in config["streams"]] == ["rgb_static", "rgb_wrist"]
+    assert config["state"]["keys"][0]["output_dim"] == 6
+    assert config["action"]["dim"] == 7
+
+
 def test_parse_ssh_target_rejects_missing_remote_path() -> None:
     with pytest.raises(ValueError, match="user@host:/remote/path"):
         parse_ssh_target("user@example.com")
