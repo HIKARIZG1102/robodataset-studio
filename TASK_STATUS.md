@@ -166,6 +166,7 @@
 - AI 模型列表刷新已改为后台线程执行，点击模型下拉箭头不再在 Qt 主线程同步等待网络请求；避免模型已找到但 UI 卡住，并降低 X11 clipboard selection 警告对交互的影响。
 - 已进一步收敛 Settings/AI 模型选择稳定性：模型下拉只展示已有列表，不再自动发网络请求；`Refresh models` 显式触发后台刷新，Settings 关闭时会取消并清理模型刷新线程，避免退出或关闭窗口时触发 segfault。
 - Config 页面已新增 AI Match 独立工作区：包含可查看/编辑的提示词窗口和独立 AI 配置预览窗口；提示词包含标准 config 模板、当前表单所有用户输入、选中 ROS topic、topic info 和数据集预览。AI 通信在后台线程执行，失败或超时只写入预览/状态，不阻塞前端；AI 结果不会自动覆盖主 YAML，需点击 Replace 才替换。
+- AI 生成 YAML 的防崩路径已补齐：`state.keys`、`streams`、`cameras`、`action` 等结构如果被模型生成成字符串或非 mapping，数据集预览会标记 malformed entry，Replace/Save 会拒绝载入，不再触发 `AttributeError`；当前 smoke tests 为 65 passed。
 
 ## 遇到的问题
 

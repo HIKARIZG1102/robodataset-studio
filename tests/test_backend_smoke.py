@@ -719,6 +719,35 @@ def test_config_page_rejects_incomplete_ai_yaml_preview(monkeypatch) -> None:
     assert warnings
 
 
+def test_config_page_rejects_malformed_state_keys_without_crashing(monkeypatch) -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    page = ConfigPage(ctx)
+    valid = ConfigManager().build_default_config(
+        ProjectState(),
+        [
+            {"name": "/camera/camera/color/image_raw", "type": "sensor_msgs/msg/Image"},
+            {"name": "/wx250s/joint_states", "type": "sensor_msgs/msg/JointState"},
+        ],
+    )
+    ctx.state.collection_config = valid
+    page.load_context_config()
+    before = page.editor.toPlainText()
+    malformed = ConfigManager().clone(valid)
+    malformed["state"]["keys"] = ["robot_obs"]
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: warnings.append(args))
+
+    preview = ConfigManager().dataset_structure_preview(malformed)
+    page.ai_preview.setPlainText(ctx.config_manager.dumps(malformed))
+    page.replace_yaml_from_ai_preview()
+
+    assert app is not None
+    assert "malformed state key entry" in preview
+    assert page.editor.toPlainText() == before
+    assert warnings
+
+
 def test_ros_recorder_writes_annotations_and_delta_actions(tmp_path) -> None:
     recorder = RosEpisodeRecorder()
     config = ConfigManager().build_default_config(ProjectState(), None)

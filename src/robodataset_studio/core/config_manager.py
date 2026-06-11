@@ -165,7 +165,14 @@ class ConfigManager:
         dataset = config.get("dataset", {})
         if dataset.get("requires_robot_obs", False):
             state_keys = config.get("state", {}).get("keys", [])
-            if not any(key.get("type") == "sensor_msgs/msg/JointState" and key.get("source_topic") for key in state_keys):
+            if not isinstance(state_keys, list):
+                errors.append("state.keys must be a list")
+                state_keys = []
+            malformed = [idx for idx, key in enumerate(state_keys) if not isinstance(key, dict)]
+            if malformed:
+                errors.append("state.keys entries must be mappings")
+            valid_state_keys = [key for key in state_keys if isinstance(key, dict)]
+            if not any(key.get("type") == "sensor_msgs/msg/JointState" and key.get("source_topic") for key in valid_state_keys):
                 errors.append("missing required JointState state key for robot_obs")
         runtime = config.get("runtime", {})
         if runtime.get("publishes_robot_commands") is True:
@@ -220,6 +227,9 @@ class ConfigManager:
             "  episode_0000000.npz",
         ]
         for stream in config.get("streams", []):
+            if not isinstance(stream, dict):
+                lines.append(f"    malformed stream entry: {type(stream).__name__}")
+                continue
             key = stream.get("calvin_key") or stream.get("name")
             if not key:
                 continue
@@ -228,7 +238,13 @@ class ConfigManager:
             dtype = stream.get("dtype", "auto")
             topic = stream.get("topic", "")
             lines.append(f"    {key}: {shape_text} {dtype} <- {topic}")
-        for state_key in config.get("state", {}).get("keys", []):
+        state_keys = config.get("state", {}).get("keys", [])
+        if not isinstance(state_keys, list):
+            state_keys = []
+        for state_key in state_keys:
+            if not isinstance(state_key, dict):
+                lines.append(f"    malformed state key entry: {type(state_key).__name__}")
+                continue
             dim = state_key.get("output_dim") or "auto"
             lines.append(f"    {state_key.get('name', 'robot_obs')}: ({dim},) float32 <- {state_key.get('source_topic', '')}")
         if config.get("dataset", {}).get("requires_actions", False):

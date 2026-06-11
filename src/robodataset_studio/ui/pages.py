@@ -2023,8 +2023,22 @@ class ConfigPage(QWidget):
         cameras = config.get("cameras")
         if not isinstance(streams, list) or not streams:
             raise ValueError("missing non-empty streams list")
+        if any(not isinstance(stream, dict) for stream in streams):
+            raise ValueError("streams entries must be mappings")
         if not isinstance(cameras, list):
             raise ValueError("missing cameras list")
+        if any(not isinstance(camera, dict) for camera in cameras):
+            raise ValueError("cameras entries must be mappings")
+        state = config.get("state", {})
+        if state is not None and not isinstance(state, dict):
+            raise ValueError("state must be a mapping")
+        state_keys = state.get("keys", []) if isinstance(state, dict) else []
+        if not isinstance(state_keys, list):
+            raise ValueError("state.keys must be a list")
+        if any(not isinstance(key, dict) for key in state_keys):
+            raise ValueError("state.keys entries must be mappings")
+        if not isinstance(config.get("action", {}), dict):
+            raise ValueError("action must be a mapping")
         errors = self.ctx.config_manager.validate(config)
         fatal = [error for error in errors if error.startswith("missing required section") or error == "missing cameras or streams"]
         if fatal:
