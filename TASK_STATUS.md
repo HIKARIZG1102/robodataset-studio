@@ -1,6 +1,6 @@
 # RoboDataset Studio Task Status
 
-更新时间：2026-06-10 16:20 Asia/Shanghai
+更新时间：2026-06-11 15:20 Asia/Shanghai
 
 ## 当前任务清单
 
@@ -78,6 +78,7 @@
 - [x] V2 自动测试已通过：`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 QT_QPA_PLATFORM=offscreen .conda-env/bin/python -m pytest -q` 为 32 passed。
 - [x] V2 真实 ROS2 采集链路已验收：订阅 `/camera/color/image_raw [sensor_msgs/msg/Image]` 和 `/wx250s/joint_states [sensor_msgs/msg/JointState]`，2 秒采集生成 19 个 CALVIN-like transition 文件和 `lang_annotations/auto_lang_ann.npy`。
 - [x] V2 真实采集输出已检查：`episode_0000000.npz` 包含 `rgb_static (720, 1280, 3) uint8`、`robot_obs (6,) float32`、`rel_actions (7,) float32`、`actions (7,) float32` 和 `episode_metadata`。
+- [x] V2 已完成一次采集 + 上传全流程验收：3 秒真实采集生成 29 个 transition，生成并校验 `upload_manifest.json`，通过 SSH/SFTP 上传到 `10.110.10.12:/home/student/robodataset_uploads/v2_full_flow_test/session_20260611_150734`，远端 manifest hash 校验通过。
 
 ## 已完成项目
 
@@ -131,6 +132,7 @@
 - 当前真实采集路径保持解耦：只订阅 Discovery/Config 选好的 image 和 JointState topic，不启动相机、GELLO、follow 或机器人控制节点；输出格式对齐原 Hermes recorder，可直接形成 CALVIN-like session 根目录。
 - V2 已在当前机器做过真实采集验收：ROS graph 中 `/camera/color/image_raw` 约 28-30 Hz，`/wx250s/joint_states` 在线；使用 V2 recorder 以 10 Hz 录制 2 秒，输出路径为 `/tmp/robodataset_v2_live_test/raw_sessions/v2_live_test/v1/session_20260610_161406/training`，生成 19 个 `episode_*.npz` transition 和语言标注文件。
 - V2 Review/validator 可读取这次真实数据；单相机测试场景下状态为 warning，原因是当前 validator 仍把 `rgb_wrist` 视为默认缺失字段。
+- V2 全流程测试已完成：`/tmp/robodataset_v2_full_flow/raw_sessions/v2_full_flow_test/v1/session_20260611_150734` 包含 29 个 transition、`collection_config.yaml` 和 `upload_manifest.json`；本地 manifest 校验 `ok=true`，文件数 31，总大小约 44.6 MB；远端可用空间约 773 GB；SSH/SFTP 上传 32 个文件后，远端按 manifest 校验 31 个文件，`missing=[]`、`mismatched=[]`、`ok=true`。
 
 ## 遇到的问题
 
@@ -149,6 +151,8 @@
 - 用户明确传感器节点控制不需要做；后续不要新增 `ros2 launch hermes_data_collection ...` 的启动/停止控制，只把它视为外部节点已启动后的数据来源参考。
 - 当前 V2 真实采集测试只使用了一个图像 topic，因此 Review 报 `missing_required: rgb_wrist`。这不是采集失败；后续需要让 validator 按当前配置里的 image streams 动态判断必需图像键，或在正式 2 相机采集时同时选择 wrist image topic。
 - 在沙箱内直接运行 `ros2 topic hz/echo` 会受到 ROS 日志目录和本地 socket 限制影响；实机检查应设置 `ROS_LOG_DIR=/tmp/ros_logs` 并在沙箱外运行，V2 启动器自身会自动 source ROS 环境。
+- 当前系统未安装 `sshpass`，因此密码认证场景下不能直接非交互运行 `rsync`；本次全流程使用 Paramiko SFTP 完成上传和远端 hash 校验。后续应在 V2 上传后端中补齐“密码认证下的 rsync/断点续传”能力，或在 UI 中明确提示安装 `sshpass` / 使用 SSH key。
+- Paramiko 当前 SFTP client 不保证提供 `statvfs`，远端空间检查需要 fallback 到 `ssh df -PB1 <path>`。
 
 ## 待完成部分
 
@@ -157,6 +161,8 @@
 
 - 后端能力：
   - Review/validator 的 required image keys 应从 `collection_config.yaml` 的 streams/cameras 动态生成，避免单相机配置被固定要求 `rgb_wrist`。
+  - Upload 后端需要把本次手工验证过的 SFTP fallback 固化到 UI：密码认证时可上传目录、展示进度、检查远端空间，并执行远端 manifest hash 校验。
+  - Upload 后端继续补 `rsync --partial` / 断点续传策略，尤其针对大数据集和中断恢复。
   - 真实监听式 ROS2 recorder 继续扩展到 action/通用数组 stream，并加入更严格同步策略。
   - 基于用户选择的 topic 完善 stream schema 映射，支持 JointState/action/Float32MultiArray 等非图像流作为记录数据来源。
   - NPZ merge 继续扩展语言 annotation 合并策略，进一步兼容 `merge_calvin_sessions.py`。
