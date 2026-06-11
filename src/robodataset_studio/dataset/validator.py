@@ -25,6 +25,7 @@ class DatasetValidator:
     def scan_npz(self, episodes_dir: Path, config: dict[str, Any] | None = None) -> list[dict[str, object]]:
         required_fields = self.required_fields(config)
         image_fields = self.image_fields(config)
+        action_dim = self.action_dim(config)
         rows: list[dict[str, object]] = []
         for path in sorted(episodes_dir.glob("episode_*.npz")):
             row: dict[str, object] = {"path": str(path), "name": path.name, "size_mb": round(path.stat().st_size / 1024 / 1024, 3)}
@@ -35,7 +36,7 @@ class DatasetValidator:
                     row["fields"] = ", ".join(fields)
                     row["missing"] = ", ".join(missing)
                     row["steps"] = self._infer_transition_steps(data, fields)
-                    issues = self.quality_issues(data, image_fields)
+                    issues = self.quality_issues(data, image_fields, action_dim)
                     row["quality"] = ", ".join(issues) if issues else "-"
                     row["status"] = "error" if any(issue.startswith("nan_or_inf") for issue in issues) else "warning" if missing or issues else "ok"
             except Exception as exc:
@@ -82,8 +83,14 @@ class DatasetValidator:
             "episodes": episodes,
         }
 
-    def quality_issues(self, data: np.lib.npyio.NpzFile, image_fields: list[str] | None = None) -> list[str]:
+    def quality_issues(
+        self,
+        data: np.lib.npyio.NpzFile,
+        image_fields: list[str] | None = None,
+        action_dim: int | None = None,
+    ) -> list[str]:
         image_fields = image_fields or IMAGE_FIELDS
+        expected_action_dim = int(action_dim or ACTION_DIM)
         issues: list[str] = []
         for field in image_fields:
             if field in data.files:
@@ -105,7 +112,7 @@ class DatasetValidator:
             if field in data.files:
                 value = data[field]
                 dim = int(value.shape[-1]) if getattr(value, "ndim", 0) else 0
-                if dim != ACTION_DIM:
+                if dim != expected_action_dim:
                     issues.append(f"action_dim:{field}={dim}")
         return issues
 
@@ -123,13 +130,14 @@ class DatasetValidator:
     def describe_npz(self, path: Path, config: dict[str, Any] | None = None) -> str:
         required_fields = self.required_fields(config)
         image_fields = self.image_fields(config)
+        action_dim = self.action_dim(config)
         lines = [f"file: {path}", f"size_mb: {path.stat().st_size / 1024 / 1024:.3f}"]
         try:
             with np.load(path, allow_pickle=True) as data:
                 missing = [f for f in required_fields if f not in data.files]
                 lines.append(f"status: {'ok' if not missing else 'warning'}")
                 lines.append(f"missing_required: {', '.join(missing) if missing else '-'}")
-                issues = self.quality_issues(data, image_fields)
+                issues = self.quality_issues(data, image_fields, action_dim)
                 lines.append(f"quality_issues: {', '.join(issues) if issues else '-'}")
                 lines.append("")
                 lines.append("fields:")
@@ -219,6 +227,27 @@ class DatasetValidator:
             if key and key not in fields:
                 fields.append(key)
         return fields or list(IMAGE_FIELDS)
+
+    def action_dim(self, config: dict[str, Any] | None = None) -> int:
+        if not config:
+            return ACTION_DIM
+        try:
+            dim = int(config.get("action", {}).get("dim") or 0)
+        except (TypeError, ValueError):
+            dim = 0
+        if dim > 0:
+            return dim
+        state_keys = config.get("state", {}).get("keys", [])
+        if isinstance(state_keys, list):
+            for key in state_keys:
+                if isinstance(key, dict):
+                    try:
+                        output_dim = int(key.get("output_dim") or 0)
+                    except (TypeError, ValueError):
+                        output_dim = 0
+                    if output_dim > 0:
+                        return output_dim
+        return ACTION_DIM
 
     def describe_hdf5(self, path: Path) -> str:
         if not path.exists():

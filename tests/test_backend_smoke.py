@@ -4,6 +4,7 @@ import json
 import os
 import time
 
+import h5py
 import numpy as np
 import pytest
 from PySide6.QtCore import Qt
@@ -12,6 +13,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from robodataset_studio.dataset.merge_plan import CalvinMergePlanner, CalvinSessionMerger
 from robodataset_studio.dataset.recorder import MockRecorder
 from robodataset_studio.dataset.validator import DatasetValidator
+from robodataset_studio.dataset.converter import Hdf5Converter
 from robodataset_studio.core.config_library import ConfigLibrary
 from robodataset_studio.core.config_manager import ConfigManager
 from robodataset_studio.core.models import ProjectState
@@ -247,6 +249,62 @@ def test_dataset_validator_quality_report_counts_status_issues_and_marks() -> No
     assert report["by_status"] == {"ok": 1, "warning": 1, "error": 0}
     assert report["issue_counts"] == {"action_dim:actions=6": 1, "black_frame:rgb_static": 1}
     assert report["mark_counts"] == {"bad": 1, "unmarked": 1}
+
+
+def test_dataset_validator_action_dim_follows_config(tmp_path) -> None:
+    training = tmp_path / "training"
+    training.mkdir()
+    path = training / "episode_0000000.npz"
+    np.savez_compressed(
+        path,
+        rgb_static=np.full((8, 8, 3), 128, dtype=np.uint8),
+        robot_obs=np.zeros((9,), dtype=np.float32),
+        rel_actions=np.zeros((9,), dtype=np.float32),
+        actions=np.zeros((9,), dtype=np.float32),
+    )
+    config = {
+        "streams": [
+            {
+                "name": "rgb_static",
+                "calvin_key": "rgb_static",
+                "message_type": "sensor_msgs/msg/Image",
+            }
+        ],
+        "dataset": {"requires_robot_obs": True, "requires_actions": True},
+        "state": {"keys": [{"name": "robot_obs", "output_dim": 9}]},
+        "action": {"dim": 9},
+    }
+
+    rows = DatasetValidator().scan_npz(training, config)
+    detail = DatasetValidator().describe_npz(path, config)
+
+    assert rows[0]["status"] == "ok"
+    assert "action_dim" not in str(rows[0]["quality"])
+    assert "quality_issues: -" in detail
+
+
+def test_hdf5_converter_stores_config_metadata_as_attrs(tmp_path) -> None:
+    training = tmp_path / "training"
+    training.mkdir()
+    np.savez_compressed(
+        training / "episode_0000000.npz",
+        rgb_static=np.full((8, 8, 3), 128, dtype=np.uint8),
+        robot_obs=np.zeros((9,), dtype=np.float32),
+        rel_actions=np.zeros((9,), dtype=np.float32),
+        actions=np.zeros((9,), dtype=np.float32),
+        environment_info=np.array(json.dumps({"description": "lab bench"})),
+        collection_config=np.array(json.dumps({"project": {"name": "task"}})),
+    )
+
+    output = Hdf5Converter().convert(training, tmp_path / "calvin.hdf5", config_yaml="project:\n  name: task\n")
+
+    with h5py.File(output, "r") as h5:
+        episode = h5["episodes"]["0000000"]
+        assert "environment_info" not in episode
+        assert "collection_config" not in episode
+        assert json.loads(episode.attrs["environment_info"])["description"] == "lab bench"
+        assert json.loads(episode.attrs["collection_config"])["project"]["name"] == "task"
+        assert "rgb_static" in episode
 
 
 def test_upload_manifest_roundtrip(tmp_path) -> None:

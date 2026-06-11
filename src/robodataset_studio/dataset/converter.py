@@ -6,6 +6,8 @@ from pathlib import Path
 import h5py
 import numpy as np
 
+from robodataset_studio.dataset.validator import METADATA_FIELDS
+
 
 class Hdf5Converter:
     def convert(self, episodes_dir: Path, output_path: Path, config_yaml: str = "") -> Path:
@@ -17,8 +19,8 @@ class Hdf5Converter:
                 group = episodes_group.create_group(f"{idx:07d}")
                 with np.load(episode_path, allow_pickle=True) as data:
                     for field in data.files:
-                        if field.endswith("_metadata") or field == "episode_metadata":
-                            group.attrs[field] = str(data[field])
+                        if field in METADATA_FIELDS or field.endswith("_metadata"):
+                            group.attrs[field] = self._metadata_attr(data[field])
                         else:
                             group.create_dataset(field, data=data[field], compression="gzip")
             meta = h5.create_group("metadata")
@@ -29,3 +31,10 @@ class Hdf5Converter:
             streams.attrs["descriptor_json"] = json.dumps({"source": "robodataset_studio"}, ensure_ascii=False)
         return output_path
 
+    def _metadata_attr(self, value: np.ndarray) -> str:
+        try:
+            if getattr(value, "shape", ()) == ():
+                return str(value.item())
+        except Exception:
+            pass
+        return str(value)
