@@ -556,6 +556,36 @@ def test_recording_page_preflight_reports_missing_configured_topics() -> None:
     page.close()
 
 
+def test_recording_page_preflight_falls_back_to_topic_info() -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    ctx.state.collection_config = ConfigManager().build_default_config(
+        ProjectState(),
+        [
+            {"name": "/camera/camera/color/image_raw", "type": "sensor_msgs/msg/Image"},
+            {"name": "/wx250s/joint_states", "type": "sensor_msgs/msg/JointState"},
+        ],
+    )
+    ctx.discovery.discover = lambda: {  # type: ignore[method-assign]
+        "nodes": [],
+        "topics": [{"name": "/camera/camera/color/image_raw", "type": "sensor_msgs/msg/Image"}],
+        "services": [],
+    }
+    ctx.discovery.topic_info = lambda topic: {  # type: ignore[method-assign]
+        "name": topic,
+        "type": "sensor_msgs/msg/JointState",
+        "publisher_count": 1,
+        "subscription_count": 0,
+    } if topic == "/wx250s/joint_states" else None
+    page = RecordingPage(ctx)
+
+    errors = page.preflight_recording()
+
+    assert app is not None
+    assert errors == []
+    page.close()
+
+
 def test_recording_page_preflight_requires_joint_state_key() -> None:
     app = QApplication.instance() or QApplication([])
     ctx = AppContext()

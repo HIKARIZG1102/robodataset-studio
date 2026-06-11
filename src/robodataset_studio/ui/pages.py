@@ -1393,10 +1393,9 @@ class RecordingPage(QWidget):
             if not topic:
                 errors.append(f"{name}: image stream has no topic")
                 continue
-            actual_type = topic_types.get(topic)
-            if actual_type != "sensor_msgs/msg/Image":
-                hint = f" current type is {actual_type}" if actual_type else " topic is not currently published"
-                errors.append(f"{name}: {topic} is not an active sensor_msgs/msg/Image topic;{hint}")
+            error = self._topic_preflight_error(name, topic, "sensor_msgs/msg/Image", topic_types)
+            if error:
+                errors.append(error)
         state_keys = [
             state_key
             for state_key in config.get("state", {}).get("keys", [])
@@ -1406,11 +1405,36 @@ class RecordingPage(QWidget):
             errors.append("configuration has no JointState state key for robot_obs")
         for state_key in state_keys:
             topic = str(state_key.get("source_topic") or "")
-            actual_type = topic_types.get(topic)
-            if actual_type != "sensor_msgs/msg/JointState":
-                hint = f" current type is {actual_type}" if actual_type else " topic is not currently published"
-                errors.append(f"{state_key.get('name', 'robot_obs')}: {topic} is not an active sensor_msgs/msg/JointState topic;{hint}")
+            error = self._topic_preflight_error(
+                str(state_key.get("name", "robot_obs")),
+                topic,
+                "sensor_msgs/msg/JointState",
+                topic_types,
+            )
+            if error:
+                errors.append(error)
         return errors
+
+    def _topic_preflight_error(
+        self,
+        label: str,
+        topic: str,
+        expected_type: str,
+        topic_types: dict[str, str],
+    ) -> str | None:
+        actual_type = topic_types.get(topic)
+        publisher_count: int | None = None
+        if actual_type is None:
+            info = self.ctx.discovery.topic_info(topic)
+            if info is not None:
+                actual_type = str(info.get("type") or "")
+                publisher_count = int(info.get("publisher_count") or 0)
+        if actual_type != expected_type:
+            hint = f" current type is {actual_type}" if actual_type else " topic is not currently published"
+            return f"{label}: {topic} is not an active {expected_type} topic;{hint}"
+        if publisher_count == 0:
+            return f"{label}: {topic} has type {expected_type} but no active publishers"
+        return None
 
     @Slot(object, object)
     def finish_ros_recording(self, result: object, error: object) -> None:

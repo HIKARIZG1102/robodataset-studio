@@ -47,9 +47,29 @@ class RosGraphDiscovery:
                 topics.append({"name": line, "type": ""})
         return topics
 
+    def topic_info(self, topic_name: str) -> dict[str, str | int] | None:
+        lines = self._run(["ros2", "topic", "info", topic_name])
+        if not lines:
+            return None
+        info: dict[str, str | int] = {"name": topic_name, "type": "", "publisher_count": 0, "subscription_count": 0}
+        for line in lines:
+            if line.startswith("Type:"):
+                info["type"] = line.split(":", 1)[1].strip()
+            elif line.startswith("Publisher count:"):
+                info["publisher_count"] = self._parse_count(line)
+            elif line.startswith("Subscription count:"):
+                info["subscription_count"] = self._parse_count(line)
+        return info
+
     def _without_daemon(self, command: list[str]) -> list[str]:
         if len(command) >= 3 and command[:2] == ["ros2", "topic"] and "--no-daemon" not in command:
             return [*command, "--no-daemon"]
         if len(command) >= 3 and command[:2] == ["ros2", "node"] and "--no-daemon" not in command:
             return [*command, "--no-daemon"]
         return command
+
+    def _parse_count(self, line: str) -> int:
+        try:
+            return int(line.split(":", 1)[1].strip())
+        except Exception:
+            return 0
