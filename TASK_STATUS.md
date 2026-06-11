@@ -1,6 +1,6 @@
 # RoboDataset Studio Task Status
 
-更新时间：2026-06-11 19:48 Asia/Shanghai
+更新时间：2026-06-11 20:04 Asia/Shanghai
 
 ## 当前任务清单
 
@@ -99,6 +99,8 @@
 - [x] Config 页面新增数据集结构预览，可在保存/采集前看到将生成的 `training/episode_*.npz` 字段和 `lang_annotations/auto_lang_ann.npy`。
 - [x] Config 页面补齐所有可留空 YAML 字段的前端输入：Project、Environment、Robot、Instruction、Recording/Image 分 tab 编辑，空值仍保留为空字符串或空列表。
 - [x] 修复 topic 自动分类误判：只有 `sensor_msgs/msg/JointState` 或明确 `/joint_states` topic 才生成 `robot_obs`，`/wx250s/commands/joint_group` 等命令 topic 不再被当成状态采集源。
+- [x] 修复 Discovery 勾选状态与 Config 页面不同步的问题：取消所有勾选后，Config 的“已选 ROS2 topics”会立即显示 `(none)`。
+- [x] 生成配置现在必须显式勾选 topic，不再在未勾选时自动使用当前选中 node 的 publishers，避免“什么都没勾却生成旧 topic/节点 topic”的误解。
 
 ## 已完成项目
 

@@ -823,6 +823,51 @@ def test_discovery_topic_selection_uses_checkboxes() -> None:
 
     assert app is not None
     assert page._selected_topics() == [ctx.last_graph["topics"][1]]
+    assert ctx.state.selected_streams == [ctx.last_graph["topics"][1]]
+
+
+def test_discovery_unchecking_topics_clears_open_config_selected_topic_view() -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    discovery = DiscoveryPage(ctx)
+    config_page = ConfigPage(ctx)
+    ctx.last_graph = {
+        "nodes": [],
+        "topics": [{"name": "/camera/side/image_raw", "type": "sensor_msgs/msg/Image"}],
+        "services": [],
+    }
+    discovery.populate_graph(ctx.last_graph)
+
+    discovery.topics.item(0, 0).setCheckState(Qt.Checked)
+    assert "/camera/side/image_raw" in config_page.selected_topics_view.toPlainText()
+
+    discovery.topics.item(0, 0).setCheckState(Qt.Unchecked)
+
+    assert app is not None
+    assert ctx.state.selected_streams == []
+    assert config_page.selected_topics_view.toPlainText() == "(none)"
+
+
+def test_discovery_generate_requires_explicit_checked_topic(monkeypatch) -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    page = DiscoveryPage(ctx)
+    ctx.state.selected_nodes = ["/camera/camera"]
+    ctx.last_graph = {
+        "nodes": [{"name": "/camera/camera", "type": ""}],
+        "topics": [{"name": "/camera/camera/color/image_raw", "type": "sensor_msgs/msg/Image"}],
+        "services": [],
+    }
+    page.populate_graph(ctx.last_graph)
+    warnings = []
+    monkeypatch.setattr("robodataset_studio.ui.pages.QMessageBox.warning", lambda *args, **kwargs: warnings.append(args))
+    ctx.discovery.node_publishers = lambda node: [{"name": "/should/not/use", "type": "sensor_msgs/msg/Image"}]  # type: ignore[method-assign]
+
+    page.generate_config()
+
+    assert app is not None
+    assert warnings
+    assert ctx.state.collection_config == {}
 
 
 def test_discovery_generated_config_refreshes_open_config_page(monkeypatch) -> None:

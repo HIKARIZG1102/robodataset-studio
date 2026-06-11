@@ -398,6 +398,7 @@ class DiscoveryPage(QWidget):
         self.topics.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.topics.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.topics.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.topics.itemChanged.connect(self.update_selected_topics)
         refresh = QPushButton("Discover ROS2 Graph")
         refresh.clicked.connect(self.refresh)
         generate = QPushButton("Generate Listener Config From Selected Topics")
@@ -416,6 +417,7 @@ class DiscoveryPage(QWidget):
         self.populate_graph(graph)
 
     def populate_graph(self, graph: dict[str, list[dict[str, str]]]) -> None:
+        self.topics.blockSignals(True)
         self.nodes.clear()
         for node in graph.get("nodes", []):
             self.nodes.addItem(node["name"])
@@ -426,23 +428,18 @@ class DiscoveryPage(QWidget):
             self.topics.setItem(row, 1, self._text_item(topic.get("name", "")))
             self.topics.setItem(row, 2, self._text_item(topic.get("type", "")))
         self.topics.resizeRowsToContents()
+        self.topics.blockSignals(False)
+        self.update_selected_topics()
         if graph.get("nodes"):
             self.nodes.setCurrentRow(0)
 
     def generate_config(self) -> None:
-        selected_topics = self._selected_topics()
-        topics = selected_topics
-        source = "selected topic(s)"
-        if not topics:
-            node = self.ctx.state.selected_nodes[0] if self.ctx.state.selected_nodes else ""
-            if node:
-                topics = self.ctx.discovery.node_publishers(node)
-                source = f"publisher topic(s) from node {node}"
+        topics = self._selected_topics()
         if not topics:
             QMessageBox.warning(
                 self,
                 "Config",
-                "Select one or more topics, or select a node that has publishers, before generating collection_config.yaml.",
+                "Select one or more topics before generating collection_config.yaml.",
             )
             return
         self.ctx.state.selected_streams = topics
@@ -450,7 +447,7 @@ class DiscoveryPage(QWidget):
         QMessageBox.information(
             self,
             "Config",
-            f"listener-only collection_config.yaml generated from {len(topics)} {source}. Open Config page to edit/save.",
+            f"listener-only collection_config.yaml generated from {len(topics)} selected topic(s). Open Config page to edit/save.",
         )
 
     def select_node(self, row: int) -> None:
@@ -478,6 +475,10 @@ class DiscoveryPage(QWidget):
             if item is not None and item.checkState() == Qt.Checked:
                 rows.append(row)
         return [topics[row] for row in rows if 0 <= row < len(topics)]
+
+    def update_selected_topics(self) -> None:
+        self.ctx.state.selected_streams = self._selected_topics()
+        self.ctx.config_changed.emit()
 
 
 class InspectorPage(QWidget):
@@ -1178,6 +1179,7 @@ class ConfigPage(QWidget):
 
     @Slot()
     def load_context_config(self) -> None:
+        self.refresh_selected_topics_view()
         if not self.ctx.state.collection_config:
             return
         self.editor.setPlainText(self.ctx.config_manager.dumps(self.ctx.state.collection_config))
