@@ -138,6 +138,46 @@ def test_ros_recorder_sample_count_controls_transition_count(tmp_path) -> None:
         assert data["rel_actions"].shape == (3,)
 
 
+def test_ros_recorder_persists_config_metadata_fields(tmp_path) -> None:
+    recorder = RosEpisodeRecorder()
+    config = ConfigManager().build_default_config(
+        ProjectState(),
+        [
+            {"name": "/camera/front/image_raw", "type": "sensor_msgs/msg/Image"},
+            {"name": "/joint_states", "type": "sensor_msgs/msg/JointState"},
+        ],
+    )
+    config["project"]["name"] = "metadata_task"
+    config["environment"]["type"] = "physical"
+    config["environment"]["description"] = "bench scene with a yellow block"
+    config["instruction"]["text"] = "pick up the yellow block"
+    config["recording"]["stop_mode"] = "sample_count"
+    config["recording"]["target_samples"] = 3
+    config["recording"]["min_episode_steps"] = 3
+
+    def capture_streams(image_streams, joint_streams, steps, sample_rate):  # type: ignore[no-untyped-def]
+        frames = {"rgb_static": [np.full((4, 4, 3), index, dtype=np.uint8) for index in range(steps)]}
+        states = {"robot_obs": [np.full((3,), index, dtype=np.float32) for index in range(steps)]}
+        return frames, states
+
+    recorder._capture_streams = capture_streams  # type: ignore[method-assign]
+    recorder.record_episode(config, tmp_path / "training", 0)
+
+    session_metadata = json.loads((tmp_path / "session_metadata.json").read_text(encoding="utf-8"))
+    assert session_metadata["environment"]["description"] == "bench scene with a yellow block"
+    assert session_metadata["instruction"]["text"] == "pick up the yellow block"
+    assert session_metadata["episode_range"] == [0, 1]
+    with np.load(tmp_path / "training" / "episode_0000000.npz", allow_pickle=True) as data:
+        assert {"episode_metadata", "collection_config", "task_info", "environment_info", "robot_info", "stream_schema"}.issubset(data.files)
+        environment = json.loads(str(data["environment_info"].item()))
+        collection_config = json.loads(str(data["collection_config"].item()))
+        assert environment["description"] == "bench scene with a yellow block"
+        assert collection_config["project"]["name"] == "metadata_task"
+        detail = DatasetValidator().describe_npz(tmp_path / "training" / "episode_0000000.npz", config)
+    assert "environment_info: bench scene with a yellow block" in detail
+    assert "stream_schema: 1 stream(s)" in detail
+
+
 def test_dataset_validator_flags_black_frame_quality_issue(tmp_path) -> None:
     training = tmp_path / "training"
     training.mkdir()
@@ -700,6 +740,27 @@ def test_config_page_refresh_from_selected_topics_updates_yaml_and_preview() -> 
     assert config["dataset"]["requires_robot_obs"] is False
     assert "/camera/front/image_raw" in page.selected_topics_view.toPlainText()
     assert "episode_0000000.npz" in page.dataset_preview.toPlainText()
+
+
+def test_dataset_preview_reports_metadata_and_minimum_transition_samples() -> None:
+    config = ConfigManager().build_default_config(
+        ProjectState(),
+        [
+            {"name": "/camera/front/image_raw", "type": "sensor_msgs/msg/Image"},
+            {"name": "/joint_states", "type": "sensor_msgs/msg/JointState"},
+        ],
+    )
+    config["recording"]["sample_rate_hz"] = 1
+    config["recording"]["episode_duration_sec"] = 0.1
+    config["recording"]["min_episode_steps"] = 1
+
+    preview = ConfigManager().dataset_structure_preview(config)
+
+    assert "0 synchronized samples" not in preview
+    assert "2 synchronized samples" in preview
+    assert "about 1 transition files" in preview
+    assert "environment_info: json" in preview
+    assert "collection_config: json" in preview
 
 
 def test_config_page_saves_loads_and_manages_yaml_library(tmp_path) -> None:

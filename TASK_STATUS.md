@@ -168,6 +168,7 @@
 - Config 页面已新增 AI Match 独立工作区：包含可查看/编辑的提示词窗口和独立 AI 配置预览窗口；提示词包含标准 config 模板、当前表单所有用户输入、选中 ROS topic、topic info 和数据集预览。AI 通信在后台线程执行，失败或超时只写入预览/状态，不阻塞前端；AI 结果不会自动覆盖主 YAML，需点击 Replace 才替换。
 - AI 生成 YAML 的防崩路径已补齐：`state.keys`、`streams`、`cameras`、`action` 等结构如果被模型生成成字符串或非 mapping，数据集预览会标记 malformed entry，Replace/Save 会拒绝载入，不再触发 `AttributeError`；当前 smoke tests 为 65 passed。
 - Project 页和 Config 页的项目名、版本、operator、environment 已绑定到同一份 `ProjectState`：任一页面保存/应用后另一页同步；首次默认值保持空白，上次填写内容会保存到本机 user settings，下次启动自动恢复，不显示在 Settings 页面，也不写入 Git；当前 smoke tests 为 67 passed。
+- 数据集输出已跟随配置补齐 metadata 落盘：每个 transition NPZ 除 CALVIN 兼容核心键外，会写入 `episode_metadata`、`collection_config`、`task_info`、`environment_info`、`robot_info`、`stream_schema` JSON 字段；session 根目录额外写 `session_metadata.json`。数据集预览已显示这些 metadata 字段，并修正短时长低 Hz 时 `0 synchronized samples` 的误导显示；当前 smoke tests 为 69 passed。
 
 ## 遇到的问题
 

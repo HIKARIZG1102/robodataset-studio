@@ -96,7 +96,15 @@ class RosEpisodeRecorder:
             arrays["rel_actions"] = actions
             arrays["actions"] = actions.copy()
 
-        metadata = {
+        metadata = self._metadata_payload(config, actual_steps, image_streams, joint_streams, warnings)
+        metadata["steps"] = actual_steps
+        metadata["captured_streams"] = list(arrays)
+        metadata["state_topics"] = [stream.get("source_topic", "") for stream in joint_streams]
+        metadata["warnings"] = warnings
+        metadata["source"] = "ros2_listener"
+        metadata["mock"] = False
+        metadata["runtime"] = config.get("runtime", {})
+        legacy_metadata = {
             "mock": False,
             "steps": actual_steps,
             "source": "ros2_listener",
@@ -110,6 +118,7 @@ class RosEpisodeRecorder:
             "dataset": config.get("dataset", {}),
             "warnings": warnings,
         }
+        metadata.setdefault("legacy", legacy_metadata)
         episodes_dir.mkdir(parents=True, exist_ok=True)
         transition_count = max(actual_steps - 1, 0) if requires_actions else actual_steps
         if transition_count <= 0:
@@ -124,11 +133,119 @@ class RosEpisodeRecorder:
             if requires_actions:
                 transition["rel_actions"] = arrays["rel_actions"][offset]
                 transition["actions"] = arrays["actions"][offset]
-            transition["episode_metadata"] = np.array(json.dumps({**metadata, "transition_index": offset}, ensure_ascii=False))
+            transition.update(self._metadata_npz_fields(metadata, offset))
             path = episodes_dir / f"episode_{episode_index + offset:07d}.npz"
             self._write_npz_atomic(path, transition)
+        self._write_session_metadata(config, episodes_dir, metadata, episode_index, episode_index + transition_count - 1)
         self._write_language_annotations(config, episodes_dir, episode_index, episode_index + transition_count - 1)
         return RosEpisodeResult(path=first_path, steps=transition_count, streams=list(arrays), warnings=warnings)
+
+    def _metadata_payload(
+        self,
+        config: dict,
+        actual_steps: int,
+        image_streams: list[dict],
+        joint_streams: list[dict],
+        warnings: list[str],
+    ) -> dict:
+        project = self._json_clean(config.get("project", {}))
+        environment = self._json_clean(config.get("environment", {}))
+        robot = self._json_clean(config.get("robot", {}))
+        instruction = self._json_clean(config.get("instruction", {}))
+        dataset = self._json_clean(config.get("dataset", {}))
+        recording = self._json_clean(config.get("recording", {}))
+        action = self._json_clean(config.get("action", {}))
+        state = self._json_clean(config.get("state", {}))
+        streams = self._json_clean(config.get("streams", []))
+        cameras = self._json_clean(config.get("cameras", []))
+        return {
+            "schema": "robodataset_studio.calvin_metadata.v1",
+            "project": project,
+            "environment": environment,
+            "robot": robot,
+            "instruction": instruction,
+            "dataset": dataset,
+            "recording": recording,
+            "action": action,
+            "state": state,
+            "streams": streams,
+            "cameras": cameras,
+            "selected": {
+                "image_topics": [stream.get("topic", "") for stream in image_streams],
+                "state_topics": [stream.get("source_topic", "") for stream in joint_streams],
+            },
+            "stats": {
+                "synchronized_samples": int(actual_steps),
+                "warnings": list(warnings),
+            },
+            "collection_config": self._json_clean(config),
+        }
+
+    def _metadata_npz_fields(self, metadata: dict, transition_index: int) -> dict[str, np.ndarray]:
+        payload = {**metadata, "transition_index": int(transition_index)}
+        task_info = {
+            "project": metadata.get("project", {}),
+            "instruction": metadata.get("instruction", {}),
+        }
+        stream_schema = {
+            "streams": metadata.get("streams", []),
+            "cameras": metadata.get("cameras", []),
+            "state": metadata.get("state", {}),
+            "action": metadata.get("action", {}),
+        }
+        return {
+            "episode_metadata": self._json_array(payload),
+            "collection_config": self._json_array(metadata.get("collection_config", {})),
+            "task_info": self._json_array(task_info),
+            "environment_info": self._json_array(metadata.get("environment", {})),
+            "robot_info": self._json_array(metadata.get("robot", {})),
+            "stream_schema": self._json_array(stream_schema),
+        }
+
+    def _write_session_metadata(
+        self,
+        config: dict,
+        episodes_dir: Path,
+        metadata: dict,
+        start_idx: int,
+        end_idx: int,
+    ) -> None:
+        session_root = episodes_dir.parent
+        payload = {
+            **metadata,
+            "episode_range": [int(start_idx), int(end_idx)],
+            "split": config.get("dataset", {}).get("split", "training"),
+        }
+        path = session_root / "session_metadata.json"
+        tmp_path = path.with_suffix(".json.tmp")
+        with tmp_path.open("w", encoding="utf-8") as file:
+            file.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+            file.flush()
+            os.fsync(file.fileno())
+        tmp_path.replace(path)
+
+    def _json_array(self, value: object) -> np.ndarray:
+        return np.array(json.dumps(self._json_clean(value), ensure_ascii=False))
+
+    def _json_clean(self, value: object) -> object:
+        if isinstance(value, dict):
+            cleaned: dict[str, object] = {}
+            for key, item in value.items():
+                if callable(item):
+                    continue
+                cleaned[str(key)] = self._json_clean(item)
+            return cleaned
+        if isinstance(value, (list, tuple)):
+            return [self._json_clean(item) for item in value]
+        if isinstance(value, np.ndarray):
+            return value.tolist()
+        if isinstance(value, np.generic):
+            return value.item()
+        if isinstance(value, Path):
+            return str(value)
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        return str(value)
 
     def _derive_actions(self, config: dict, robot_obs: np.ndarray, actual_steps: int) -> np.ndarray:
         action_cfg = config.get("action", {})

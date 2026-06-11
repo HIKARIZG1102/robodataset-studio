@@ -211,14 +211,19 @@ class ConfigManager:
         recording = config.get("recording", {})
         sample_rate = float(recording.get("sample_rate_hz") or 10)
         stop_mode = str(recording.get("stop_mode") or "duration_sec")
+        min_steps = int(recording.get("min_episode_steps") or 1)
+        requires_actions = bool(config.get("dataset", {}).get("requires_actions", False))
+        minimum_samples = max(min_steps, 2 if requires_actions else 1)
         if stop_mode == "sample_count":
-            sample_count = int(recording.get("target_samples") or 0)
+            requested_samples = int(recording.get("target_samples") or 0)
+            sample_count = max(requested_samples, minimum_samples) if requested_samples > 0 else 0
             estimate = f"recording target: {sample_count} synchronized samples"
         else:
             duration = float(recording.get("episode_duration_sec") or 0)
-            sample_count = int(round(sample_rate * duration)) if duration > 0 else 0
+            requested_samples = int(round(sample_rate * duration)) if duration > 0 else 0
+            sample_count = max(requested_samples, minimum_samples) if duration > 0 else 0
             estimate = f"recording target: {duration:g}s x {sample_rate:g}Hz ~= {sample_count} synchronized samples"
-        if config.get("dataset", {}).get("requires_actions", False) and sample_count > 0:
+        if requires_actions and sample_count > 0:
             estimate += f", about {max(sample_count - 1, 0)} transition files"
         lines = [
             "collection_config.yaml",
@@ -254,6 +259,18 @@ class ConfigManager:
         if config.get("dataset", {}).get("write_language_annotations", True):
             ann = config.get("dataset", {}).get("language_annotation_file", "lang_annotations/auto_lang_ann.npy")
             lines.append(f"  {ann}")
+        lines.extend(
+            [
+                "  session_metadata.json",
+                "  metadata fields in each episode:",
+                "    episode_metadata: json",
+                "    collection_config: json",
+                "    task_info: json",
+                "    environment_info: json",
+                "    robot_info: json",
+                "    stream_schema: json",
+            ]
+        )
         return "\n".join(lines)
 
     def _image_role_and_key(self, topic_name: str, idx: int, static_assigned: bool) -> tuple[str, str, str, str, list[int], bool]:

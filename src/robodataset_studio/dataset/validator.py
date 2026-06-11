@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,14 @@ import numpy as np
 REQUIRED_FIELDS = ["rgb_static", "rgb_wrist", "robot_obs", "rel_actions", "actions"]
 IMAGE_FIELDS = ["rgb_static", "rgb_wrist"]
 ACTION_DIM = 7
+METADATA_FIELDS = {
+    "episode_metadata",
+    "collection_config",
+    "task_info",
+    "environment_info",
+    "robot_info",
+    "stream_schema",
+}
 
 
 class DatasetValidator:
@@ -129,10 +138,50 @@ class DatasetValidator:
                     dtype = getattr(value, "dtype", "-")
                     shape = getattr(value, "shape", ())
                     lines.append(f"  {field}: shape={tuple(shape)} dtype={dtype}")
+                metadata = self.metadata_summary(data)
+                if metadata:
+                    lines.append("")
+                    lines.append("metadata:")
+                    lines.extend(f"  {line}" for line in metadata)
         except Exception as exc:
             lines.append("status: error")
             lines.append(f"error: {exc}")
         return "\n".join(lines)
+
+    def metadata_summary(self, data: np.lib.npyio.NpzFile) -> list[str]:
+        lines: list[str] = []
+        for field in [name for name in data.files if name in METADATA_FIELDS]:
+            parsed = self._load_json_scalar(data[field])
+            if not isinstance(parsed, dict):
+                continue
+            if field == "environment_info":
+                desc = str(parsed.get("description") or parsed.get("type") or "").strip()
+                if desc:
+                    lines.append(f"environment_info: {desc[:180]}")
+            elif field == "task_info":
+                instruction = parsed.get("instruction", {})
+                text = str(instruction.get("text", "") if isinstance(instruction, dict) else "").strip()
+                if text:
+                    lines.append(f"task_info: {text[:180]}")
+            elif field == "stream_schema":
+                streams = parsed.get("streams", [])
+                if isinstance(streams, list):
+                    lines.append(f"stream_schema: {len(streams)} stream(s)")
+            elif field == "robot_info":
+                name = str(parsed.get("name") or parsed.get("model") or "").strip()
+                if name:
+                    lines.append(f"robot_info: {name[:180]}")
+            elif field == "collection_config":
+                sections = ", ".join(sorted(str(key) for key in parsed.keys()))
+                lines.append(f"collection_config: {sections[:180]}")
+        return lines
+
+    def _load_json_scalar(self, value: np.ndarray) -> Any:
+        try:
+            text = str(value.item() if getattr(value, "shape", ()) == () else value)
+            return json.loads(text)
+        except Exception:
+            return None
 
     def required_fields(self, config: dict[str, Any] | None = None) -> list[str]:
         if not config:
