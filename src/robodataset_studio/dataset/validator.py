@@ -13,18 +13,20 @@ ACTION_DIM = 7
 
 
 class DatasetValidator:
-    def scan_npz(self, episodes_dir: Path) -> list[dict[str, object]]:
+    def scan_npz(self, episodes_dir: Path, config: dict[str, Any] | None = None) -> list[dict[str, object]]:
+        required_fields = self.required_fields(config)
+        image_fields = self.image_fields(config)
         rows: list[dict[str, object]] = []
         for path in sorted(episodes_dir.glob("episode_*.npz")):
             row: dict[str, object] = {"path": str(path), "name": path.name, "size_mb": round(path.stat().st_size / 1024 / 1024, 3)}
             try:
                 with np.load(path, allow_pickle=True) as data:
                     fields = list(data.files)
-                    missing = [f for f in REQUIRED_FIELDS if f not in fields]
+                    missing = [f for f in required_fields if f not in fields]
                     row["fields"] = ", ".join(fields)
                     row["missing"] = ", ".join(missing)
                     row["steps"] = self._infer_transition_steps(data, fields)
-                    issues = self.quality_issues(data)
+                    issues = self.quality_issues(data, image_fields)
                     row["quality"] = ", ".join(issues) if issues else "-"
                     row["status"] = "error" if any(issue.startswith("nan_or_inf") for issue in issues) else "warning" if missing or issues else "ok"
             except Exception as exc:
@@ -71,9 +73,10 @@ class DatasetValidator:
             "episodes": episodes,
         }
 
-    def quality_issues(self, data: np.lib.npyio.NpzFile) -> list[str]:
+    def quality_issues(self, data: np.lib.npyio.NpzFile, image_fields: list[str] | None = None) -> list[str]:
+        image_fields = image_fields or IMAGE_FIELDS
         issues: list[str] = []
-        for field in IMAGE_FIELDS:
+        for field in image_fields:
             if field in data.files:
                 image = data[field]
                 if not np.isfinite(image).all():
@@ -108,14 +111,16 @@ class DatasetValidator:
             return 1
         return int(shape[0]) if shape else 1
 
-    def describe_npz(self, path: Path) -> str:
+    def describe_npz(self, path: Path, config: dict[str, Any] | None = None) -> str:
+        required_fields = self.required_fields(config)
+        image_fields = self.image_fields(config)
         lines = [f"file: {path}", f"size_mb: {path.stat().st_size / 1024 / 1024:.3f}"]
         try:
             with np.load(path, allow_pickle=True) as data:
-                missing = [f for f in REQUIRED_FIELDS if f not in data.files]
+                missing = [f for f in required_fields if f not in data.files]
                 lines.append(f"status: {'ok' if not missing else 'warning'}")
                 lines.append(f"missing_required: {', '.join(missing) if missing else '-'}")
-                issues = self.quality_issues(data)
+                issues = self.quality_issues(data, image_fields)
                 lines.append(f"quality_issues: {', '.join(issues) if issues else '-'}")
                 lines.append("")
                 lines.append("fields:")
@@ -128,6 +133,32 @@ class DatasetValidator:
             lines.append("status: error")
             lines.append(f"error: {exc}")
         return "\n".join(lines)
+
+    def required_fields(self, config: dict[str, Any] | None = None) -> list[str]:
+        if not config:
+            return list(REQUIRED_FIELDS)
+        fields = ["robot_obs", "rel_actions", "actions"]
+        for stream in config.get("streams", []):
+            if stream.get("message_type") != "sensor_msgs/msg/Image":
+                continue
+            if stream.get("required", True) is False:
+                continue
+            key = str(stream.get("calvin_key") or stream.get("name") or "").strip()
+            if key and key not in fields:
+                fields.insert(max(len(fields) - 3, 0), key)
+        return fields
+
+    def image_fields(self, config: dict[str, Any] | None = None) -> list[str]:
+        if not config:
+            return list(IMAGE_FIELDS)
+        fields = []
+        for stream in config.get("streams", []):
+            if stream.get("message_type") != "sensor_msgs/msg/Image":
+                continue
+            key = str(stream.get("calvin_key") or stream.get("name") or "").strip()
+            if key and key not in fields:
+                fields.append(key)
+        return fields or list(IMAGE_FIELDS)
 
     def describe_hdf5(self, path: Path) -> str:
         if not path.exists():

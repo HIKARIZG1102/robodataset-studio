@@ -18,14 +18,17 @@ class ConfigManager:
         joint_topic = next((t["name"] for t in joint_candidates), None)
         action_topic = next((t["name"] for t in topics if "action" in t.get("name", "").lower()), None)
         gripper_topic = next((t["name"] for t in topics if "gripper" in t.get("name", "").lower()), None)
-        if not topics:
+        if not joint_topic:
             joint_topic = "/wx250s/joint_states"
 
         cameras = []
         streams = []
+        used_image_names: set[str] = set()
+        static_assigned = False
         for idx, topic in enumerate(image_topics[:4]):
-            role = "wrist" if "wrist" in topic["name"].lower() else "base" if idx == 0 else "external"
-            name = "rgb_wrist" if role == "wrist" else "rgb_static" if idx == 0 else f"rgb_{idx}"
+            role, name, static_assigned = self._image_role_and_key(topic["name"], idx, static_assigned)
+            name = self._unique_stream_name(name, used_image_names)
+            used_image_names.add(name)
             camera = {
                 "name": name,
                 "role": role,
@@ -48,7 +51,7 @@ class ConfigManager:
                 "encoding": "rgb8",
                 "training_role": "observation",
                 "calvin_key": name,
-                "required": idx == 0,
+                "required": True,
                 "preview": {"renderer": "image_rgb"},
             })
 
@@ -87,7 +90,7 @@ class ConfigManager:
                     "encoding": "rgb8",
                     "training_role": "observation",
                     "calvin_key": cam["name"],
-                    "required": cam["name"] == "rgb_static",
+                    "required": True,
                     "preview": {"renderer": "image_rgb"},
                 }
                 for cam in cameras
@@ -224,6 +227,9 @@ class ConfigManager:
                 errors.append(f"missing required section: {key}")
         if not config.get("cameras") and not config.get("streams"):
             errors.append("missing cameras or streams")
+        state_keys = config.get("state", {}).get("keys", [])
+        if not any(key.get("type") == "sensor_msgs/msg/JointState" and key.get("source_topic") for key in state_keys):
+            errors.append("missing required JointState state key for robot_obs")
         runtime = config.get("runtime", {})
         if runtime.get("publishes_robot_commands") is True:
             errors.append("runtime.publishes_robot_commands must stay false for listener-only recording")
@@ -235,3 +241,21 @@ class ConfigManager:
 
     def clone(self, config: dict[str, Any]) -> dict[str, Any]:
         return deepcopy(config)
+
+    def _image_role_and_key(self, topic_name: str, idx: int, static_assigned: bool) -> tuple[str, str, bool]:
+        lowered = topic_name.lower()
+        if "wrist" in lowered or "hand" in lowered or "ee" in lowered:
+            return "wrist", "rgb_wrist", static_assigned
+        if "overhead" in lowered or "top" in lowered or "ceiling" in lowered:
+            return "overhead", "rgb_overhead", static_assigned
+        if not static_assigned:
+            return "base", "rgb_static", True
+        return "external", f"rgb_{idx}", static_assigned
+
+    def _unique_stream_name(self, name: str, used: set[str]) -> str:
+        if name not in used:
+            return name
+        suffix = 2
+        while f"{name}_{suffix}" in used:
+            suffix += 1
+        return f"{name}_{suffix}"

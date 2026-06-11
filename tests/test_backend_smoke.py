@@ -96,6 +96,36 @@ def test_dataset_validator_flags_black_frame_quality_issue(tmp_path) -> None:
     assert "quality_issues: black_frame:rgb_static" in detail
 
 
+def test_dataset_validator_uses_config_required_image_keys(tmp_path) -> None:
+    training = tmp_path / "training"
+    training.mkdir()
+    path = training / "episode_0000000.npz"
+    np.savez_compressed(
+        path,
+        rgb_static=np.full((224, 224, 3), 128, dtype=np.uint8),
+        robot_obs=np.zeros((6,), dtype=np.float32),
+        rel_actions=np.zeros((7,), dtype=np.float32),
+        actions=np.zeros((7,), dtype=np.float32),
+    )
+    config = {
+        "streams": [
+            {
+                "name": "rgb_static",
+                "calvin_key": "rgb_static",
+                "message_type": "sensor_msgs/msg/Image",
+                "required": True,
+            }
+        ]
+    }
+
+    rows = DatasetValidator().scan_npz(training, config)
+    detail = DatasetValidator().describe_npz(path, config)
+
+    assert rows[0]["status"] == "ok"
+    assert rows[0]["missing"] == ""
+    assert "missing_required: -" in detail
+
+
 def test_dataset_validator_quality_report_counts_status_issues_and_marks() -> None:
     rows = [
         {"name": "episode_0000000.npz", "path": "a", "status": "ok", "quality": "-", "missing": ""},
@@ -342,7 +372,34 @@ def test_default_config_is_listener_only_without_action_topic() -> None:
     assert config["dataset"]["language_annotation_file"] == "lang_annotations/auto_lang_ann.npy"
     assert config["environment"]["type"] == "physical"
     assert config["action"]["source"] == "derived_from_robot_obs"
+    assert config["state"]["keys"][0]["source_topic"] == "/joint_states"
     assert ConfigManager().validate(config) == []
+
+
+def test_default_config_maps_pi05_camera_topics_to_static_and_wrist() -> None:
+    topics = [
+        {"name": "/camera/camera_wrist/color/image_raw", "type": "sensor_msgs/msg/Image"},
+        {"name": "/camera/camera/color/image_raw", "type": "sensor_msgs/msg/Image"},
+        {"name": "/wx250s/joint_states", "type": "sensor_msgs/msg/JointState"},
+    ]
+
+    config = ConfigManager().build_default_config(ProjectState(), topics)
+    streams = {stream["name"]: stream for stream in config["streams"]}
+
+    assert streams["rgb_static"]["topic"] == "/camera/camera/color/image_raw"
+    assert streams["rgb_static"]["calvin_key"] == "rgb_static"
+    assert streams["rgb_wrist"]["topic"] == "/camera/camera_wrist/color/image_raw"
+    assert streams["rgb_wrist"]["calvin_key"] == "rgb_wrist"
+    assert config["state"]["keys"][0]["source_topic"] == "/wx250s/joint_states"
+
+
+def test_config_validation_requires_joint_state_key() -> None:
+    config = ConfigManager().build_default_config(ProjectState(), [])
+    config["state"]["keys"] = []
+
+    errors = ConfigManager().validate(config)
+
+    assert "missing required JointState state key for robot_obs" in errors
 
 
 def test_config_page_quick_form_updates_yaml() -> None:
@@ -471,6 +528,53 @@ def test_recording_page_limits_capture_monitors_to_four() -> None:
         "/camera/2/image_raw",
         "/camera/3/image_raw",
     ]
+    page.close()
+
+
+def test_recording_page_preflight_reports_missing_configured_topics() -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    ctx.state.collection_config = ConfigManager().build_default_config(
+        ProjectState(),
+        [
+            {"name": "/camera/missing/color/image_raw", "type": "sensor_msgs/msg/Image"},
+            {"name": "/wx250s/joint_states", "type": "sensor_msgs/msg/JointState"},
+        ],
+    )
+    ctx.discovery.discover = lambda: {  # type: ignore[method-assign]
+        "nodes": [],
+        "topics": [{"name": "/wx250s/joint_states", "type": "sensor_msgs/msg/JointState"}],
+        "services": [],
+    }
+    page = RecordingPage(ctx)
+
+    errors = page.preflight_recording()
+
+    assert app is not None
+    assert any("/camera/missing/color/image_raw" in error for error in errors)
+    assert not any("/wx250s/joint_states" in error for error in errors)
+    page.close()
+
+
+def test_recording_page_preflight_requires_joint_state_key() -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    ctx.state.collection_config = ConfigManager().build_default_config(
+        ProjectState(),
+        [{"name": "/camera/camera/color/image_raw", "type": "sensor_msgs/msg/Image"}],
+    )
+    ctx.state.collection_config["state"]["keys"] = []
+    ctx.discovery.discover = lambda: {  # type: ignore[method-assign]
+        "nodes": [],
+        "topics": [{"name": "/camera/camera/color/image_raw", "type": "sensor_msgs/msg/Image"}],
+        "services": [],
+    }
+    page = RecordingPage(ctx)
+
+    errors = page.preflight_recording()
+
+    assert app is not None
+    assert "configuration has no JointState state key for robot_obs" in errors
     page.close()
 
 

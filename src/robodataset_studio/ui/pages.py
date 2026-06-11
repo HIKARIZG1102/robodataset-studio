@@ -1348,6 +1348,12 @@ class RecordingPage(QWidget):
         if not self.ctx.has_config():
             QMessageBox.warning(self, "Missing config", "Generate and save collection_config.yaml before recording.")
             return
+        errors = self.preflight_recording()
+        if errors:
+            message = "Recording preflight failed:\n" + "\n".join(f"- {error}" for error in errors)
+            QMessageBox.warning(self, "Recording preflight failed", message)
+            self.log.appendPlainText(message)
+            return
         if self._recording_thread is not None:
             QMessageBox.warning(self, "Recording active", "A ROS2 recording is already running.")
             return
@@ -1367,6 +1373,44 @@ class RecordingPage(QWidget):
         self._recording_thread.finished.connect(self._recording_thread.deleteLater)
         self._recording_thread.start()
         self.log.appendPlainText("started ROS2 recording in background")
+
+    def preflight_recording(self) -> list[str]:
+        config = self.ctx.state.collection_config
+        graph = self.ctx.discovery.discover()
+        self.ctx.last_graph = graph
+        topic_types = {topic.get("name", ""): topic.get("type", "") for topic in graph.get("topics", [])}
+        errors: list[str] = []
+        image_streams = [
+            stream
+            for stream in config.get("streams", [])
+            if stream.get("source") == "ros2_topic" and stream.get("message_type") == "sensor_msgs/msg/Image"
+        ]
+        if not image_streams:
+            errors.append("configuration has no sensor_msgs/msg/Image streams")
+        for stream in image_streams:
+            topic = str(stream.get("topic") or "")
+            name = str(stream.get("name") or stream.get("calvin_key") or "image")
+            if not topic:
+                errors.append(f"{name}: image stream has no topic")
+                continue
+            actual_type = topic_types.get(topic)
+            if actual_type != "sensor_msgs/msg/Image":
+                hint = f" current type is {actual_type}" if actual_type else " topic is not currently published"
+                errors.append(f"{name}: {topic} is not an active sensor_msgs/msg/Image topic;{hint}")
+        state_keys = [
+            state_key
+            for state_key in config.get("state", {}).get("keys", [])
+            if state_key.get("type") == "sensor_msgs/msg/JointState" and state_key.get("source_topic")
+        ]
+        if not state_keys:
+            errors.append("configuration has no JointState state key for robot_obs")
+        for state_key in state_keys:
+            topic = str(state_key.get("source_topic") or "")
+            actual_type = topic_types.get(topic)
+            if actual_type != "sensor_msgs/msg/JointState":
+                hint = f" current type is {actual_type}" if actual_type else " topic is not currently published"
+                errors.append(f"{state_key.get('name', 'robot_obs')}: {topic} is not an active sensor_msgs/msg/JointState topic;{hint}")
+        return errors
 
     @Slot(object, object)
     def finish_ros_recording(self, result: object, error: object) -> None:
@@ -1600,7 +1644,7 @@ class ReviewPage(QWidget):
         if not self.ctx.has_raw_episodes():
             QMessageBox.warning(self, "No episodes", "Record at least one episode before review.")
             return
-        rows = self.ctx.validator.scan_npz(self.ctx.state.episodes_dir)
+        rows = self.ctx.validator.scan_npz(self.ctx.state.episodes_dir, self.ctx.state.collection_config)
         self._review_rows = rows
         self.apply_review_filter()
         self.update_quality_summary()
@@ -1678,7 +1722,7 @@ class ReviewPage(QWidget):
     def show_episode_detail(self, current_row: int, _current_col: int, _previous_row: int, _previous_col: int) -> None:
         if current_row < 0 or current_row >= len(self._episode_paths):
             return
-        self.detail.setPlainText(self.ctx.validator.describe_npz(self._episode_paths[current_row]))
+        self.detail.setPlainText(self.ctx.validator.describe_npz(self._episode_paths[current_row], self.ctx.state.collection_config))
 
     def inspect_hdf5(self) -> None:
         candidates = [path for path in self.ctx.state.conversion_outputs if path.exists()]
