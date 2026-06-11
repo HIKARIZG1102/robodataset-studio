@@ -12,11 +12,11 @@ def now_id(prefix: str) -> str:
 
 @dataclass
 class ProjectState:
-    task_name: str = "catch_the_satellite"
-    version: str = "v1"
-    dataset_root: Path = Path.home() / "robot_datasets" / "robodataset_studio"
+    task_name: str = ""
+    version: str = ""
+    dataset_root: Path = Path("")
     operator: str = ""
-    environment: str = "physical"
+    environment: str = ""
     current_session: str = field(default_factory=lambda: now_id("session"))
     selected_nodes: list[str] = field(default_factory=list)
     selected_streams: list[dict[str, Any]] = field(default_factory=list)
@@ -30,12 +30,24 @@ class ProjectState:
     ai_api_key: str = ""
 
     @property
+    def effective_task_name(self) -> str:
+        return self.task_name or "untitled_project"
+
+    @property
+    def effective_version(self) -> str:
+        return self.version or "v1"
+
+    @property
+    def effective_dataset_root(self) -> Path:
+        return self.dataset_root if str(self.dataset_root) not in {"", "."} else Path.home() / "robot_datasets" / "robodataset_studio"
+
+    @property
     def raw_session_dir(self) -> Path:
         return (
-            self.dataset_root
+            self.effective_dataset_root
             / "raw_sessions"
-            / self.task_name
-            / self.version
+            / self.effective_task_name
+            / self.effective_version
             / self.current_session
         )
 
@@ -45,7 +57,7 @@ class ProjectState:
 
     @property
     def merged_dir(self) -> Path:
-        return self.dataset_root / "merged_calvin" / self.task_name / self.version / "training"
+        return self.effective_dataset_root / "merged_calvin" / self.effective_task_name / self.effective_version / "training"
 
 
 @dataclass

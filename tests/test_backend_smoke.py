@@ -19,7 +19,7 @@ from robodataset_studio.core.settings_store import UserSettingsStore
 from robodataset_studio.ros.episode_recorder import RosEpisodeRecorder, joint_state_to_robot_obs
 from robodataset_studio.ros.graph_discovery import RosGraphDiscovery
 from robodataset_studio.ros.image_conversion import image_bytes_to_rgb
-from robodataset_studio.ui.pages import AppContext, ConfigPage, DiscoveryPage, InspectorPage, RecordingPage, ReviewPage, SettingsPage, UploadPage
+from robodataset_studio.ui.pages import AppContext, ConfigPage, DiscoveryPage, InspectorPage, ProjectPage, RecordingPage, ReviewPage, SettingsPage, UploadPage
 from robodataset_studio.ui.main_window import MainWindow
 from robodataset_studio.upload.manifest import UploadManifest
 from robodataset_studio.upload.ssh_uploader import SshConnection, SshUploader, parse_ssh_target
@@ -449,7 +449,7 @@ def test_default_config_is_listener_only_without_action_topic() -> None:
     assert config["robot"]["control"]["enabled"] is False
     assert config["dataset"]["calvin_like_transition_files"] is True
     assert config["dataset"]["language_annotation_file"] == "lang_annotations/auto_lang_ann.npy"
-    assert config["environment"]["type"] == "physical"
+    assert config["environment"]["type"] == ""
     assert config["environment"]["description"] == ""
     assert config["instruction"]["text"] == ""
     assert config["instruction"]["success_condition"] == ""
@@ -644,6 +644,43 @@ def test_config_page_quick_form_updates_yaml() -> None:
     assert config["cameras"][0]["resize"] == {"enabled": True, "width": 256, "height": 256}
     assert config["streams"][0]["preview"]["crop"]["width"] == 320
     assert "ai_validation" not in config
+
+
+def test_project_fields_sync_between_project_and_config_pages() -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    project_page = ProjectPage(ctx)
+    config_page = ConfigPage(ctx)
+
+    assert ctx.state.task_name == ""
+    assert ctx.state.version == ""
+    assert project_page.task.text() == ""
+    assert config_page.project_name.text() == ""
+    project_page.task.setText("sync_task")
+    project_page.version.setText("v3")
+    project_page.operator.setText("operator_a")
+    project_page.root.setText("/tmp/robot_data")
+    project_page.save()
+
+    assert app is not None
+    assert ctx.state.task_name == "sync_task"
+    assert ctx.state.version == "v3"
+    assert config_page.project_name.text() == "sync_task"
+    assert config_page.project_version.text() == "v3"
+
+    config_page.project_name.setText("config_task")
+    config_page.project_version.setText("v4")
+    config_page.project_operator.setText("operator_b")
+    config_page.project_environment.setText("lab")
+    config_page.sync_project_to_state()
+
+    assert ctx.state.task_name == "config_task"
+    assert ctx.state.version == "v4"
+    assert ctx.state.operator == "operator_b"
+    assert ctx.state.environment == "lab"
+    assert project_page.task.text() == "config_task"
+    assert project_page.version.text() == "v4"
+    assert project_page.operator.text() == "operator_b"
 
 
 def test_config_page_refresh_from_selected_topics_updates_yaml_and_preview() -> None:
@@ -1220,6 +1257,30 @@ def test_settings_are_persisted_to_user_settings_store(tmp_path) -> None:
     assert restored.state.ai_base_url == "https://api.example.com/v1"
     assert restored.state.ai_model == "gpt-4.1"
     assert restored.state.ai_api_key == "secret-key"
+
+
+def test_project_fields_are_restored_from_user_settings_store(tmp_path) -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    ctx.settings_store = UserSettingsStore(tmp_path / "settings.json")
+    ctx.set_project_fields(
+        task_name="saved_task",
+        version="v7",
+        operator="operator_c",
+        environment="physical",
+        dataset_root="/tmp/saved_root",
+    )
+
+    restored = AppContext()
+    restored.settings_store = UserSettingsStore(tmp_path / "settings.json")
+    restored.load_user_settings()
+
+    assert app is not None
+    assert restored.state.task_name == "saved_task"
+    assert restored.state.version == "v7"
+    assert restored.state.operator == "operator_c"
+    assert restored.state.environment == "physical"
+    assert str(restored.state.dataset_root) == "/tmp/saved_root"
 
 
 def test_settings_refresh_models_populates_model_combo(monkeypatch) -> None:

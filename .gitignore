@@ -11,8 +11,13 @@ __pycache__/
 .ruff_cache/
 config_library/*.yaml
 config_library/*.yml
+config_library/*.json
 !config_library/.gitkeep
 !config_library/trash_calvin_widowx_2cam.yaml
+settings.json
+settings.local.json
+.config/
+.cache/
 build/
 dist/
 *.egg-info/

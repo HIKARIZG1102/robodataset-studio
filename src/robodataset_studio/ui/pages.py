@@ -62,6 +62,7 @@ from robodataset_studio.upload.ssh_profiles import SshProfile, SshProfileStore
 class AppContext(QObject):
     language_changed = Signal(str)
     config_changed = Signal()
+    project_changed = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -104,6 +105,14 @@ class AppContext(QObject):
     def load_user_settings(self) -> None:
         settings = self.settings_store.load()
         self.state.language = "en" if settings.get("language") == "en" else "zh"
+        project = settings.get("project", {})
+        if isinstance(project, dict):
+            self.state.task_name = str(project.get("task_name", ""))
+            self.state.version = str(project.get("version", ""))
+            self.state.operator = str(project.get("operator", ""))
+            self.state.environment = str(project.get("environment", ""))
+            dataset_root = str(project.get("dataset_root", ""))
+            self.state.dataset_root = Path(dataset_root).expanduser() if dataset_root else Path("")
         ai = settings.get("ai", {})
         if isinstance(ai, dict):
             self.state.ai_enabled = bool(ai.get("enabled", False))
@@ -114,6 +123,13 @@ class AppContext(QObject):
     def save_user_settings(self) -> None:
         settings = {
             "language": self.state.language,
+            "project": {
+                "task_name": self.state.task_name,
+                "version": self.state.version,
+                "operator": self.state.operator,
+                "environment": self.state.environment,
+                "dataset_root": str(self.state.dataset_root) if str(self.state.dataset_root) not in {"", "."} else "",
+            },
             "ai": {
                 "enabled": self.state.ai_enabled,
                 "base_url": self.state.ai_base_url,
@@ -131,6 +147,37 @@ class AppContext(QObject):
     def set_collection_config(self, config: dict) -> None:
         self.state.collection_config = config
         self.config_changed.emit()
+
+    def set_project_fields(
+        self,
+        *,
+        task_name: str | None = None,
+        version: str | None = None,
+        operator: str | None = None,
+        environment: str | None = None,
+        dataset_root: Path | str | None = None,
+    ) -> None:
+        changed = False
+        if task_name is not None and self.state.task_name != task_name:
+            self.state.task_name = task_name
+            changed = True
+        if version is not None and self.state.version != version:
+            self.state.version = version
+            changed = True
+        if operator is not None and self.state.operator != operator:
+            self.state.operator = operator
+            changed = True
+        if environment is not None and self.state.environment != environment:
+            self.state.environment = environment
+            changed = True
+        if dataset_root is not None:
+            path = Path(str(dataset_root)).expanduser() if str(dataset_root) else Path("")
+            if self.state.dataset_root != path:
+                self.state.dataset_root = path
+                changed = True
+        if changed:
+            self.save_user_settings()
+            self.project_changed.emit()
 
 
 class ModelComboBox(QComboBox):
@@ -607,7 +654,7 @@ class ProjectPage(QWidget):
         self.task = QLineEdit(ctx.state.task_name)
         self.version = QLineEdit(ctx.state.version)
         self.operator = QLineEdit(ctx.state.operator)
-        self.root = QLineEdit(str(ctx.state.dataset_root))
+        self.root = QLineEdit(self._root_text())
         browse = QPushButton("Browse")
         browse.clicked.connect(self.browse_root)
         preset = QPushButton("Use gello_widowx preset")
@@ -633,7 +680,8 @@ class ProjectPage(QWidget):
         layout.addWidget(save)
         layout.addWidget(QLabel("Project paths"))
         layout.addWidget(self.summary)
-        self.save()
+        self.ctx.project_changed.connect(self.load_from_state)
+        self.update_summary()
 
     def browse_root(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Dataset root", self.root.text())
@@ -646,10 +694,30 @@ class ProjectPage(QWidget):
         self.version.setText("v1")
 
     def save(self) -> None:
-        self.ctx.state.task_name = self.task.text().strip() or "task"
-        self.ctx.state.version = self.version.text().strip() or "v1"
-        self.ctx.state.operator = self.operator.text().strip()
-        self.ctx.state.dataset_root = Path(self.root.text()).expanduser()
+        self.ctx.set_project_fields(
+            task_name=self.task.text().strip(),
+            version=self.version.text().strip(),
+            operator=self.operator.text().strip(),
+            dataset_root=self.root.text().strip(),
+        )
+        self.update_summary()
+
+    def load_from_state(self) -> None:
+        if self.task.text() != self.ctx.state.task_name:
+            self.task.setText(self.ctx.state.task_name)
+        if self.version.text() != self.ctx.state.version:
+            self.version.setText(self.ctx.state.version)
+        if self.operator.text() != self.ctx.state.operator:
+            self.operator.setText(self.ctx.state.operator)
+        root_text = self._root_text()
+        if self.root.text() != root_text:
+            self.root.setText(root_text)
+        self.update_summary()
+
+    def _root_text(self) -> str:
+        return str(self.ctx.state.dataset_root) if str(self.ctx.state.dataset_root) not in {"", "."} else ""
+
+    def update_summary(self) -> None:
         self.summary.setPlainText(
             f"session: {self.ctx.state.current_session}\n"
             f"raw session: {self.ctx.state.raw_session_dir}\n"
@@ -1447,11 +1515,15 @@ class ConfigPage(QWidget):
         layout.addWidget(QLabel("collection_config.yaml"))
         layout.addWidget(self.editor)
         self.ctx.config_changed.connect(self.load_context_config)
+        self.ctx.project_changed.connect(self.sync_project_from_state)
+        for field in [self.project_name, self.project_version, self.project_operator, self.project_environment]:
+            field.editingFinished.connect(self.sync_project_to_state)
         self.refresh_config_library()
         self.refresh_selected_topics_view()
         if self.ctx.state.collection_config:
             self.load_context_config()
         else:
+            self.sync_project_from_state()
             self.status.setText("No config loaded. Use Discovery to generate a config from selected topics or a selected node.")
 
     def _project_form(self) -> QWidget:
@@ -1536,6 +1608,7 @@ class ConfigPage(QWidget):
         if not topics:
             QMessageBox.warning(self, "Config", "No selected ROS2 topics. Select topics in Discovery first.")
             return
+        self.sync_project_to_state()
         existing = self.ctx.config_manager.loads(self.editor.toPlainText())
         updated = self.ctx.config_manager.build_default_config(self.ctx.state, topics)
         self._copy_user_editable_fields(existing, updated)
@@ -1619,6 +1692,7 @@ class ConfigPage(QWidget):
         self.resize_width.setValue(int(resize.get("width", 224) or 0))
         self.resize_height.setValue(int(resize.get("height", 224) or 0))
         self._updating_form = False
+        self.sync_project_to_state()
         self.refresh_selected_topics_view()
         self.refresh_dataset_preview(config)
 
@@ -1639,6 +1713,7 @@ class ConfigPage(QWidget):
         self.status.setText("Applied quick form settings to YAML.")
 
     def _apply_form_values(self, config: dict) -> None:
+        self.sync_project_to_state()
         project = config.setdefault("project", {})
         project["name"] = self.project_name.text().strip()
         project["version"] = self.project_version.text().strip()
@@ -1670,6 +1745,9 @@ class ConfigPage(QWidget):
         recording["episode_duration_sec"] = float(self.episode_duration.value())
         recording["target_samples"] = int(self.target_samples.value())
         config.pop("ai_validation", None)
+        dataset = config.setdefault("dataset", {})
+        dataset["cache_root"] = str(self.ctx.state.raw_session_dir)
+        dataset["merged_root"] = str(self.ctx.state.merged_dir)
 
         crop = {
             "enabled": self.crop_enabled.isChecked(),
@@ -1690,6 +1768,26 @@ class ConfigPage(QWidget):
             preview = stream.setdefault("preview", {})
             preview["crop"] = dict(crop)
             preview["resize"] = dict(resize)
+
+    def sync_project_from_state(self) -> None:
+        if self._updating_form:
+            return
+        self._updating_form = True
+        self.project_name.setText(self.ctx.state.task_name)
+        self.project_version.setText(self.ctx.state.version)
+        self.project_operator.setText(self.ctx.state.operator)
+        self.project_environment.setText(self.ctx.state.environment)
+        self._updating_form = False
+
+    def sync_project_to_state(self) -> None:
+        if self._updating_form:
+            return
+        self.ctx.set_project_fields(
+            task_name=self.project_name.text().strip(),
+            version=self.project_version.text().strip(),
+            operator=self.project_operator.text().strip(),
+            environment=self.project_environment.text().strip(),
+        )
 
     def _split_csv(self, text: str) -> list[str]:
         return [part.strip() for part in text.split(",") if part.strip()]
