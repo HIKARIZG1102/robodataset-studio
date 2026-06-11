@@ -366,7 +366,8 @@ def test_default_config_is_listener_only_without_action_topic() -> None:
         "publishes_robot_commands": False,
     }
     assert config["robot"]["action_topic"] is None
-    assert config["robot"]["joint_count"] == 6
+    assert config["robot"]["joint_count"] == 0
+    assert config["robot"]["joint_order"] == []
     assert config["robot"]["control"]["enabled"] is False
     assert config["dataset"]["calvin_like_transition_files"] is True
     assert config["dataset"]["language_annotation_file"] == "lang_annotations/auto_lang_ann.npy"
@@ -376,7 +377,9 @@ def test_default_config_is_listener_only_without_action_topic() -> None:
     assert config["instruction"]["success_condition"] == ""
     assert "ai_validation" not in config
     assert config["action"]["source"] == "derived_from_robot_obs"
+    assert config["action"]["dim"] == 0
     assert config["state"]["keys"][0]["source_topic"] == "/joint_states"
+    assert config["state"]["keys"][0]["output_dim"] == 0
     assert ConfigManager().validate(config) == []
 
 
@@ -418,6 +421,25 @@ def test_default_config_keeps_camera_only_selection_camera_only() -> None:
     assert streams["depth_1"]["modality"] == "depth"
     assert streams["depth_1"]["calvin_key"] is None
     assert "ai_validation" not in config
+
+
+def test_default_config_supports_more_than_four_image_tracks() -> None:
+    topics = [
+        {"name": f"/camera/cam_{index}/color/image_raw", "type": "sensor_msgs/msg/Image"}
+        for index in range(6)
+    ]
+
+    config = ConfigManager().build_default_config(ProjectState(), topics)
+
+    assert len(config["streams"]) == 6
+    assert [stream["calvin_key"] for stream in config["streams"]] == [
+        "rgb_static",
+        "rgb_1",
+        "rgb_2",
+        "rgb_3",
+        "rgb_4",
+        "rgb_5",
+    ]
 
 
 def test_config_validation_requires_joint_state_key() -> None:
@@ -490,19 +512,23 @@ def test_config_page_quick_form_updates_yaml() -> None:
     assert "ai_validation" not in config
 
 
-def test_config_page_new_config_keeps_streams_empty_without_selection() -> None:
+def test_config_page_refresh_from_selected_topics_updates_yaml_and_preview() -> None:
     app = QApplication.instance() or QApplication([])
     ctx = AppContext()
+    ctx.state.selected_streams = [{"name": "/camera/front/image_raw", "type": "sensor_msgs/msg/Image"}]
     page = ConfigPage(ctx)
+    page.instruction.setText("move the cube")
 
-    page.new_config()
+    page.refresh_config_from_selected_topics()
     config = ctx.config_manager.loads(page.editor.toPlainText())
 
     assert app is not None
-    assert config["streams"] == []
-    assert config["cameras"] == []
+    assert config["streams"][0]["topic"] == "/camera/front/image_raw"
     assert config["state"]["keys"] == []
+    assert config["instruction"]["text"] == "move the cube"
     assert config["dataset"]["requires_robot_obs"] is False
+    assert "/camera/front/image_raw" in page.selected_topics_view.toPlainText()
+    assert "episode_0000000.npz" in page.dataset_preview.toPlainText()
 
 
 def test_ros_recorder_writes_annotations_and_delta_actions(tmp_path) -> None:
@@ -518,8 +544,8 @@ def test_ros_recorder_writes_annotations_and_delta_actions(tmp_path) -> None:
         dtype=np.float32,
     )
     actions = recorder._derive_actions(config, robot_obs, 3)
-    assert actions.shape == (3, 7)
-    assert np.allclose(actions[0], [0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0])
+    assert actions.shape == (3, 6)
+    assert np.allclose(actions[0], [0.1, 0.0, 0.0, 0.0, 0.0, 0.0])
 
     recorder._write_language_annotations(config, tmp_path / "training", 5, 7)
     annotations = np.load(tmp_path / "training" / "lang_annotations" / "auto_lang_ann.npy", allow_pickle=True).item()
@@ -768,6 +794,8 @@ def test_discovery_generated_config_refreshes_open_config_page(monkeypatch) -> N
     assert app is not None
     assert "rgb_static" in config_page.editor.toPlainText()
     assert "/camera/camera/color/image_raw" in config_page.editor.toPlainText()
+    assert "/camera/camera/color/image_raw" in config_page.selected_topics_view.toPlainText()
+    assert "episode_0000000.npz" in config_page.dataset_preview.toPlainText()
     assert "No config loaded" not in config_page.status.text()
 
 

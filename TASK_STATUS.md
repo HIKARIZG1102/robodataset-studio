@@ -1,6 +1,6 @@
 # RoboDataset Studio Task Status
 
-更新时间：2026-06-11 18:08 Asia/Shanghai
+更新时间：2026-06-11 19:34 Asia/Shanghai
 
 ## 当前任务清单
 
@@ -92,6 +92,11 @@
 - [x] `collection_config.yaml` 不再写入 API/base URL/key/model 等 AI 连接字段；旧 YAML 中的 `ai_validation` 加载时会被清理。
 - [x] Config 页面移除 AI URL/model/key 输入，AI Match 只从 Settings 读取全局 AI 设置；Settings 中 API key 仅保存在当前运行内存，不写入项目 YAML。
 - [x] 未填写 instruction、environment description、success condition 等用户输入项时，生成配置保持空字符串，不再自动填入 `catch the satellite` 或默认场景描述。
+- [x] Config 页面删除配置库相关重复按钮和默认配置按钮，改为显示“已选 ROS2 topics”、刷新配置、应用表单、校验、保存和数据集结构预览。
+- [x] `collection_config.yaml` 生成进一步收窄为纯采集/数据集 schema：不再生成 `genesis`、默认 pi0.5 相机、默认 WidowX 关节名称或固定 6/7 维动作字段。
+- [x] 支持任意数量图像轨道：按已选 image topics 生成 `rgb_static`、`rgb_wrist`、`rgb_overhead` 或扩展 `rgb_1/rgb_2/...`，不再限制 4 路。
+- [x] JointState/action 维度改为泛化派生：配置中 `robot_obs` 和 `rel_actions/actions` 维度可为 `auto`，录制时按实际 JointState 长度推导，便于不同机械臂和 Hugging Face 数据集扩展。
+- [x] Config 页面新增数据集结构预览，可在保存/采集前看到将生成的 `training/episode_*.npz` 字段和 `lang_annotations/auto_lang_ann.npy`。
 
 ## 已完成项目
 

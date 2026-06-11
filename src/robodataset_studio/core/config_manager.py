@@ -12,7 +12,6 @@ from .models import ProjectState
 
 class ConfigManager:
     def build_default_config(self, state: ProjectState, topics: list[dict[str, str]] | None = None) -> dict[str, Any]:
-        use_template_defaults = topics is None
         topics = topics or []
         image_topics = [t for t in topics if "Image" in t.get("type", "") or "image" in t.get("name", "").lower()]
         joint_candidates = [t for t in topics if "JointState" in t.get("type", "") or "joint" in t.get("name", "").lower()]
@@ -23,7 +22,7 @@ class ConfigManager:
         streams = []
         used_image_names: set[str] = set()
         static_assigned = False
-        for idx, topic in enumerate(image_topics[:4]):
+        for idx, topic in enumerate(image_topics):
             role, name, modality, encoding, shape, static_assigned = self._image_role_and_key(topic["name"], idx, static_assigned)
             name = self._unique_stream_name(name, used_image_names)
             used_image_names.add(name)
@@ -53,47 +52,6 @@ class ConfigManager:
                 "preview": {"renderer": "image_depth" if modality == "depth" else "image_rgb"},
             })
 
-        if use_template_defaults and not topics:
-            cameras = [
-                {
-                    "name": "rgb_static",
-                    "role": "base",
-                    "topic": "/camera/camera_side/color/image_raw",
-                    "type": "sensor_msgs/msg/Image",
-                    "encoding": "rgb8",
-                    "fps_target": 10,
-                    "crop": {"enabled": False, "x": 0, "y": 0, "width": 640, "height": 480},
-                    "resize": {"enabled": True, "width": 224, "height": 224},
-                },
-                {
-                    "name": "rgb_wrist",
-                    "role": "wrist",
-                    "topic": "/camera/camera_wrist/color/image_raw",
-                    "type": "sensor_msgs/msg/Image",
-                    "encoding": "rgb8",
-                    "fps_target": 10,
-                    "crop": {"enabled": False, "x": 0, "y": 0, "width": 848, "height": 480},
-                    "resize": {"enabled": True, "width": 224, "height": 224},
-                },
-            ]
-            streams = [
-                {
-                    "name": cam["name"],
-                    "modality": "rgb",
-                    "source": "ros2_topic",
-                    "topic": cam["topic"],
-                    "message_type": cam["type"],
-                    "dtype": "uint8",
-                    "shape": [480, 640, 3],
-                    "encoding": "rgb8",
-                    "training_role": "observation",
-                    "calvin_key": cam["name"],
-                    "required": True,
-                    "preview": {"renderer": "image_rgb"},
-                }
-                for cam in cameras
-            ]
-
         config = {
             "project": {
                 "name": state.task_name,
@@ -111,13 +69,13 @@ class ConfigManager:
                 "notes": "",
             },
             "robot": {
-                "name": "widowx",
-                "model": "wx250s",
-                "description": "6-dof WidowX arm with gripper",
-                "joint_count": 6,
-                "joint_order": ["waist", "shoulder", "elbow", "forearm_roll", "wrist_angle", "wrist_rotate"],
-                "base_frame": "wx250s/base_link",
-                "end_effector_frame": "wx250s/ee_gripper_link",
+                "name": "",
+                "model": "",
+                "description": "",
+                "joint_count": 0,
+                "joint_order": [],
+                "base_frame": "",
+                "end_effector_frame": "",
                 "joint_state_topic": joint_topic,
                 "action_topic": action_topic,
                 "gripper_state_topic": gripper_topic,
@@ -127,14 +85,10 @@ class ConfigManager:
                     "publishes_commands": False,
                 },
                 "action_format": {
-                    "type": "delta_ee_pose_gripper",
-                    "dim": 7,
-                    "fields": ["dx", "dy", "dz", "droll", "dpitch", "dyaw", "gripper"],
-                    "gripper_convention": {
-                        "raw_dataset": "widowx_open_high",
-                        "train_adapter": "optional_close_high",
-                        "deployment": "configurable_invert",
-                    },
+                    "type": "delta_state",
+                    "dim": 0,
+                    "fields": [],
+                    "gripper_convention": {},
                 },
             },
             "instruction": {
@@ -152,9 +106,10 @@ class ConfigManager:
                 "source_topic": joint_topic,
                 "source_action_topic": action_topic,
                 "gripper_state_topic": gripper_topic,
-                "format": "delta_joint_position_gripper",
-                "dim": 7,
-                "fields": ["djoint_0", "djoint_1", "djoint_2", "djoint_3", "djoint_4", "djoint_5", "gripper"],
+                "format": "delta_state",
+                "dim": 0,
+                "fields": [],
+                "include_default_gripper": False,
                 "default_gripper": 1.0,
             },
             "runtime": {
@@ -183,12 +138,6 @@ class ConfigManager:
                 "min_episode_steps": 5,
                 "auto_drop_empty_frames": True,
                 "auto_drop_invalid_actions": True,
-            },
-            "genesis": {
-                "enabled": False,
-                "ros_bridge_namespace": "/genesis",
-                "scene_file": None,
-                "asset_root": None,
             },
         }
         return config
@@ -235,11 +184,38 @@ class ConfigManager:
                 "name": "robot_obs",
                 "source_topic": joint_topic,
                 "type": "sensor_msgs/msg/JointState",
-                "output_dim": 6,
+                "output_dim": 0,
                 "fields": ["joint_position"],
-                "joint_order": ["waist", "shoulder", "elbow", "forearm_roll", "wrist_angle", "wrist_rotate"],
+                "joint_order": [],
             }
         ]
+
+    def dataset_structure_preview(self, config: dict[str, Any]) -> str:
+        lines = [
+            "collection_config.yaml",
+            f"{config.get('dataset', {}).get('split', 'training')}/",
+            "  episode_0000000.npz",
+        ]
+        for stream in config.get("streams", []):
+            key = stream.get("calvin_key") or stream.get("name")
+            if not key:
+                continue
+            shape = stream.get("shape") or ["auto"]
+            shape_text = "x".join(str(part) for part in shape)
+            dtype = stream.get("dtype", "auto")
+            topic = stream.get("topic", "")
+            lines.append(f"    {key}: {shape_text} {dtype} <- {topic}")
+        for state_key in config.get("state", {}).get("keys", []):
+            dim = state_key.get("output_dim") or "auto"
+            lines.append(f"    {state_key.get('name', 'robot_obs')}: ({dim},) float32 <- {state_key.get('source_topic', '')}")
+        if config.get("dataset", {}).get("requires_actions", False):
+            dim = config.get("action", {}).get("dim") or "auto"
+            lines.append(f"    rel_actions: ({dim},) float32")
+            lines.append(f"    actions: ({dim},) float32")
+        if config.get("dataset", {}).get("write_language_annotations", True):
+            ann = config.get("dataset", {}).get("language_annotation_file", "lang_annotations/auto_lang_ann.npy")
+            lines.append(f"  {ann}")
+        return "\n".join(lines)
 
     def _image_role_and_key(self, topic_name: str, idx: int, static_assigned: bool) -> tuple[str, str, str, str, list[int], bool]:
         lowered = topic_name.lower()

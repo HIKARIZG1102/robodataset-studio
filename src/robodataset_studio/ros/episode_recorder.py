@@ -79,7 +79,7 @@ class RosEpisodeRecorder:
         dataset_cfg = config.get("dataset", {})
         requires_actions = bool(dataset_cfg.get("requires_actions", True))
         if "robot_obs" not in arrays and requires_actions:
-            state_dim = int(config.get("action", {}).get("dim") or 7) - 1
+            state_dim = int(config.get("action", {}).get("dim") or 0)
             arrays["robot_obs"] = np.zeros((actual_steps, max(state_dim, 1)), dtype=np.float32)
             primary_state_name = "robot_obs"
         if "robot_obs" in arrays and requires_actions:
@@ -123,16 +123,19 @@ class RosEpisodeRecorder:
 
     def _derive_actions(self, config: dict, robot_obs: np.ndarray, actual_steps: int) -> np.ndarray:
         action_cfg = config.get("action", {})
-        action_dim = int(action_cfg.get("dim") or 7)
+        configured_dim = int(action_cfg.get("dim") or 0)
+        include_default_gripper = bool(action_cfg.get("include_default_gripper", configured_dim == 7))
+        inferred_dim = robot_obs.shape[1] if robot_obs.ndim == 2 else 0
+        action_dim = configured_dim or (inferred_dim + 1 if include_default_gripper else inferred_dim)
         default_gripper = float(action_cfg.get("default_gripper", 1.0))
         actions = np.zeros((actual_steps, action_dim), dtype=np.float32)
         if actual_steps <= 1:
             return actions
-        delta_dim = max(action_dim - 1, 0)
+        delta_dim = max(action_dim - 1, 0) if include_default_gripper else action_dim
         obs_dim = min(delta_dim, robot_obs.shape[1] if robot_obs.ndim == 2 else 0)
         if obs_dim:
             actions[:-1, :obs_dim] = robot_obs[1:, :obs_dim] - robot_obs[:-1, :obs_dim]
-        if action_dim:
+        if include_default_gripper and action_dim:
             actions[:, -1] = default_gripper
         return actions
 
@@ -251,7 +254,7 @@ class RosEpisodeRecorder:
             for stream in joint_streams:
                 stream_name = str(stream.get("name") or "robot_obs")
                 topic = str(stream.get("source_topic") or "")
-                output_dim = int(stream.get("output_dim") or 32)
+                output_dim = int(stream.get("output_dim") or 0)
                 fields = [str(field) for field in stream.get("fields", ["joint_position"])]
                 joint_order = [str(name) for name in stream.get("joint_order", [])]
                 if topic:
@@ -328,6 +331,8 @@ def joint_state_to_robot_obs(
                 values.extend(float(value) for value in velocity)
             elif field == "effort":
                 values.extend(float(value) for value in effort)
+    if output_dim <= 0:
+        output_dim = len(values)
     output = np.zeros((output_dim,), dtype=np.float32)
     if values:
         count = min(len(values), output_dim)

@@ -445,8 +445,8 @@ class DiscoveryPage(QWidget):
                 "Select one or more topics, or select a node that has publishers, before generating collection_config.yaml.",
             )
             return
-        self.ctx.set_collection_config(self.ctx.config_manager.build_default_config(self.ctx.state, topics))
         self.ctx.state.selected_streams = topics
+        self.ctx.set_collection_config(self.ctx.config_manager.build_default_config(self.ctx.state, topics))
         QMessageBox.information(
             self,
             "Config",
@@ -1022,9 +1022,12 @@ class ConfigPage(QWidget):
         self._updating_form = False
         self.editor = QPlainTextEdit()
         self.status = QLabel("")
-        self.library = QComboBox()
-        self.library.setEditable(False)
-        self.config_name = QLineEdit("default_listener")
+        self.selected_topics_view = QPlainTextEdit()
+        self.selected_topics_view.setReadOnly(True)
+        self.selected_topics_view.setMaximumHeight(92)
+        self.dataset_preview = QPlainTextEdit()
+        self.dataset_preview.setReadOnly(True)
+        self.dataset_preview.setMaximumHeight(180)
         self.instruction = QLineEdit()
         self.scene_description = QPlainTextEdit()
         self.scene_description.setMaximumHeight(76)
@@ -1044,45 +1047,29 @@ class ConfigPage(QWidget):
         self.resize_height = QSpinBox()
         for spin in [self.crop_x, self.crop_y, self.crop_width, self.crop_height, self.resize_width, self.resize_height]:
             spin.setRange(0, 8192)
-        new_config = QPushButton("New Config")
-        load_library = QPushButton("Load From Library")
-        save_library = QPushButton("Save To Library")
-        delete_library = QPushButton("Delete Library Config")
-        generate = QPushButton("Generate Default")
+        refresh_from_selection = QPushButton("Refresh Config From Selected Topics")
         apply_form = QPushButton("Apply Form To YAML")
         reload_form = QPushButton("Reload Form From YAML")
         ai_match = QPushButton("AI Match Config")
         validate = QPushButton("Validate")
         save = QPushButton("Save collection_config.yaml")
-        new_config.clicked.connect(self.new_config)
-        load_library.clicked.connect(self.load_library_config)
-        save_library.clicked.connect(self.save_library_config)
-        delete_library.clicked.connect(self.delete_library_config)
-        generate.clicked.connect(self.generate)
+        refresh_from_selection.clicked.connect(self.refresh_config_from_selected_topics)
         apply_form.clicked.connect(self.apply_form_to_yaml)
         reload_form.clicked.connect(self.reload_form_from_yaml)
         ai_match.clicked.connect(self.ai_match_config)
         validate.clicked.connect(self.validate)
         save.clicked.connect(self.save)
         layout = QVBoxLayout(self)
-        library_row = QHBoxLayout()
-        library_row.addWidget(QLabel("Config library"))
-        library_row.addWidget(self.library, 2)
-        library_row.addWidget(QLabel("Name"))
-        library_row.addWidget(self.config_name, 1)
-        library_row.addWidget(new_config)
-        library_row.addWidget(load_library)
-        library_row.addWidget(save_library)
-        library_row.addWidget(delete_library)
-        layout.addLayout(library_row)
         row = QHBoxLayout()
-        row.addWidget(generate)
+        row.addWidget(refresh_from_selection)
         row.addWidget(reload_form)
         row.addWidget(apply_form)
         row.addWidget(ai_match)
         row.addWidget(validate)
         row.addWidget(save)
         layout.addLayout(row)
+        layout.addWidget(QLabel("Selected ROS2 topics"))
+        layout.addWidget(self.selected_topics_view)
         quick_form = QFormLayout()
         quick_form.addRow("Instruction / prompt", self.instruction)
         quick_form.addRow("Scene description", self.scene_description)
@@ -1108,9 +1095,12 @@ class ConfigPage(QWidget):
         quick_form.addRow("Image resize", resize_row)
         layout.addLayout(quick_form)
         layout.addWidget(self.status)
+        layout.addWidget(QLabel("Dataset structure preview"))
+        layout.addWidget(self.dataset_preview)
+        layout.addWidget(QLabel("collection_config.yaml"))
         layout.addWidget(self.editor)
         self.ctx.config_changed.connect(self.load_context_config)
-        self.refresh_library()
+        self.refresh_selected_topics_view()
         if self.ctx.state.collection_config:
             self.load_context_config()
         else:
@@ -1124,67 +1114,33 @@ class ConfigPage(QWidget):
         self.reload_form_from_yaml()
         self.status.setText("Loaded generated config from selected ROS2 node/topic choices.")
 
-    def refresh_library(self) -> None:
-        selected = self.library.currentText()
-        self.library.clear()
-        for path in self.ctx.config_library.list_configs():
-            self.library.addItem(path.stem)
-        if selected:
-            index = self.library.findText(selected)
-            if index >= 0:
-                self.library.setCurrentIndex(index)
-
-    def generate(self) -> None:
-        if not self.ctx.state.collection_config:
-            self.new_config()
+    def refresh_config_from_selected_topics(self) -> None:
+        topics = self.ctx.state.selected_streams
+        if not topics:
+            QMessageBox.warning(self, "Config", "No selected ROS2 topics. Select topics in Discovery first.")
             return
-        self.editor.setPlainText(self.ctx.config_manager.dumps(self.ctx.state.collection_config))
-        self.reload_form_from_yaml()
+        existing = self.ctx.config_manager.loads(self.editor.toPlainText())
+        updated = self.ctx.config_manager.build_default_config(self.ctx.state, topics)
+        self._copy_user_editable_fields(existing, updated)
+        self._apply_form_values(updated)
+        self.ctx.set_collection_config(updated)
+        self.status.setText("Config refreshed from selected ROS2 topics and current form values.")
 
-    def new_config(self) -> None:
-        self.ctx.state.collection_config = self.ctx.config_manager.build_default_config(
-            self.ctx.state, self.ctx.state.selected_streams or []
+    def _copy_user_editable_fields(self, source: dict, target: dict) -> None:
+        if not source:
+            return
+        for section in ["project", "environment", "instruction", "recording"]:
+            if isinstance(source.get(section), dict) and isinstance(target.get(section), dict):
+                target[section].update(source[section])
+
+    def refresh_selected_topics_view(self) -> None:
+        topics = self.ctx.state.selected_streams
+        if not topics:
+            self.selected_topics_view.setPlainText("(none)")
+            return
+        self.selected_topics_view.setPlainText(
+            "\n".join(f"{topic.get('name', '')} [{topic.get('type', '')}]" for topic in topics)
         )
-        self.editor.setPlainText(self.ctx.config_manager.dumps(self.ctx.state.collection_config))
-        self.reload_form_from_yaml()
-        self.status.setText("New config skeleton generated. Use Discovery to populate streams from selected ROS2 topics.")
-
-    def load_library_config(self) -> None:
-        name = self.library.currentText().strip()
-        if not name:
-            QMessageBox.warning(self, "Config library", "No saved config selected.")
-            return
-        text = self.ctx.config_library.load_text(name)
-        self.editor.setPlainText(text)
-        self.ctx.state.collection_config = self.ctx.config_manager.loads(text)
-        self.reload_form_from_yaml()
-        self.config_name.setText(name)
-        self.status.setText(f"Loaded config_library/{name}.yaml")
-
-    def save_library_config(self) -> None:
-        name = self.config_name.text().strip()
-        if not name:
-            QMessageBox.warning(self, "Config library", "Enter a config name before saving.")
-            return
-        config = self._current_config()
-        text = self.ctx.config_manager.dumps(config)
-        path = self.ctx.config_library.save_text(name, text)
-        self.refresh_library()
-        index = self.library.findText(path.stem)
-        if index >= 0:
-            self.library.setCurrentIndex(index)
-        self.status.setText(f"Saved library config: {path.relative_to(Path(__file__).resolve().parents[3])}")
-
-    def delete_library_config(self) -> None:
-        name = self.library.currentText().strip()
-        if not name:
-            QMessageBox.warning(self, "Config library", "No saved config selected.")
-            return
-        if QMessageBox.question(self, "Delete config", f"Delete config_library/{name}.yaml?") != QMessageBox.Yes:
-            return
-        path = self.ctx.config_library.delete(name)
-        self.refresh_library()
-        self.status.setText(f"Deleted library config: {path.name}")
 
     def _current_config(self) -> dict:
         config = self.ctx.config_manager.loads(self.editor.toPlainText())
@@ -1219,6 +1175,8 @@ class ConfigPage(QWidget):
         self.resize_width.setValue(int(resize.get("width", 224) or 0))
         self.resize_height.setValue(int(resize.get("height", 224) or 0))
         self._updating_form = False
+        self.refresh_selected_topics_view()
+        self.refresh_dataset_preview(config)
 
     def apply_form_to_yaml(self) -> None:
         if self._updating_form:
@@ -1230,6 +1188,13 @@ class ConfigPage(QWidget):
             return
         if not config:
             config = self.ctx.config_manager.build_default_config(self.ctx.state, [])
+        self._apply_form_values(config)
+        self.ctx.state.collection_config = config
+        self.editor.setPlainText(self.ctx.config_manager.dumps(config))
+        self.refresh_dataset_preview(config)
+        self.status.setText("Applied quick form settings to YAML.")
+
+    def _apply_form_values(self, config: dict) -> None:
         config.setdefault("instruction", {})["text"] = self.instruction.text().strip()
         config.setdefault("environment", {})["description"] = self.scene_description.toPlainText().strip()
         recording = config.setdefault("recording", {})
@@ -1257,9 +1222,9 @@ class ConfigPage(QWidget):
             preview["crop"] = dict(crop)
             preview["resize"] = dict(resize)
 
-        self.ctx.state.collection_config = config
-        self.editor.setPlainText(self.ctx.config_manager.dumps(config))
-        self.status.setText("Applied quick form settings to YAML.")
+    def refresh_dataset_preview(self, config: dict | None = None) -> None:
+        config = config if config is not None else self.ctx.state.collection_config
+        self.dataset_preview.setPlainText(self.ctx.config_manager.dataset_structure_preview(config or {}))
 
     def _first_camera(self, config: dict) -> dict:
         cameras = config.get("cameras", [])
