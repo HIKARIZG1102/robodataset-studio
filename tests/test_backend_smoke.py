@@ -891,6 +891,7 @@ def test_config_page_saves_loads_and_manages_yaml_library(tmp_path) -> None:
     assert app is not None
     saved_names = [path.stem for path in ctx.config_library.list_configs()]
     assert saved_names == ["catch_test_v2_wx250s_1cam"]
+    assert not (ctx.state.raw_session_dir / "collection_config.yaml").exists()
     page.editor.setPlainText("project:\n  name: broken\n")
     page.config_library_select.setCurrentText("catch_test_v2_wx250s_1cam")
     page.load_selected_library_config()
@@ -901,6 +902,49 @@ def test_config_page_saves_loads_and_manages_yaml_library(tmp_path) -> None:
     assert [path.stem for path in ctx.config_library.list_configs()] == ["manual_name"]
     page.delete_selected_library_config()
     assert ctx.config_library.list_configs() == []
+
+
+def test_config_save_refreshes_recording_yaml_list(tmp_path, monkeypatch) -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    ctx.config_library = ConfigLibrary(tmp_path / "config_library")
+    ctx.state.collection_config = ConfigManager().build_default_config(
+        ProjectState(),
+        [{"name": "/camera/camera/color/image_raw", "type": "sensor_msgs/msg/Image"}],
+    )
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    recording_page = RecordingPage(ctx)
+    config_page = ConfigPage(ctx)
+    config_page.project_name.setText("sync_library")
+    config_page.apply_form_to_yaml()
+    config_page.config_library_select.setCurrentText("")
+
+    config_page.save_library_config()
+
+    assert app is not None
+    names = [recording_page.config_library_select.itemText(index) for index in range(recording_page.config_library_select.count())]
+    assert "sync_library_v1_1cam" in names
+    recording_page.close()
+
+
+def test_recording_snapshot_is_written_only_when_recording_starts(tmp_path, monkeypatch) -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    ctx.state.dataset_root = tmp_path / "datasets"
+    ctx.state.collection_config = ConfigManager().build_default_config(
+        ProjectState(),
+        [{"name": "/camera/camera/color/image_raw", "type": "sensor_msgs/msg/Image"}],
+    )
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    page = RecordingPage(ctx)
+
+    assert not (ctx.state.raw_session_dir / "collection_config.yaml").exists()
+    path = page.write_session_config_snapshot()
+
+    assert app is not None
+    assert path == ctx.state.raw_session_dir / "collection_config.yaml"
+    assert path.exists()
+    page.close()
 
 
 def test_config_page_rejects_incomplete_ai_yaml_preview(monkeypatch) -> None:

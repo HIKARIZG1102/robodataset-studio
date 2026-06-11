@@ -62,6 +62,7 @@ from robodataset_studio.upload.ssh_profiles import SshProfile, SshProfileStore
 class AppContext(QObject):
     language_changed = Signal(str)
     config_changed = Signal()
+    config_library_changed = Signal()
     project_changed = Signal()
 
     def __init__(self) -> None:
@@ -1545,19 +1546,19 @@ class ConfigPage(QWidget):
         send_ai_prompt = QPushButton("Send")
         replace_ai = QPushButton("Replace YAML From AI Preview")
         validate = QPushButton("Validate")
-        save = QPushButton("Save collection_config.yaml")
+        save = QPushButton("Save YAML Library")
         refresh_from_selection.clicked.connect(self.refresh_config_from_selected_topics)
         apply_form.clicked.connect(self.apply_form_to_yaml)
         reload_form.clicked.connect(self.reload_form_from_yaml)
         load_library.clicked.connect(self.load_selected_library_config)
-        save_library.clicked.connect(self.save)
+        save_library.clicked.connect(self.save_library_config)
         rename_library.clicked.connect(self.rename_selected_library_config)
         delete_library.clicked.connect(self.delete_selected_library_config)
         build_ai_prompt.clicked.connect(self.build_default_ai_prompt)
         send_ai_prompt.clicked.connect(self.send_ai_prompt)
         replace_ai.clicked.connect(self.replace_yaml_from_ai_preview)
         validate.clicked.connect(self.validate)
-        save.clicked.connect(self.save)
+        save.clicked.connect(self.save_library_config)
         layout = QVBoxLayout(self)
         row = QHBoxLayout()
         row.addWidget(refresh_from_selection)
@@ -1952,6 +1953,7 @@ class ConfigPage(QWidget):
         self._current_library_name = path.stem
         self.refresh_config_library()
         self.config_library_select.setCurrentText(path.stem)
+        self.ctx.config_library_changed.emit()
         return path
 
     def delete_selected_library_config(self) -> None:
@@ -1965,6 +1967,7 @@ class ConfigPage(QWidget):
             return
         self._current_library_name = ""
         self.refresh_config_library()
+        self.ctx.config_library_changed.emit()
         self.status.setText(f"Deleted saved YAML: {path.name}")
 
     def rename_selected_library_config(self) -> None:
@@ -1986,6 +1989,7 @@ class ConfigPage(QWidget):
         self.refresh_config_library()
         self.config_library_select.setCurrentText(path.stem)
         self._current_library_name = path.stem
+        self.ctx.config_library_changed.emit()
         self.status.setText(f"Renamed saved YAML: {old_name} -> {path.stem}")
 
     def build_default_ai_prompt(self) -> None:
@@ -2241,7 +2245,7 @@ class ConfigPage(QWidget):
         if fatal:
             raise ValueError("; ".join(fatal))
 
-    def save(self) -> None:
+    def save_library_config(self) -> None:
         try:
             config = self._current_config()
             self.ctx.config_manager.sync_core_schema(config)
@@ -2251,12 +2255,13 @@ class ConfigPage(QWidget):
             QMessageBox.warning(self, "Save YAML", f"Cannot save incomplete or invalid YAML:\n{exc}")
             return
         errors = self.ctx.config_manager.validate(config)
-        path = self.ctx.state.raw_session_dir / "collection_config.yaml"
-        self.ctx.config_manager.save(path, config)
         library_path = self.save_current_config_to_library(config, self.ctx.config_manager.dumps(config))
         self.status.setText(
-            f"Saved: {path} | library: {library_path.name}" + (f" | warnings: {len(errors)}" if errors else "")
+            f"Saved YAML library: {library_path}" + (f" | warnings: {len(errors)}" if errors else "")
         )
+
+    def save(self) -> None:
+        self.save_library_config()
 
 
 class RecordingPage(QWidget):
@@ -2333,6 +2338,7 @@ class RecordingPage(QWidget):
         controls.addWidget(record_mock)
         layout.addLayout(controls)
         layout.addWidget(self.log)
+        self.ctx.config_library_changed.connect(self.refresh_config_library)
         self.refresh_config_library()
         self.refresh_plan()
 
@@ -2491,6 +2497,7 @@ class RecordingPage(QWidget):
         recording["stop_mode"] = stop_mode
         recording["episode_duration_sec"] = float(self.duration.value())
         recording["target_samples"] = int(self.target_samples.value())
+        session_config_path = self.write_session_config_snapshot()
         self._recording_worker = RosRecordingWorker(
             self.ctx.ros_recorder,
             self.ctx.state.collection_config,
@@ -2506,7 +2513,14 @@ class RecordingPage(QWidget):
         self._recording_worker.finished.connect(self._recording_worker.deleteLater)
         self._recording_thread.finished.connect(self._recording_thread.deleteLater)
         self._recording_thread.start()
+        self.log.appendPlainText(f"session config snapshot: {session_config_path}")
         self.log.appendPlainText(f"started ROS2 recording in background ({self.recording_plan_summary()})")
+
+    def write_session_config_snapshot(self) -> Path:
+        self.ctx.config_manager.sync_core_schema(self.ctx.state.collection_config)
+        path = self.ctx.state.raw_session_dir / "collection_config.yaml"
+        self.ctx.config_manager.save(path, self.ctx.state.collection_config)
+        return path
 
     def stop_recording_request(self) -> None:
         if self._recording_thread is None:
