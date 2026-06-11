@@ -174,6 +174,7 @@
 - 默认配置已新增 `dataset.core_schema`，显式描述每份 YAML 将生成的 CALVIN-like core observation/state/action keys、optional timestamp/camera_info keys、extension data keys 和 metadata extension keys；AI prompt 已要求根据选中 ROS topic/node 填充并保持 `dataset.core_schema` 与 streams/state/action 一致；数据结构预览改为实时跟随 YAML 编辑框变化，并从当前 YAML 生成 schema；当前 smoke tests 为 73 passed。
 - Recording 页已增加 Saved YAML 下拉和 Load YAML，可像 Config 页一样载入配置并刷新监听计划；监听计划会显示预计生成的 `episode_*.npz` 数量，真实桌面环境会按 YAML 自动启动图像监控；新增后台 Check Nodes，使用 topic info + echo once + hz 检查配置 topic，不阻塞前端；录制入口支持 Manual/Duration/Sample count 三种模式，其中 Manual 当前按 target sample 预算结束，真正即时中断 recorder 仍待后续补 cancel token；当前 smoke tests 为 75 passed。
 - YAML 保存逻辑已按工程相对路径收口：Config 页的保存只写 `robodataset-studio/config_library/*.yaml`，不会提前写项目/数据集绝对路径下的 `collection_config.yaml`；Recording 页会监听配置库变化并刷新 Saved YAML 下拉；只有真正开始采集时才把当前配置快照写入本次 session 的 `collection_config.yaml`；当前 smoke tests 为 77 passed。
+- 采集页继续稳定化：Start Recording 前会停止图像监控，避免多个 rclpy listener 线程同时订阅引发崩溃风险，录制结束后会恢复监控；Manual 模式已支持 Stop Recording 通过 cancel event 结束 recorder；Stop mode 会动态隐藏无关输入，Manual 不显示时长/样本数也不显示预计 episode 数；项目根目录新增 `RoboDataset-Studio-Guide.html` 操作教程，主窗口左下角新增 Tutorial 按钮打开教程；当前 smoke tests 为 78 passed。
 
 ## 遇到的问题
 

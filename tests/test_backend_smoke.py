@@ -120,7 +120,7 @@ def test_ros_recorder_sample_count_controls_transition_count(tmp_path) -> None:
     config["recording"]["stop_mode"] = "sample_count"
     config["recording"]["target_samples"] = 6
 
-    def capture_streams(image_streams, joint_streams, steps, sample_rate):  # type: ignore[no-untyped-def]
+    def capture_streams(image_streams, joint_streams, steps, sample_rate, **_kwargs):  # type: ignore[no-untyped-def]
         frames = {
             "rgb_static": [
                 np.full((4, 4, 3), index, dtype=np.uint8)
@@ -157,7 +157,7 @@ def test_ros_recorder_persists_config_metadata_fields(tmp_path) -> None:
     config["recording"]["target_samples"] = 3
     config["recording"]["min_episode_steps"] = 3
 
-    def capture_streams(image_streams, joint_streams, steps, sample_rate):  # type: ignore[no-untyped-def]
+    def capture_streams(image_streams, joint_streams, steps, sample_rate, **_kwargs):  # type: ignore[no-untyped-def]
         frames = {"rgb_static": [np.full((4, 4, 3), index, dtype=np.uint8) for index in range(steps)]}
         states = {"robot_obs": [np.full((3,), index, dtype=np.float32) for index in range(steps)]}
         return frames, states
@@ -1078,6 +1078,36 @@ def test_recording_page_loads_saved_yaml_and_updates_plan(tmp_path, monkeypatch)
     assert ctx.state.collection_config["streams"][0]["topic"] == "/camera/front/image_raw"
     assert "estimated episode_*.npz files: 9" in page.plan_summary.text()
     assert "/camera/front/image_raw" in started
+    page.close()
+
+
+def test_recording_page_mode_controls_and_manual_summary(monkeypatch) -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    ctx.state.collection_config = ConfigManager().build_default_config(
+        ProjectState(),
+        [
+            {"name": "/camera/front/image_raw", "type": "sensor_msgs/msg/Image"},
+            {"name": "/joint_states", "type": "sensor_msgs/msg/JointState"},
+        ],
+    )
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    page = RecordingPage(ctx)
+
+    page.stop_mode.setCurrentIndex(page.stop_mode.findData("manual"))
+    assert app is not None
+    assert page.duration.isHidden()
+    assert page.target_samples.isHidden()
+    assert "manual start/stop" in page.plan_summary.text()
+    assert "estimated episode_*.npz files: manual" in page.plan_summary.text()
+
+    page.stop_mode.setCurrentIndex(page.stop_mode.findData("duration_sec"))
+    assert not page.duration.isHidden()
+    assert page.target_samples.isHidden()
+
+    page.stop_mode.setCurrentIndex(page.stop_mode.findData("sample_count"))
+    assert page.duration.isHidden()
+    assert not page.target_samples.isHidden()
     page.close()
 
 

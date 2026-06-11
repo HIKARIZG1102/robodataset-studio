@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+from PySide6.QtCore import QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QListWidget,
@@ -55,14 +59,17 @@ class MainWindow(QMainWindow):
         self.nav.setCurrentRow(0)
 
         process_button = QPushButton("Process")
+        tutorial_button = QPushButton("Tutorial")
         settings_button = QPushButton("Settings")
         process_button.clicked.connect(self.open_process)
+        tutorial_button.clicked.connect(self.open_tutorial)
         settings_button.clicked.connect(self.open_settings)
 
         side = QVBoxLayout()
         side.addWidget(self.nav)
         side.addStretch(1)
         side.addWidget(process_button)
+        side.addWidget(tutorial_button)
         side.addWidget(settings_button)
 
         root = QWidget()
@@ -91,6 +98,10 @@ class MainWindow(QMainWindow):
 
     def open_settings(self) -> None:
         self._open_tool_window("Settings", SettingsPage(self.ctx), singleton=True)
+
+    def open_tutorial(self) -> None:
+        path = Path(__file__).resolve().parents[3] / "RoboDataset-Studio-Guide.html"
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
     def _open_tool_window(self, title: str, page: QWidget, *, singleton: bool = False) -> None:
         if singleton and title in self._tool_windows_by_title:

@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RoboDataset Studio 采集流程教程</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.55; margin: 0; color: #1f2933; background: #f7f8fa; }
+    main { max-width: 980px; margin: 0 auto; padding: 32px 24px 64px; background: #fff; min-height: 100vh; }
+    h1 { font-size: 30px; margin: 0 0 12px; }
+    h2 { border-top: 1px solid #dde3ea; padding-top: 24px; margin-top: 32px; }
+    h3 { margin-top: 22px; }
+    code { background: #eef2f6; padding: 2px 5px; border-radius: 4px; }
+    pre { background: #111827; color: #e5e7eb; padding: 14px; border-radius: 6px; overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; margin: 12px 0 20px; }
+    th, td { border: 1px solid #d7dde5; padding: 8px 10px; vertical-align: top; }
+    th { background: #edf2f7; text-align: left; }
+    .note { background: #fff7df; border-left: 4px solid #d99b00; padding: 10px 12px; }
+    .ok { background: #eefaf1; border-left: 4px solid #2e9d55; padding: 10px 12px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>RoboDataset Studio 采集流程教程</h1>
+  <p>本文说明当前 V2 UI 的完整数据采集流程。软件只监听外部 ROS2 topic，不启动相机、GELLO、follow 或机器人控制节点。</p>
+
+  <h2>0. 启动前准备</h2>
+  <p>先在外部终端启动需要的数据源，例如 RealSense 相机、WidowX 驱动、GELLO 控制节点。软件只负责发现 topic、生成 YAML、监听采集、Review、转换和上传。</p>
+  <pre><code>cd /home/microsate/robotarm_control_ws/ROBODATASET/robodataset-studio
+./RoboDataset-Studio.sh</code></pre>
+
+  <h2>1. 配置与 ROS Topic</h2>
+  <h3>Project 页</h3>
+  <table>
+    <tr><th>控件</th><th>作用</th></tr>
+    <tr><td>Task name</td><td>任务/项目名称。会参与 YAML 命名和数据目录命名。</td></tr>
+    <tr><td>Version</td><td>数据版本，例如 <code>v1</code>。为空时 UI 保持空，运行目录会使用安全默认值。</td></tr>
+    <tr><td>Operator</td><td>采集人员，可留空。</td></tr>
+    <tr><td>Dataset root</td><td>采集输出根目录。注意这不是 YAML 配置库目录。</td></tr>
+    <tr><td>Browse</td><td>选择输出根目录。</td></tr>
+    <tr><td>Use gello_widowx preset</td><td>填入旧数据集常用示例路径和任务名。</td></tr>
+    <tr><td>Save Project</td><td>保存项目字段到本机上次使用状态，并同步到 Config 页。</td></tr>
+  </table>
+
+  <h3>Discovery 页</h3>
+  <table>
+    <tr><th>控件</th><th>作用</th></tr>
+    <tr><td>Refresh ROS Graph</td><td>刷新当前 ROS2 nodes/topics/services。</td></tr>
+    <tr><td>Topic 勾选框</td><td>选择要记录的 topic。应勾选图像 topic 和需要的 JointState topic。</td></tr>
+    <tr><td>Generate Config From Selected Topics</td><td>根据勾选 topic 生成 listener-only YAML。只使用勾选项，不自动偷选其它 topic。</td></tr>
+  </table>
+
+  <h3>Inspector 页</h3>
+  <table>
+    <tr><th>控件</th><th>作用</th></tr>
+    <tr><td>Node info / Echo / Hz</td><td>手动检查选中 node/topic 的信息、单帧消息、发布频率。</td></tr>
+    <tr><td>Image monitor</td><td>选择图像 topic 后预览画面。用于确认图像是否流畅、是否黑屏、topic 是否正确。</td></tr>
+  </table>
+
+  <h3>Config 页</h3>
+  <table>
+    <tr><th>控件</th><th>作用</th></tr>
+    <tr><td>Refresh Config From Selected Topics</td><td>用 Discovery 当前勾选 topic 重新生成 YAML，并保留表单里可编辑字段。</td></tr>
+    <tr><td>Reload Form From YAML</td><td>用下方 YAML 覆盖表单显示。YAML 为空字段会清空表单对应字段。</td></tr>
+    <tr><td>Apply Form To YAML</td><td>把表单字段局部写回 YAML，保留 YAML 中其它结构。</td></tr>
+    <tr><td>Validate</td><td>检查 YAML 是否缺少必要结构或违反 listener-only 约束。</td></tr>
+    <tr><td>Save YAML Library</td><td>仅保存到工程相对路径 <code>config_library/*.yaml</code>。不会提前写入数据集 session 目录。</td></tr>
+    <tr><td>Saved YAML / Load YAML</td><td>从 <code>config_library</code> 读取旧 YAML。</td></tr>
+    <tr><td>Rename YAML / Delete YAML</td><td>管理配置库里的 YAML。</td></tr>
+    <tr><td>Default prompt</td><td>后台生成 AI 配置匹配提示词，包含当前 YAML、表单、勾选 topic、topic echo/node info 和标准 schema。</td></tr>
+    <tr><td>Send</td><td>把 AI prompt 发送到 Settings 中配置的 OpenAI-compatible 模型。</td></tr>
+    <tr><td>Replace YAML From AI Preview</td><td>把 AI 预览中的 YAML 显式替换到主 YAML。不会自动覆盖。</td></tr>
+  </table>
+
+  <p class="note">YAML 配置库固定在 RoboDataset Studio 工程相对目录 <code>config_library/</code>。采集 session 里的 <code>collection_config.yaml</code> 只会在点击 Start Recording 后写入。</p>
+
+  <h2>2. 采集页</h2>
+  <table>
+    <tr><th>控件</th><th>作用</th></tr>
+    <tr><td>Saved YAML</td><td>选择配置库里的 YAML。Config 页保存新 YAML 后，此处会同步刷新。</td></tr>
+    <tr><td>Load YAML</td><td>载入选中 YAML，刷新监听计划和图像监控。</td></tr>
+    <tr><td>Refresh Listener Plan</td><td>按当前 YAML 刷新 streams 表、预计输出数量和监控窗口。</td></tr>
+    <tr><td>Check Nodes</td><td>后台检查配置 topic：topic info、echo once、topic hz。不会阻塞前端。</td></tr>
+    <tr><td>Stop mode</td><td>选择采集停止方式：Manual、Duration、Sample count。</td></tr>
+    <tr><td>Duration</td><td>Duration 模式显示，按秒数采集。</td></tr>
+    <tr><td>Samples</td><td>Sample count 模式显示，按同步样本数采集。</td></tr>
+    <tr><td>Start Recording</td><td>开始后台 ROS2 监听采集。开始时会把当前配置快照写到本次 session 的 <code>collection_config.yaml</code>。</td></tr>
+    <tr><td>Stop Recording</td><td>Manual 模式下请求停止；recorder 会在当前同步样本完成后退出。</td></tr>
+    <tr><td>Simulate Listener Episode</td><td>生成 mock 数据，用于测试 UI 流程，不使用真实 ROS2 topic。</td></tr>
+  </table>
+
+  <h3>采集模式</h3>
+  <ul>
+    <li><b>Manual</b>：只显示采集帧率提示，不显示时长和样本数。开始后手动点 Stop Recording 结束，不显示预计 episode 数。</li>
+    <li><b>Duration</b>：只显示 Duration 输入。预计 <code>duration × sample_rate_hz</code> 个同步样本，若有 action，transition 数约为样本数减 1。</li>
+    <li><b>Sample count</b>：只显示 Samples 输入。按指定同步样本数采集，若有 action，transition 数约为样本数减 1。</li>
+  </ul>
+
+  <p class="ok">建议流程：Load YAML -> Check Nodes -> 确认监控画面 -> 选择 Stop mode -> Start Recording -> 完成后进入 Review。</p>
+
+  <h2>3. 数据 Review</h2>
+  <table>
+    <tr><th>控件</th><th>作用</th></tr>
+    <tr><td>Scan Episodes</td><td>扫描当前 session 的 <code>training/episode_*.npz</code>。</td></tr>
+    <tr><td>Quality report</td><td>统计黑帧、白帧、缺字段、action 维度等问题。</td></tr>
+    <tr><td>Scan CALVIN Layout</td><td>扫描 raw/merged 数据集布局。</td></tr>
+    <tr><td>Inspect HDF5</td><td>查看转换后的 HDF5 摘要。</td></tr>
+  </table>
+
+  <h2>4. 数据转换</h2>
+  <p>Convert 页用于把 raw session 合并到 CALVIN-like merged 目录，并生成 HDF5。HDF5 会把 metadata 放入 attrs，训练数组只保留核心字段。</p>
+
+  <h2>5. 上传</h2>
+  <p>Upload 页用于配置 SSH 目标、预览远端目录、创建文件夹、上传数据集并做 manifest 校验。密码不会保存到 profile。</p>
+
+  <h2>数据格式说明</h2>
+  <p>每个 YAML 映射一份未来数据格式。核心字段由 <code>dataset.core_schema</code> 描述：</p>
+  <ul>
+    <li>图像核心键：<code>rgb_static</code>、<code>rgb_wrist</code>、<code>rgb_overhead</code>、额外 <code>rgb_*</code></li>
+    <li>状态核心键：<code>robot_obs</code></li>
+    <li>动作核心键：<code>rel_actions</code>、<code>actions</code></li>
+    <li>扩展字段：depth、metadata、timestamp、camera_info 等</li>
+  </ul>
+  <p>严格 CALVIN loader 应只读取配置中的 core keys；RoboDataset metadata 字段可忽略或剥离。</p>
+</main>
+</body>
+</html>

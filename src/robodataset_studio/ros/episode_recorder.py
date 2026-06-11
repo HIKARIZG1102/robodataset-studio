@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from collections.abc import Sequence
+from threading import Event
 from uuid import uuid4
 
 import numpy as np
@@ -31,6 +32,7 @@ class RosEpisodeRecorder:
         *,
         duration_sec: float | None = None,
         target_samples: int | None = None,
+        cancel_event: Event | None = None,
     ) -> RosEpisodeResult:
         ConfigManager().sync_core_schema(config)
         image_streams = [
@@ -55,11 +57,20 @@ class RosEpisodeRecorder:
             target_samples = int(configured_samples) if configured_samples else None
         if target_samples is not None:
             steps = max(int(target_samples), min_steps)
+        elif configured_stop_mode == "manual" and duration_sec is None:
+            steps = None
         else:
             duration = float(duration_sec if duration_sec is not None else recording.get("episode_duration_sec") or 2.0)
             steps = max(int(round(sample_rate * duration)), min_steps)
 
-        frames, states = self._capture_streams(image_streams, joint_streams, steps, sample_rate)
+        frames, states = self._capture_streams(
+            image_streams,
+            joint_streams,
+            steps,
+            sample_rate,
+            min_steps=min_steps,
+            cancel_event=cancel_event,
+        )
         warnings: list[str] = []
         arrays: dict[str, np.ndarray] = {}
         for stream in image_streams:
@@ -320,8 +331,11 @@ class RosEpisodeRecorder:
         self,
         image_streams: list[dict],
         joint_streams: list[dict],
-        steps: int,
+        steps: int | None,
         sample_rate: float,
+        *,
+        min_steps: int = 1,
+        cancel_event: Event | None = None,
     ) -> tuple[dict[str, list[np.ndarray]], dict[str, list[np.ndarray]]]:
         if os.environ.get("ROBODATASET_DISABLE_FASTDDS_SHM", "1") == "1":
             profile = Path(__file__).resolve().parents[3] / "config" / "fastdds_no_shm.xml"
@@ -393,9 +407,11 @@ class RosEpisodeRecorder:
                         qos_profile_sensor_data,
                     )
 
-            deadline = time.time() + max(steps / max(sample_rate, 1.0) + 3.0, 5.0)
+            deadline = time.time() + (max(steps / max(sample_rate, 1.0) + 3.0, 5.0) if steps is not None else 24 * 60 * 60)
             next_sample_at = time.time()
             while rclpy.ok(context=context) and time.time() < deadline:
+                if cancel_event is not None and cancel_event.is_set():
+                    break
                 executor.spin_once(timeout_sec=0.02)
                 now = time.time()
                 if now < next_sample_at:
@@ -412,9 +428,10 @@ class RosEpisodeRecorder:
                     state = latest_states.get(stream_name)
                     if state is not None:
                         captured_states[stream_name].append(state.copy())
-                image_ready = all(len(values) >= steps for values in captured.values() if values is not None)
-                state_ready = all(len(values) >= steps for values in captured_states.values() if values is not None)
-                if image_ready and state_ready:
+                target = steps if steps is not None else min_steps
+                image_ready = all(len(values) >= target for values in captured.values() if values is not None)
+                state_ready = all(len(values) >= target for values in captured_states.values() if values is not None)
+                if steps is not None and image_ready and state_ready:
                     break
                 next_sample_at = now + 1.0 / max(sample_rate, 1.0)
         finally:

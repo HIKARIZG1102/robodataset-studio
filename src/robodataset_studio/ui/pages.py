@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 import threading
 import time
 from dataclasses import dataclass
+from threading import Event
 from uuid import uuid4
 from urllib import error as urlerror, request as urlrequest
 
@@ -608,6 +609,7 @@ class RosRecordingWorker(QObject):
         episode_index: int,
         duration_sec: float | None = None,
         target_samples: int | None = None,
+        cancel_event: Event | None = None,
     ) -> None:
         super().__init__()
         self.recorder = recorder
@@ -616,6 +618,7 @@ class RosRecordingWorker(QObject):
         self.episode_index = episode_index
         self.duration_sec = duration_sec
         self.target_samples = target_samples
+        self.cancel_event = cancel_event
 
     @Slot()
     def run(self) -> None:
@@ -626,6 +629,7 @@ class RosRecordingWorker(QObject):
                 self.episode_index,
                 duration_sec=self.duration_sec,
                 target_samples=self.target_samples,
+                cancel_event=self.cancel_event,
             )
         except Exception as exc:
             self.finished.emit(None, exc)
@@ -2274,7 +2278,8 @@ class RecordingPage(QWidget):
         self._preflight_thread: QThread | None = None
         self._preflight_worker: RecordingPreflightWorker | None = None
         self._monitor_slots: list[CaptureMonitorSlot] = []
-        self._manual_recording_requested = False
+        self._recording_cancel_event: Event | None = None
+        self._monitors_were_active_before_recording = False
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.config_library_select = QComboBox()
@@ -2303,7 +2308,7 @@ class RecordingPage(QWidget):
         refresh.clicked.connect(self.refresh_plan)
         load_yaml.clicked.connect(self.load_selected_yaml)
         check_nodes.clicked.connect(self.check_nodes_async)
-        self.stop_mode.currentIndexChanged.connect(lambda _index: self.plan_summary.setText(self.recording_plan_summary()))
+        self.stop_mode.currentIndexChanged.connect(lambda _index: self.update_recording_mode_ui())
         self.duration.valueChanged.connect(lambda _value: self.plan_summary.setText(self.recording_plan_summary()))
         self.target_samples.valueChanged.connect(lambda _value: self.plan_summary.setText(self.recording_plan_summary()))
         record_mock = QPushButton("Simulate Listener Episode")
@@ -2327,11 +2332,13 @@ class RecordingPage(QWidget):
         layout.addWidget(QLabel("Capture monitors"))
         layout.addLayout(self.monitor_grid)
         controls = QHBoxLayout()
+        self.duration_label = QLabel("Duration")
+        self.samples_label = QLabel("Samples")
         controls.addWidget(QLabel("Stop mode"))
         controls.addWidget(self.stop_mode)
-        controls.addWidget(QLabel("Duration"))
+        controls.addWidget(self.duration_label)
         controls.addWidget(self.duration)
-        controls.addWidget(QLabel("Samples"))
+        controls.addWidget(self.samples_label)
         controls.addWidget(self.target_samples)
         controls.addWidget(record_ros)
         controls.addWidget(stop_ros)
@@ -2341,6 +2348,7 @@ class RecordingPage(QWidget):
         self.ctx.config_library_changed.connect(self.refresh_config_library)
         self.refresh_config_library()
         self.refresh_plan()
+        self.update_recording_mode_ui()
 
     def refresh_config_library(self) -> None:
         current = self.config_library_select.currentText().strip()
@@ -2377,6 +2385,7 @@ class RecordingPage(QWidget):
         self.stop_mode.setCurrentIndex(stop_index if stop_index >= 0 else 0)
         self.duration.setValue(float(recording.get("episode_duration_sec") or self.duration.value()))
         self.target_samples.setValue(int(recording.get("target_samples") or self.target_samples.value()))
+        self.update_recording_mode_ui()
         mode = runtime.get("mode", "listener_only")
         self.streams.setRowCount(len(streams))
         for row, stream in enumerate(streams):
@@ -2400,6 +2409,16 @@ class RecordingPage(QWidget):
         if os.environ.get("QT_QPA_PLATFORM") != "offscreen":
             self.start_all_capture_monitors()
 
+    def update_recording_mode_ui(self) -> None:
+        stop_mode = str(self.stop_mode.currentData() or "duration_sec")
+        duration_visible = stop_mode == "duration_sec"
+        samples_visible = stop_mode == "sample_count"
+        self.duration_label.setVisible(duration_visible)
+        self.duration.setVisible(duration_visible)
+        self.samples_label.setVisible(samples_visible)
+        self.target_samples.setVisible(samples_visible)
+        self.plan_summary.setText(self.recording_plan_summary())
+
     def recording_plan_summary(self) -> str:
         if not self.ctx.has_config():
             return "No YAML loaded."
@@ -2413,8 +2432,7 @@ class RecordingPage(QWidget):
             samples = max(int(self.target_samples.value()), minimum_samples)
             mode_text = f"sample count {samples}"
         elif stop_mode == "manual":
-            samples = max(int(self.target_samples.value()), minimum_samples)
-            mode_text = f"manual stop, preview budget {samples} samples"
+            return f"Plan: manual start/stop; capture rate: {sample_rate:g}Hz; estimated episode_*.npz files: manual; output: {self.ctx.state.episodes_dir}"
         else:
             duration = float(self.duration.value())
             requested = int(round(sample_rate * duration)) if duration > 0 else 0
@@ -2488,16 +2506,18 @@ class RecordingPage(QWidget):
         if self._recording_thread is not None:
             QMessageBox.warning(self, "Recording active", "A ROS2 recording is already running.")
             return
-        self._recording_thread = QThread(self)
         stop_mode = str(self.stop_mode.currentData() or "duration_sec")
-        target_samples = int(self.target_samples.value()) if stop_mode in {"sample_count", "manual"} else None
+        target_samples = int(self.target_samples.value()) if stop_mode == "sample_count" else None
         duration_sec = float(self.duration.value()) if stop_mode == "duration_sec" else None
-        self._manual_recording_requested = stop_mode == "manual"
         recording = self.ctx.state.collection_config.setdefault("recording", {})
         recording["stop_mode"] = stop_mode
         recording["episode_duration_sec"] = float(self.duration.value())
         recording["target_samples"] = int(self.target_samples.value())
         session_config_path = self.write_session_config_snapshot()
+        self._recording_cancel_event = Event()
+        self._monitors_were_active_before_recording = any(slot.thread is not None for slot in self._monitor_slots)
+        self.stop_all_capture_monitors()
+        self._recording_thread = QThread(self)
         self._recording_worker = RosRecordingWorker(
             self.ctx.ros_recorder,
             self.ctx.state.collection_config,
@@ -2505,6 +2525,7 @@ class RecordingPage(QWidget):
             self.episode_index,
             duration_sec=duration_sec,
             target_samples=target_samples,
+            cancel_event=self._recording_cancel_event,
         )
         self._recording_worker.moveToThread(self._recording_thread)
         self._recording_thread.started.connect(self._recording_worker.run)
@@ -2526,8 +2547,9 @@ class RecordingPage(QWidget):
         if self._recording_thread is None:
             self.log.appendPlainText("no active recording to stop")
             return
-        self._manual_recording_requested = False
-        self.log.appendPlainText("stop requested; current recorder will finish at the configured sample budget")
+        if self._recording_cancel_event is not None:
+            self._recording_cancel_event.set()
+        self.log.appendPlainText("stop requested; recorder will finish after the current synchronized sample")
 
     def preflight_recording(self) -> list[str]:
         config = self.ctx.state.collection_config
@@ -2595,10 +2617,14 @@ class RecordingPage(QWidget):
     def finish_ros_recording(self, result: object, error: object) -> None:
         self._recording_thread = None
         self._recording_worker = None
-        self._manual_recording_requested = False
+        self._recording_cancel_event = None
+        should_restart_monitors = self._monitors_were_active_before_recording and os.environ.get("QT_QPA_PLATFORM") != "offscreen"
+        self._monitors_were_active_before_recording = False
         if error is not None:
             QMessageBox.warning(self, "ROS2 recording failed", str(error))
             self.log.appendPlainText(f"recording failed: {error}")
+            if should_restart_monitors:
+                self.start_all_capture_monitors()
             return
         if not isinstance(result, RosEpisodeResult):
             self.log.appendPlainText("recording failed: unexpected recorder result")
@@ -2609,6 +2635,8 @@ class RecordingPage(QWidget):
             f"recorded real ROS2 CALVIN transitions: {result.path.parent} count={result.steps} streams={', '.join(result.streams)}{warning_text}"
         )
         self.plan_summary.setText(self.recording_plan_summary())
+        if should_restart_monitors:
+            self.start_all_capture_monitors()
 
     def rebuild_capture_monitors(self, image_streams: list[dict]) -> None:
         self.stop_all_capture_monitors()
@@ -2769,6 +2797,8 @@ class RecordingPage(QWidget):
             self._preflight_thread = None
             self._preflight_worker = None
         if self._recording_thread is not None:
+            if self._recording_cancel_event is not None:
+                self._recording_cancel_event.set()
             self._recording_thread.quit()
             self._recording_thread.wait(1500)
         super().closeEvent(event)
