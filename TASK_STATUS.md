@@ -1,6 +1,6 @@
 # RoboDataset Studio Task Status
 
-更新时间：2026-06-11 19:34 Asia/Shanghai
+更新时间：2026-06-11 19:48 Asia/Shanghai
 
 ## 当前任务清单
 
@@ -97,6 +97,8 @@
 - [x] 支持任意数量图像轨道：按已选 image topics 生成 `rgb_static`、`rgb_wrist`、`rgb_overhead` 或扩展 `rgb_1/rgb_2/...`，不再限制 4 路。
 - [x] JointState/action 维度改为泛化派生：配置中 `robot_obs` 和 `rel_actions/actions` 维度可为 `auto`，录制时按实际 JointState 长度推导，便于不同机械臂和 Hugging Face 数据集扩展。
 - [x] Config 页面新增数据集结构预览，可在保存/采集前看到将生成的 `training/episode_*.npz` 字段和 `lang_annotations/auto_lang_ann.npy`。
+- [x] Config 页面补齐所有可留空 YAML 字段的前端输入：Project、Environment、Robot、Instruction、Recording/Image 分 tab 编辑，空值仍保留为空字符串或空列表。
+- [x] 修复 topic 自动分类误判：只有 `sensor_msgs/msg/JointState` 或明确 `/joint_states` topic 才生成 `robot_obs`，`/wx250s/commands/joint_group` 等命令 topic 不再被当成状态采集源。
 
 ## 已完成项目
 

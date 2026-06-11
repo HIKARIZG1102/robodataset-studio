@@ -1028,7 +1028,28 @@ class ConfigPage(QWidget):
         self.dataset_preview = QPlainTextEdit()
         self.dataset_preview.setReadOnly(True)
         self.dataset_preview.setMaximumHeight(180)
+        self.project_name = QLineEdit()
+        self.project_version = QLineEdit()
+        self.project_operator = QLineEdit()
+        self.project_environment = QLineEdit()
+        self.environment_type = QLineEdit()
+        self.environment_workspace = QLineEdit()
+        self.environment_lighting = QLineEdit()
+        self.environment_objects = QLineEdit()
+        self.environment_notes = QPlainTextEdit()
+        self.environment_notes.setMaximumHeight(64)
+        self.robot_name = QLineEdit()
+        self.robot_model = QLineEdit()
+        self.robot_description = QLineEdit()
+        self.robot_joint_count = QSpinBox()
+        self.robot_joint_count.setRange(0, 512)
+        self.robot_joint_order = QLineEdit()
+        self.robot_base_frame = QLineEdit()
+        self.robot_ee_frame = QLineEdit()
         self.instruction = QLineEdit()
+        self.instruction_language = QLineEdit()
+        self.task_family = QLineEdit()
+        self.success_condition = QLineEdit()
         self.scene_description = QPlainTextEdit()
         self.scene_description.setMaximumHeight(76)
         self.sample_rate = QSpinBox()
@@ -1070,9 +1091,69 @@ class ConfigPage(QWidget):
         layout.addLayout(row)
         layout.addWidget(QLabel("Selected ROS2 topics"))
         layout.addWidget(self.selected_topics_view)
-        quick_form = QFormLayout()
-        quick_form.addRow("Instruction / prompt", self.instruction)
-        quick_form.addRow("Scene description", self.scene_description)
+        form_tabs = QTabWidget()
+        form_tabs.addTab(self._project_form(), "Project")
+        form_tabs.addTab(self._environment_form(), "Environment")
+        form_tabs.addTab(self._robot_form(), "Robot")
+        form_tabs.addTab(self._instruction_form(), "Instruction")
+        form_tabs.addTab(self._recording_form(), "Recording/Image")
+        layout.addWidget(form_tabs)
+        layout.addWidget(self.status)
+        layout.addWidget(QLabel("Dataset structure preview"))
+        layout.addWidget(self.dataset_preview)
+        layout.addWidget(QLabel("collection_config.yaml"))
+        layout.addWidget(self.editor)
+        self.ctx.config_changed.connect(self.load_context_config)
+        self.refresh_selected_topics_view()
+        if self.ctx.state.collection_config:
+            self.load_context_config()
+        else:
+            self.status.setText("No config loaded. Use Discovery to generate a config from selected topics or a selected node.")
+
+    def _project_form(self) -> QWidget:
+        widget = QWidget()
+        form = QFormLayout(widget)
+        form.addRow("Project name", self.project_name)
+        form.addRow("Version", self.project_version)
+        form.addRow("Operator", self.project_operator)
+        form.addRow("Project environment", self.project_environment)
+        return widget
+
+    def _environment_form(self) -> QWidget:
+        widget = QWidget()
+        form = QFormLayout(widget)
+        form.addRow("Environment type", self.environment_type)
+        form.addRow("Scene description", self.scene_description)
+        form.addRow("Workspace", self.environment_workspace)
+        form.addRow("Lighting", self.environment_lighting)
+        form.addRow("Objects", self.environment_objects)
+        form.addRow("Notes", self.environment_notes)
+        return widget
+
+    def _robot_form(self) -> QWidget:
+        widget = QWidget()
+        form = QFormLayout(widget)
+        form.addRow("Robot name", self.robot_name)
+        form.addRow("Robot model", self.robot_model)
+        form.addRow("Robot description", self.robot_description)
+        form.addRow("Joint count", self.robot_joint_count)
+        form.addRow("Joint order", self.robot_joint_order)
+        form.addRow("Base frame", self.robot_base_frame)
+        form.addRow("End effector frame", self.robot_ee_frame)
+        return widget
+
+    def _instruction_form(self) -> QWidget:
+        widget = QWidget()
+        form = QFormLayout(widget)
+        form.addRow("Instruction / prompt", self.instruction)
+        form.addRow("Language", self.instruction_language)
+        form.addRow("Task family", self.task_family)
+        form.addRow("Success condition", self.success_condition)
+        return widget
+
+    def _recording_form(self) -> QWidget:
+        widget = QWidget()
+        quick_form = QFormLayout(widget)
         quick_form.addRow("Sample rate", self.sample_rate)
         quick_form.addRow("Episode duration", self.episode_duration)
         crop_row = QHBoxLayout()
@@ -1093,18 +1174,7 @@ class ConfigPage(QWidget):
         resize_row.addWidget(QLabel("h"))
         resize_row.addWidget(self.resize_height)
         quick_form.addRow("Image resize", resize_row)
-        layout.addLayout(quick_form)
-        layout.addWidget(self.status)
-        layout.addWidget(QLabel("Dataset structure preview"))
-        layout.addWidget(self.dataset_preview)
-        layout.addWidget(QLabel("collection_config.yaml"))
-        layout.addWidget(self.editor)
-        self.ctx.config_changed.connect(self.load_context_config)
-        self.refresh_selected_topics_view()
-        if self.ctx.state.collection_config:
-            self.load_context_config()
-        else:
-            self.status.setText("No config loaded. Use Discovery to generate a config from selected topics or a selected node.")
+        return widget
 
     @Slot()
     def load_context_config(self) -> None:
@@ -1155,15 +1225,38 @@ class ConfigPage(QWidget):
             return
         self.ctx.state.collection_config = config
         recording = config.get("recording", {})
+        project = config.get("project", {})
         instruction = config.get("instruction", {})
         environment = config.get("environment", {})
+        robot = config.get("robot", {})
         first_camera = self._first_camera(config)
         crop = first_camera.get("crop", {}) if first_camera else {}
         resize = first_camera.get("resize", {}) if first_camera else {}
 
         self._updating_form = True
+        self.project_name.setText(str(project.get("name", "")))
+        self.project_version.setText(str(project.get("version", "")))
+        self.project_operator.setText(str(project.get("operator", "")))
+        self.project_environment.setText(str(project.get("environment", "")))
+        self.environment_type.setText(str(environment.get("type", "")))
         self.instruction.setText(str(instruction.get("text", "")))
+        self.instruction_language.setText(str(instruction.get("language", "")))
+        self.task_family.setText(str(instruction.get("task_family", "")))
+        self.success_condition.setText(str(instruction.get("success_condition", "")))
         self.scene_description.setPlainText(str(environment.get("description", "")))
+        self.environment_workspace.setText(str(environment.get("workspace", "")))
+        self.environment_lighting.setText(str(environment.get("lighting", "")))
+        objects = environment.get("objects", [])
+        self.environment_objects.setText(", ".join(str(item) for item in objects) if isinstance(objects, list) else str(objects))
+        self.environment_notes.setPlainText(str(environment.get("notes", "")))
+        self.robot_name.setText(str(robot.get("name", "")))
+        self.robot_model.setText(str(robot.get("model", "")))
+        self.robot_description.setText(str(robot.get("description", "")))
+        self.robot_joint_count.setValue(int(robot.get("joint_count", 0) or 0))
+        joint_order = robot.get("joint_order", [])
+        self.robot_joint_order.setText(", ".join(str(item) for item in joint_order) if isinstance(joint_order, list) else str(joint_order))
+        self.robot_base_frame.setText(str(robot.get("base_frame", "")))
+        self.robot_ee_frame.setText(str(robot.get("end_effector_frame", "")))
         self.sample_rate.setValue(int(recording.get("sample_rate_hz") or 10))
         self.episode_duration.setValue(int(recording.get("episode_duration_sec") or 2))
         self.crop_enabled.setChecked(bool(crop.get("enabled", False)))
@@ -1195,8 +1288,31 @@ class ConfigPage(QWidget):
         self.status.setText("Applied quick form settings to YAML.")
 
     def _apply_form_values(self, config: dict) -> None:
-        config.setdefault("instruction", {})["text"] = self.instruction.text().strip()
-        config.setdefault("environment", {})["description"] = self.scene_description.toPlainText().strip()
+        project = config.setdefault("project", {})
+        project["name"] = self.project_name.text().strip()
+        project["version"] = self.project_version.text().strip()
+        project["operator"] = self.project_operator.text().strip()
+        project["environment"] = self.project_environment.text().strip()
+        environment = config.setdefault("environment", {})
+        environment["type"] = self.environment_type.text().strip()
+        environment["description"] = self.scene_description.toPlainText().strip()
+        environment["workspace"] = self.environment_workspace.text().strip()
+        environment["lighting"] = self.environment_lighting.text().strip()
+        environment["objects"] = self._split_csv(self.environment_objects.text())
+        environment["notes"] = self.environment_notes.toPlainText().strip()
+        robot = config.setdefault("robot", {})
+        robot["name"] = self.robot_name.text().strip()
+        robot["model"] = self.robot_model.text().strip()
+        robot["description"] = self.robot_description.text().strip()
+        robot["joint_count"] = int(self.robot_joint_count.value())
+        robot["joint_order"] = self._split_csv(self.robot_joint_order.text())
+        robot["base_frame"] = self.robot_base_frame.text().strip()
+        robot["end_effector_frame"] = self.robot_ee_frame.text().strip()
+        instruction = config.setdefault("instruction", {})
+        instruction["text"] = self.instruction.text().strip()
+        instruction["language"] = self.instruction_language.text().strip()
+        instruction["task_family"] = self.task_family.text().strip()
+        instruction["success_condition"] = self.success_condition.text().strip()
         recording = config.setdefault("recording", {})
         recording["sample_rate_hz"] = int(self.sample_rate.value())
         recording["episode_duration_sec"] = int(self.episode_duration.value())
@@ -1221,6 +1337,9 @@ class ConfigPage(QWidget):
             preview = stream.setdefault("preview", {})
             preview["crop"] = dict(crop)
             preview["resize"] = dict(resize)
+
+    def _split_csv(self, text: str) -> list[str]:
+        return [part.strip() for part in text.split(",") if part.strip()]
 
     def refresh_dataset_preview(self, config: dict | None = None) -> None:
         config = config if config is not None else self.ctx.state.collection_config

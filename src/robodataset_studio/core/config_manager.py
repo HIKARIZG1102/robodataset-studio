@@ -14,7 +14,7 @@ class ConfigManager:
     def build_default_config(self, state: ProjectState, topics: list[dict[str, str]] | None = None) -> dict[str, Any]:
         topics = topics or []
         image_topics = [t for t in topics if "Image" in t.get("type", "") or "image" in t.get("name", "").lower()]
-        joint_candidates = [t for t in topics if "JointState" in t.get("type", "") or "joint" in t.get("name", "").lower()]
+        joint_candidates = [t for t in topics if self._is_joint_state_topic(t)]
         joint_topic = next((t["name"] for t in joint_candidates), None)
         action_topic = next((t["name"] for t in topics if "action" in t.get("name", "").lower()), None)
         gripper_topic = next((t["name"] for t in topics if "gripper" in t.get("name", "").lower()), None)
@@ -189,6 +189,13 @@ class ConfigManager:
                 "joint_order": [],
             }
         ]
+
+    def _is_joint_state_topic(self, topic: dict[str, str]) -> bool:
+        typ = topic.get("type", "")
+        name = topic.get("name", "").lower()
+        if typ == "sensor_msgs/msg/JointState" or typ.endswith("/JointState"):
+            return True
+        return name.endswith("/joint_states") or name == "/joint_states"
 
     def dataset_structure_preview(self, config: dict[str, Any]) -> str:
         lines = [

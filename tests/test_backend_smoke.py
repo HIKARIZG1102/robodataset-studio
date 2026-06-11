@@ -423,6 +423,21 @@ def test_default_config_keeps_camera_only_selection_camera_only() -> None:
     assert "ai_validation" not in config
 
 
+def test_command_joint_group_topic_is_not_treated_as_joint_state() -> None:
+    topics = [
+        {"name": "/camera/camera_wrist/color/image_raw", "type": "sensor_msgs/msg/Image"},
+        {"name": "/wx250s/commands/joint_group", "type": "interbotix_xs_msgs/msg/JointGroupCommand"},
+    ]
+
+    config = ConfigManager().build_default_config(ProjectState(), topics)
+
+    assert config["robot"]["joint_state_topic"] is None
+    assert config["state"]["keys"] == []
+    assert config["action"]["source"] == "not_configured"
+    assert config["dataset"]["requires_robot_obs"] is False
+    assert config["dataset"]["requires_actions"] is False
+
+
 def test_default_config_supports_more_than_four_image_tracks() -> None:
     topics = [
         {"name": f"/camera/cam_{index}/color/image_raw", "type": "sensor_msgs/msg/Image"}
@@ -486,7 +501,26 @@ def test_config_page_quick_form_updates_yaml() -> None:
     page = ConfigPage(ctx)
 
     page.instruction.setText("pick up the white cube")
+    page.instruction_language.setText("en")
+    page.task_family.setText("manipulation")
+    page.success_condition.setText("cube is lifted")
     page.scene_description.setPlainText("physical tabletop scene with one white cube")
+    page.project_name.setText("cube_task")
+    page.project_version.setText("v2")
+    page.project_operator.setText("tester")
+    page.project_environment.setText("physical")
+    page.environment_type.setText("physical")
+    page.environment_workspace.setText("robotarm_control_ws")
+    page.environment_lighting.setText("lab")
+    page.environment_objects.setText("white cube, table")
+    page.environment_notes.setPlainText("notes here")
+    page.robot_name.setText("test_arm")
+    page.robot_model.setText("generic")
+    page.robot_description.setText("generic arm")
+    page.robot_joint_count.setValue(7)
+    page.robot_joint_order.setText("j1, j2, j3")
+    page.robot_base_frame.setText("base")
+    page.robot_ee_frame.setText("ee")
     page.sample_rate.setValue(15)
     page.episode_duration.setValue(8)
     page.crop_enabled.setChecked(True)
@@ -502,8 +536,26 @@ def test_config_page_quick_form_updates_yaml() -> None:
     config = ctx.config_manager.loads(page.editor.toPlainText())
 
     assert app is not None
+    assert config["project"]["name"] == "cube_task"
+    assert config["project"]["version"] == "v2"
+    assert config["project"]["operator"] == "tester"
+    assert config["project"]["environment"] == "physical"
     assert config["instruction"]["text"] == "pick up the white cube"
+    assert config["instruction"]["language"] == "en"
+    assert config["instruction"]["task_family"] == "manipulation"
+    assert config["instruction"]["success_condition"] == "cube is lifted"
     assert config["environment"]["description"] == "physical tabletop scene with one white cube"
+    assert config["environment"]["workspace"] == "robotarm_control_ws"
+    assert config["environment"]["lighting"] == "lab"
+    assert config["environment"]["objects"] == ["white cube", "table"]
+    assert config["environment"]["notes"] == "notes here"
+    assert config["robot"]["name"] == "test_arm"
+    assert config["robot"]["model"] == "generic"
+    assert config["robot"]["description"] == "generic arm"
+    assert config["robot"]["joint_count"] == 7
+    assert config["robot"]["joint_order"] == ["j1", "j2", "j3"]
+    assert config["robot"]["base_frame"] == "base"
+    assert config["robot"]["end_effector_frame"] == "ee"
     assert config["recording"]["sample_rate_hz"] == 15
     assert config["recording"]["episode_duration_sec"] == 8
     assert config["cameras"][0]["crop"] == {"enabled": True, "x": 10, "y": 20, "width": 320, "height": 240}
