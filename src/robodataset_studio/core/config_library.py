@@ -29,6 +29,13 @@ class ConfigLibrary:
         path.unlink()
         return path
 
+    def rename(self, old_name: str, new_name: str) -> Path:
+        old_path = self.path_for(old_name)
+        new_path = self.path_for(new_name)
+        new_path.parent.mkdir(parents=True, exist_ok=True)
+        old_path.replace(new_path)
+        return new_path
+
     def _safe_stem(self, name: str) -> str:
         text = Path(name.strip()).stem
         safe = "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in text)

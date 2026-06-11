@@ -87,6 +87,7 @@
 - [x] 深度图 topic 不再伪装成 RGB：例如 `/camera/camera/depth/image_rect_raw` 会生成 `modality=depth`、`encoding=16UC1`、`calvin_key=null`，不会写入 CALVIN RGB 必需键。
 - [x] Config 页面 AI Match 已拆为 `Default prompt` 和 `Send`：默认 prompt 只生成提示词，不自动发送；提示词包含标准 config 模板、当前表单值、已选 ROS topic/node、topic info、topic echo 样本、node info 和参数摘要；Send 后 AI 结果写入独立 preview，需点击 Replace 才替换主 YAML。
 - [x] Default prompt 生成已改为后台线程执行，主线程只做表单 snapshot；ROS topic echo / node info / param get 不再阻塞前端。Config 页关闭时会取消并清理 prompt/AI 通信线程。
+- [x] Config 页面 YAML 保存逻辑增强：保存会同时写入当前 session 的 `collection_config.yaml` 和项目相对 `config_library/*.yaml`；可通过 Saved YAML 下拉加载、重命名、删除历史配置。保存和 AI Replace 会拒绝缺少必要 section/streams 的不完整 YAML，避免 AI 回复截断后误覆盖。
 - [x] 已用真实 ROS graph 验证从 `/camera/camera` node publishers 生成配置：输出 `rgb_static -> /camera/camera/color/image_raw` 和 `depth_1 -> /camera/camera/depth/image_rect_raw`，无 robot/action 槽位，`ConfigManager.validate()` 无错误。
 - [x] 修复 Discovery 生成配置后 Config 页不刷新的问题：`AppContext` 增加 `config_changed` 信号，生成配置后已打开的 Config 页会立即刷新 YAML 预览，不再停留在 `No config loaded`。
 - [x] 按历史 CALVIN-like episode 检查基础字段：`rgb_static`、可选 `rgb_wrist`、`robot_obs`、`rel_actions/actions` 和 `lang_annotations/auto_lang_ann.npy`；新配置生成只保留这类数据集/采集必要字段与用户选择的 ROS topic。

@@ -1316,8 +1316,11 @@ class ConfigPage(QWidget):
         self._prompt_worker: AIConfigPromptWorker | None = None
         self._ai_thread: QThread | None = None
         self._ai_worker: AIConfigMatchWorker | None = None
+        self._current_library_name = ""
         self.editor = QPlainTextEdit()
         self.status = QLabel("")
+        self.config_library_select = QComboBox()
+        self.config_library_select.setEditable(True)
         self.ai_prompt = QPlainTextEdit()
         self.ai_prompt.setMaximumHeight(180)
         self.ai_preview = QPlainTextEdit()
@@ -1379,6 +1382,10 @@ class ConfigPage(QWidget):
         refresh_from_selection = QPushButton("Refresh Config From Selected Topics")
         apply_form = QPushButton("Apply Form To YAML")
         reload_form = QPushButton("Reload Form From YAML")
+        load_library = QPushButton("Load YAML")
+        save_library = QPushButton("Save YAML")
+        rename_library = QPushButton("Rename YAML")
+        delete_library = QPushButton("Delete YAML")
         build_ai_prompt = QPushButton("Default prompt")
         send_ai_prompt = QPushButton("Send")
         replace_ai = QPushButton("Replace YAML From AI Preview")
@@ -1387,6 +1394,10 @@ class ConfigPage(QWidget):
         refresh_from_selection.clicked.connect(self.refresh_config_from_selected_topics)
         apply_form.clicked.connect(self.apply_form_to_yaml)
         reload_form.clicked.connect(self.reload_form_from_yaml)
+        load_library.clicked.connect(self.load_selected_library_config)
+        save_library.clicked.connect(self.save)
+        rename_library.clicked.connect(self.rename_selected_library_config)
+        delete_library.clicked.connect(self.delete_selected_library_config)
         build_ai_prompt.clicked.connect(self.build_default_ai_prompt)
         send_ai_prompt.clicked.connect(self.send_ai_prompt)
         replace_ai.clicked.connect(self.replace_yaml_from_ai_preview)
@@ -1400,6 +1411,14 @@ class ConfigPage(QWidget):
         row.addWidget(validate)
         row.addWidget(save)
         layout.addLayout(row)
+        library_row = QHBoxLayout()
+        library_row.addWidget(QLabel("Saved YAML"))
+        library_row.addWidget(self.config_library_select, 1)
+        library_row.addWidget(load_library)
+        library_row.addWidget(save_library)
+        library_row.addWidget(rename_library)
+        library_row.addWidget(delete_library)
+        layout.addLayout(library_row)
         layout.addWidget(QLabel("Selected ROS2 topics"))
         layout.addWidget(self.selected_topics_view)
         form_tabs = QTabWidget()
@@ -1428,6 +1447,7 @@ class ConfigPage(QWidget):
         layout.addWidget(QLabel("collection_config.yaml"))
         layout.addWidget(self.editor)
         self.ctx.config_changed.connect(self.load_context_config)
+        self.refresh_config_library()
         self.refresh_selected_topics_view()
         if self.ctx.state.collection_config:
             self.load_context_config()
@@ -1686,6 +1706,91 @@ class ConfigPage(QWidget):
         errors = self.ctx.config_manager.validate(self._current_config())
         self.status.setText("OK" if not errors else "Warnings: " + "; ".join(errors))
 
+    def refresh_config_library(self) -> None:
+        current = self.config_library_select.currentText().strip()
+        self.config_library_select.blockSignals(True)
+        self.config_library_select.clear()
+        names = [path.stem for path in self.ctx.config_library.list_configs()]
+        self.config_library_select.addItems(names)
+        self.config_library_select.setCurrentText(current or self._suggest_config_name())
+        self.config_library_select.blockSignals(False)
+
+    def _suggest_config_name(self) -> str:
+        config = self.ctx.config_manager.loads(self.editor.toPlainText())
+        project = config.get("project", {}) if isinstance(config, dict) else {}
+        robot = config.get("robot", {}) if isinstance(config, dict) else {}
+        cameras = config.get("cameras", []) if isinstance(config, dict) else []
+        parts = [
+            str(project.get("name") or self.project_name.text() or self.ctx.state.task_name or "collection_config"),
+            str(project.get("version") or self.project_version.text() or self.ctx.state.version or "v1"),
+        ]
+        if robot.get("model") or self.robot_model.text():
+            parts.append(str(robot.get("model") or self.robot_model.text()))
+        if cameras:
+            parts.append(f"{len(cameras)}cam")
+        return "_".join(part for part in parts if part).strip("_") or "collection_config"
+
+    def load_selected_library_config(self) -> None:
+        name = self.config_library_select.currentText().strip()
+        if not name:
+            QMessageBox.warning(self, "Saved YAML", "Select a saved YAML config first.")
+            return
+        try:
+            text = self.ctx.config_library.load_text(name)
+            config = self.ctx.config_manager.loads(text)
+            self._require_complete_config(config)
+        except Exception as exc:
+            QMessageBox.warning(self, "Saved YAML", f"Cannot load YAML config:\n{exc}")
+            return
+        self.ctx.state.collection_config = config
+        self.editor.setPlainText(self.ctx.config_manager.dumps(config))
+        self.reload_form_from_yaml()
+        self._current_library_name = name
+        self.config_library_select.setCurrentText(name)
+        self.status.setText(f"Loaded saved YAML: {name}")
+
+    def save_current_config_to_library(self, config: dict, text: str) -> Path:
+        name = self.config_library_select.currentText().strip() or self._suggest_config_name()
+        path = self.ctx.config_library.save_text(name, text)
+        self._current_library_name = path.stem
+        self.refresh_config_library()
+        self.config_library_select.setCurrentText(path.stem)
+        return path
+
+    def delete_selected_library_config(self) -> None:
+        name = self._current_library_name or self.config_library_select.currentText().strip()
+        if not name:
+            return
+        try:
+            path = self.ctx.config_library.delete(name)
+        except FileNotFoundError:
+            QMessageBox.warning(self, "Saved YAML", f"Saved YAML not found: {name}")
+            return
+        self._current_library_name = ""
+        self.refresh_config_library()
+        self.status.setText(f"Deleted saved YAML: {path.name}")
+
+    def rename_selected_library_config(self) -> None:
+        old_name = self.config_library_select.currentText().strip()
+        if self._current_library_name:
+            old_name = self._current_library_name
+        new_name = self.config_library_select.currentText().strip() or self._suggest_config_name()
+        if not old_name:
+            QMessageBox.warning(self, "Saved YAML", "Select a saved YAML config first.")
+            return
+        if old_name == new_name:
+            self.status.setText("Saved YAML already uses the suggested name.")
+            return
+        try:
+            path = self.ctx.config_library.rename(old_name, new_name)
+        except FileNotFoundError:
+            QMessageBox.warning(self, "Saved YAML", f"Saved YAML not found: {old_name}")
+            return
+        self.refresh_config_library()
+        self.config_library_select.setCurrentText(path.stem)
+        self._current_library_name = path.stem
+        self.status.setText(f"Renamed saved YAML: {old_name} -> {path.stem}")
+
     def build_default_ai_prompt(self) -> None:
         config = self._current_config()
         model = self.ctx.state.ai_model.strip() or "model"
@@ -1824,6 +1929,11 @@ class ConfigPage(QWidget):
         if not matched:
             QMessageBox.warning(self, "AI config preview", "AI preview does not contain parseable YAML/JSON config.")
             return
+        try:
+            self._require_complete_config(matched)
+        except ValueError as exc:
+            QMessageBox.warning(self, "AI config preview", f"AI YAML looks incomplete:\n{exc}")
+            return
         matched.pop("ai_validation", None)
         self.ctx.state.collection_config = matched
         self.editor.setPlainText(self.ctx.config_manager.dumps(matched))
@@ -1904,12 +2014,36 @@ class ConfigPage(QWidget):
             return {}
         return loaded if isinstance(loaded, dict) else {}
 
+    def _require_complete_config(self, config: dict) -> None:
+        required = ["project", "environment", "robot", "instruction", "runtime", "dataset", "recording"]
+        missing = [section for section in required if not isinstance(config.get(section), dict)]
+        if missing:
+            raise ValueError("missing required section(s): " + ", ".join(missing))
+        streams = config.get("streams")
+        cameras = config.get("cameras")
+        if not isinstance(streams, list) or not streams:
+            raise ValueError("missing non-empty streams list")
+        if not isinstance(cameras, list):
+            raise ValueError("missing cameras list")
+        errors = self.ctx.config_manager.validate(config)
+        fatal = [error for error in errors if error.startswith("missing required section") or error == "missing cameras or streams"]
+        if fatal:
+            raise ValueError("; ".join(fatal))
+
     def save(self) -> None:
-        config = self._current_config()
+        try:
+            config = self._current_config()
+            self._require_complete_config(config)
+        except Exception as exc:
+            QMessageBox.warning(self, "Save YAML", f"Cannot save incomplete or invalid YAML:\n{exc}")
+            return
         errors = self.ctx.config_manager.validate(config)
         path = self.ctx.state.raw_session_dir / "collection_config.yaml"
         self.ctx.config_manager.save(path, config)
-        self.status.setText(f"Saved: {path}" + (f" | warnings: {len(errors)}" if errors else ""))
+        library_path = self.save_current_config_to_library(config, self.ctx.config_manager.dumps(config))
+        self.status.setText(
+            f"Saved: {path} | library: {library_path.name}" + (f" | warnings: {len(errors)}" if errors else "")
+        )
 
 
 class RecordingPage(QWidget):

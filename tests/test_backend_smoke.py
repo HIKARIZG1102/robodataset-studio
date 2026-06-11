@@ -7,7 +7,7 @@ import time
 import numpy as np
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from robodataset_studio.dataset.merge_plan import CalvinMergePlanner, CalvinSessionMerger
 from robodataset_studio.dataset.recorder import MockRecorder
@@ -229,8 +229,11 @@ def test_config_library_roundtrip_and_delete(tmp_path) -> None:
     assert path.name == "widowx_default.yaml"
     assert [config.name for config in library.list_configs()] == ["widowx_default.yaml"]
     assert "name: demo" in library.load_text("widowx default")
-    deleted = library.delete("widowx default")
-    assert deleted.name == "widowx_default.yaml"
+    renamed = library.rename("widowx default", "renamed config")
+    assert renamed.name == "renamed_config.yaml"
+    assert [config.name for config in library.list_configs()] == ["renamed_config.yaml"]
+    deleted = library.delete("renamed config")
+    assert deleted.name == "renamed_config.yaml"
     assert library.list_configs() == []
 
 
@@ -648,6 +651,60 @@ def test_config_page_refresh_from_selected_topics_updates_yaml_and_preview() -> 
     assert config["dataset"]["requires_robot_obs"] is False
     assert "/camera/front/image_raw" in page.selected_topics_view.toPlainText()
     assert "episode_0000000.npz" in page.dataset_preview.toPlainText()
+
+
+def test_config_page_saves_loads_and_manages_yaml_library(tmp_path) -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    ctx.config_library = ConfigLibrary(tmp_path / "config_library")
+    ctx.state.dataset_root = tmp_path / "datasets"
+    ctx.state.collection_config = ConfigManager().build_default_config(
+        ProjectState(),
+        [{"name": "/camera/camera/color/image_raw", "type": "sensor_msgs/msg/Image"}],
+    )
+    page = ConfigPage(ctx)
+    page.project_name.setText("catch_test")
+    page.project_version.setText("v2")
+    page.robot_model.setText("wx250s")
+    page.apply_form_to_yaml()
+    page.config_library_select.setCurrentText("")
+
+    page.save()
+
+    assert app is not None
+    saved_names = [path.stem for path in ctx.config_library.list_configs()]
+    assert saved_names == ["catch_test_v2_wx250s_1cam"]
+    page.editor.setPlainText("project:\n  name: broken\n")
+    page.config_library_select.setCurrentText("catch_test_v2_wx250s_1cam")
+    page.load_selected_library_config()
+    assert "catch_test" in page.editor.toPlainText()
+
+    page.config_library_select.setCurrentText("manual_name")
+    page.rename_selected_library_config()
+    assert [path.stem for path in ctx.config_library.list_configs()] == ["manual_name"]
+    page.delete_selected_library_config()
+    assert ctx.config_library.list_configs() == []
+
+
+def test_config_page_rejects_incomplete_ai_yaml_preview(monkeypatch) -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    page = ConfigPage(ctx)
+    ctx.state.collection_config = ConfigManager().build_default_config(
+        ProjectState(),
+        [{"name": "/camera/camera/color/image_raw", "type": "sensor_msgs/msg/Image"}],
+    )
+    page.load_context_config()
+    before = page.editor.toPlainText()
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: warnings.append(args))
+
+    page.ai_preview.setPlainText("project:\n  name: incomplete\n")
+    page.replace_yaml_from_ai_preview()
+
+    assert app is not None
+    assert page.editor.toPlainText() == before
+    assert warnings
 
 
 def test_ros_recorder_writes_annotations_and_delta_actions(tmp_path) -> None:
