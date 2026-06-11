@@ -1251,14 +1251,16 @@ class ConfigPage(QWidget):
         refresh_from_selection = QPushButton("Refresh Config From Selected Topics")
         apply_form = QPushButton("Apply Form To YAML")
         reload_form = QPushButton("Reload Form From YAML")
-        ai_match = QPushButton("AI Match Config")
+        build_ai_prompt = QPushButton("Default prompt")
+        send_ai_prompt = QPushButton("Send")
         replace_ai = QPushButton("Replace YAML From AI Preview")
         validate = QPushButton("Validate")
         save = QPushButton("Save collection_config.yaml")
         refresh_from_selection.clicked.connect(self.refresh_config_from_selected_topics)
         apply_form.clicked.connect(self.apply_form_to_yaml)
         reload_form.clicked.connect(self.reload_form_from_yaml)
-        ai_match.clicked.connect(self.ai_match_config)
+        build_ai_prompt.clicked.connect(self.build_default_ai_prompt)
+        send_ai_prompt.clicked.connect(self.send_ai_prompt)
         replace_ai.clicked.connect(self.replace_yaml_from_ai_preview)
         validate.clicked.connect(self.validate)
         save.clicked.connect(self.save)
@@ -1267,8 +1269,6 @@ class ConfigPage(QWidget):
         row.addWidget(refresh_from_selection)
         row.addWidget(reload_form)
         row.addWidget(apply_form)
-        row.addWidget(ai_match)
-        row.addWidget(replace_ai)
         row.addWidget(validate)
         row.addWidget(save)
         layout.addLayout(row)
@@ -1284,8 +1284,17 @@ class ConfigPage(QWidget):
         layout.addWidget(self.status)
         layout.addWidget(QLabel("Dataset structure preview"))
         layout.addWidget(self.dataset_preview)
+        ai_prompt_panel = QWidget()
+        ai_prompt_layout = QHBoxLayout(ai_prompt_panel)
+        ai_prompt_layout.addWidget(self.ai_prompt, 1)
+        ai_prompt_buttons = QVBoxLayout()
+        ai_prompt_buttons.addWidget(build_ai_prompt)
+        ai_prompt_buttons.addWidget(send_ai_prompt)
+        ai_prompt_buttons.addWidget(replace_ai)
+        ai_prompt_buttons.addStretch(1)
+        ai_prompt_layout.addLayout(ai_prompt_buttons)
         ai_tabs = QTabWidget()
-        ai_tabs.addTab(self.ai_prompt, "AI prompt")
+        ai_tabs.addTab(ai_prompt_panel, "AI prompt")
         ai_tabs.addTab(self.ai_preview, "AI config preview")
         layout.addWidget(ai_tabs)
         layout.addWidget(QLabel("collection_config.yaml"))
@@ -1549,7 +1558,14 @@ class ConfigPage(QWidget):
         errors = self.ctx.config_manager.validate(self._current_config())
         self.status.setText("OK" if not errors else "Warnings: " + "; ".join(errors))
 
-    def ai_match_config(self) -> None:
+    def build_default_ai_prompt(self) -> None:
+        config = self._current_config()
+        model = self.ctx.state.ai_model.strip() or "model"
+        _, prompt_text = self._ai_match_payload(config, model)
+        self.ai_prompt.setPlainText(prompt_text)
+        self.status.setText("Default AI prompt generated from current form and selected ROS context.")
+
+    def send_ai_prompt(self) -> None:
         config = self._current_config()
         base_url = self.ctx.state.ai_base_url.strip().rstrip("/")
         model = self.ctx.state.ai_model.strip()
@@ -1568,8 +1584,11 @@ class ConfigPage(QWidget):
         if self._ai_thread is not None:
             self.status.setText("AI match is already running.")
             return
-        payload, prompt_text = self._ai_match_payload(config, model)
-        self.ai_prompt.setPlainText(prompt_text)
+        prompt_text = self.ai_prompt.toPlainText().strip()
+        if not prompt_text:
+            _, prompt_text = self._ai_match_payload(config, model)
+            self.ai_prompt.setPlainText(prompt_text)
+        payload = self._ai_payload_from_prompt(prompt_text, model)
         self.ai_preview.setPlainText("AI match running...")
         self.status.setText("AI match running in background.")
         self._ai_thread = QThread(self)
@@ -1582,6 +1601,9 @@ class ConfigPage(QWidget):
         self._ai_thread.finished.connect(self._clear_ai_thread)
         self._ai_thread.finished.connect(self._ai_thread.deleteLater)
         self._ai_thread.start()
+
+    def ai_match_config(self) -> None:
+        self.send_ai_prompt()
 
     @Slot(object, object)
     def finish_ai_match(self, content: object, error: object) -> None:
@@ -1608,9 +1630,21 @@ class ConfigPage(QWidget):
         for topic in self.ctx.state.selected_streams:
             name = str(topic.get("name") or "")
             info = self.ctx.discovery.topic_info(name) if name else None
-            topic_infos.append({"selected": topic, "topic_info": info or {}})
+            echo = self.ctx.discovery.topic_echo_once(name) if name else ""
+            topic_infos.append({"selected": topic, "topic_info": info or {}, "echo_once": echo})
+        node_details = []
+        for node_name in self.ctx.state.selected_nodes:
+            node_details.append(
+                {
+                    "name": node_name,
+                    "node_info": self.ctx.discovery.node_info(node_name),
+                    "parameter_sample": self.ctx.discovery.node_params(node_name),
+                    "publishers": self.ctx.discovery.node_publishers(node_name),
+                }
+            )
         selected_context = {
             "selected_nodes": self.ctx.state.selected_nodes,
+            "selected_node_details": node_details,
             "selected_streams": self.ctx.state.selected_streams,
             "selected_topic_info": topic_infos,
             "last_graph_topics": self.ctx.last_graph.get("topics", []),
@@ -1653,6 +1687,19 @@ class ConfigPage(QWidget):
             ],
             "temperature": 0,
         }, prompt_text
+
+    def _ai_payload_from_prompt(self, prompt_text: str, model: str) -> dict:
+        return {
+            "model": model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You convert ROS2 graph selections into safe listener-only robot dataset YAML configs.",
+                },
+                {"role": "user", "content": prompt_text},
+            ],
+            "temperature": 0,
+        }
 
     def _call_openai_compatible_chat(self, base_url: str, api_key: str, payload: dict) -> str:
         return call_openai_compatible_chat(base_url, api_key, payload, timeout_sec=60)

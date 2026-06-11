@@ -17,6 +17,7 @@ from robodataset_studio.core.config_manager import ConfigManager
 from robodataset_studio.core.models import ProjectState
 from robodataset_studio.core.settings_store import UserSettingsStore
 from robodataset_studio.ros.episode_recorder import RosEpisodeRecorder, joint_state_to_robot_obs
+from robodataset_studio.ros.graph_discovery import RosGraphDiscovery
 from robodataset_studio.ros.image_conversion import image_bytes_to_rgb
 from robodataset_studio.ui.pages import AppContext, ConfigPage, DiscoveryPage, InspectorPage, RecordingPage, ReviewPage, SettingsPage, UploadPage
 from robodataset_studio.ui.main_window import MainWindow
@@ -79,6 +80,30 @@ def test_mock_recorder_writes_calvin_transition_files(tmp_path) -> None:
         assert data["rgb_static"].shape == (224, 224, 3)
         assert data["robot_obs"].shape == (6,)
         assert data["rel_actions"].shape == (7,)
+
+
+def test_ros_graph_discovery_prompt_probes_use_bounded_output() -> None:
+    discovery = RosGraphDiscovery()
+    calls = []
+
+    def fake_run(command, timeout=8):  # type: ignore[no-untyped-def]
+        calls.append((command, timeout))
+        if command[:4] == ["ros2", "topic", "echo", "--once"]:
+            return ["x" * 20]
+        if command[:3] == ["ros2", "node", "info"]:
+            return ["Publishers:", "/camera/image_raw: sensor_msgs/msg/Image"]
+        if command[:3] == ["ros2", "param", "list"]:
+            return ["exposure", "gain"]
+        if command[:3] == ["ros2", "param", "get"]:
+            return ["Integer value is: 1"]
+        return []
+
+    discovery._run = fake_run  # type: ignore[method-assign]
+
+    assert discovery.topic_echo_once("/camera/image_raw", max_chars=8).endswith("...[truncated]")
+    assert "Publishers" in discovery.node_info("/camera_node")
+    assert "exposure" in discovery.node_params("/camera_node")
+    assert any(call[0][:4] == ["ros2", "topic", "echo", "--once"] and call[1] == 4 for call in calls)
 
 
 def test_ros_recorder_sample_count_controls_transition_count(tmp_path) -> None:
@@ -977,12 +1002,17 @@ def test_ai_match_prompt_uses_settings_form_values_and_topic_info(monkeypatch) -
         {"name": "/camera/camera/color/image_raw", "type": "sensor_msgs/msg/Image"},
         {"name": "/wx250s/joint_states", "type": "sensor_msgs/msg/JointState"},
     ]
+    ctx.state.selected_nodes = ["/camera_node"]
     ctx.discovery.topic_info = lambda topic: {  # type: ignore[method-assign]
         "name": topic,
         "type": "sensor_msgs/msg/JointState" if topic.endswith("joint_states") else "sensor_msgs/msg/Image",
         "publisher_count": 1,
         "subscription_count": 0,
     }
+    ctx.discovery.topic_echo_once = lambda topic: f"sample from {topic}"  # type: ignore[method-assign]
+    ctx.discovery.node_info = lambda node: f"node info for {node}"  # type: ignore[method-assign]
+    ctx.discovery.node_params = lambda node: "param_a: value_a"  # type: ignore[method-assign]
+    ctx.discovery.node_publishers = lambda node: [{"name": "/camera/camera/color/image_raw", "type": "sensor_msgs/msg/Image"}]  # type: ignore[method-assign]
     config_page = ConfigPage(ctx)
     ctx.state.collection_config = ConfigManager().build_default_config(
         ProjectState(),
@@ -1001,6 +1031,12 @@ def test_ai_match_prompt_uses_settings_form_values_and_topic_info(monkeypatch) -
     assert "lab scene" in prompt
     assert "/wx250s/joint_states" in prompt
     assert "selected_topic_info" in prompt
+    assert "sample from /wx250s/joint_states" in prompt
+    assert "node info for /camera_node" in prompt
+    assert "param_a: value_a" in prompt
+
+    config_page.build_default_ai_prompt()
+    assert "sample from /camera/camera/color/image_raw" in config_page.ai_prompt.toPlainText()
 
 
 def test_ai_match_preview_and_replace_are_separate() -> None:

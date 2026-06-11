@@ -20,7 +20,7 @@ class RosGraphDiscovery:
             "services": [{"name": s, "type": ""} for s in self._run(["ros2", "service", "list"])],
         }
 
-    def _run(self, command: list[str]) -> list[str]:
+    def _run(self, command: list[str], timeout: int = 8) -> list[str]:
         commands = [self._without_daemon(command)]
         if commands[0] != command:
             commands.append(command)
@@ -35,7 +35,7 @@ class RosGraphDiscovery:
                     candidate,
                     capture_output=True,
                     text=True,
-                    timeout=8,
+                    timeout=timeout,
                     check=False,
                     env=env,
                 )
@@ -69,6 +69,24 @@ class RosGraphDiscovery:
             elif line.startswith("Subscription count:"):
                 info["subscription_count"] = self._parse_count(line)
         return info
+
+    def topic_echo_once(self, topic_name: str, max_chars: int = 4000) -> str:
+        lines = self._run(["ros2", "topic", "echo", "--once", topic_name], timeout=4)
+        return self._truncate("\n".join(lines), max_chars)
+
+    def node_info(self, node_name: str, max_chars: int = 4000) -> str:
+        lines = self._run(["ros2", "node", "info", node_name], timeout=6)
+        return self._truncate("\n".join(lines), max_chars)
+
+    def node_params(self, node_name: str, max_chars: int = 4000) -> str:
+        param_names = self._run(["ros2", "param", "list", node_name], timeout=6)
+        sample: list[str] = []
+        for name in param_names[:24]:
+            if not name or name.startswith("/"):
+                continue
+            value = self._run(["ros2", "param", "get", node_name, name], timeout=4)
+            sample.append(f"{name}: {' '.join(value)}")
+        return self._truncate("\n".join(sample), max_chars)
 
     def node_publishers(self, node_name: str) -> list[dict[str, str]]:
         lines = self._run(["ros2", "node", "info", node_name])
@@ -118,3 +136,8 @@ class RosGraphDiscovery:
             return int(line.split(":", 1)[1].strip())
         except Exception:
             return 0
+
+    def _truncate(self, text: str, max_chars: int) -> str:
+        if len(text) <= max_chars:
+            return text
+        return text[:max_chars] + "\n...[truncated]"

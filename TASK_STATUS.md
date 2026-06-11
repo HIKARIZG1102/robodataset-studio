@@ -85,12 +85,12 @@
 - [x] 修正 Config 预览生成语义：Discovery 只用勾选 topic 生成配置；如果没有勾选 topic，则可从当前选中 node 的 publishers 生成；不再把全 ROS graph 或默认 `/wx250s/joint_states` 自动塞进配置。
 - [x] camera-only 配置已作为合法采集配置：只选相机 topic/node 时，`state.keys=[]`、`action.source=not_configured`、`dataset.requires_robot_obs=false`、`dataset.requires_actions=false`，录制和 Review 不再要求 `robot_obs/rel_actions/actions`。
 - [x] 深度图 topic 不再伪装成 RGB：例如 `/camera/camera/depth/image_rect_raw` 会生成 `modality=depth`、`encoding=16UC1`、`calvin_key=null`，不会写入 CALVIN RGB 必需键。
-- [x] Config 页面增加可选 `AI Match Config` 按钮：在用户填写 OpenAI-compatible base URL、model、API key 环境变量后，可把选中的 node/topic 上下文、当前 YAML 和默认模板发送给 AI 辅助整理；API key 只从环境变量读取，不写入配置文件。
+- [x] Config 页面 AI Match 已拆为 `Default prompt` 和 `Send`：默认 prompt 只生成提示词，不自动发送；提示词包含标准 config 模板、当前表单值、已选 ROS topic/node、topic info、topic echo 样本、node info 和参数摘要；Send 后 AI 结果写入独立 preview，需点击 Replace 才替换主 YAML。
 - [x] 已用真实 ROS graph 验证从 `/camera/camera` node publishers 生成配置：输出 `rgb_static -> /camera/camera/color/image_raw` 和 `depth_1 -> /camera/camera/depth/image_rect_raw`，无 robot/action 槽位，`ConfigManager.validate()` 无错误。
 - [x] 修复 Discovery 生成配置后 Config 页不刷新的问题：`AppContext` 增加 `config_changed` 信号，生成配置后已打开的 Config 页会立即刷新 YAML 预览，不再停留在 `No config loaded`。
 - [x] 按历史 CALVIN-like episode 检查基础字段：`rgb_static`、可选 `rgb_wrist`、`robot_obs`、`rel_actions/actions` 和 `lang_annotations/auto_lang_ann.npy`；新配置生成只保留这类数据集/采集必要字段与用户选择的 ROS topic。
 - [x] `collection_config.yaml` 不再写入 API/base URL/key/model 等 AI 连接字段；旧 YAML 中的 `ai_validation` 加载时会被清理。
-- [x] Config 页面移除 AI URL/model/key 输入，AI Match 只从 Settings 读取全局 AI 设置；Settings 中 API key 仅保存在当前运行内存，不写入项目 YAML。
+- [x] Config 页面移除 AI URL/model/key 输入，AI Match 只从 Settings 读取全局 AI 设置；Settings 中 API key 保存到本机用户配置，不写入项目 YAML。
 - [x] 未填写 instruction、environment description、success condition 等用户输入项时，生成配置保持空字符串，不再自动填入 `catch the satellite` 或默认场景描述。
 - [x] Config 页面删除配置库相关重复按钮和默认配置按钮，改为显示“已选 ROS2 topics”、刷新配置、应用表单、校验、保存和数据集结构预览。
 - [x] `collection_config.yaml` 生成进一步收窄为纯采集/数据集 schema：不再生成 `genesis`、默认 pi0.5 相机、默认 WidowX 关节名称或固定 6/7 维动作字段。
@@ -196,7 +196,7 @@
   - 真实监听式 ROS2 recorder 继续扩展到 action/通用数组 stream，并加入更严格同步策略。
   - 真实采集还需要在本机再做一次短样本数模式验收，例如 `sample_count=6` 或 `sample_count=20`，确认 UI 采集页和真实 ROS2 topic 输出的 transition 数符合预期。
   - 基于用户选择的 topic 完善 stream schema 映射，支持 JointState/action/Float32MultiArray 等非图像流作为记录数据来源。
-  - AI Match Config 需要后续增加流式状态、结果 diff 预览、失败重试和更严格 schema 校验；当前只作为手动点击的辅助整理工具。
+  - AI Match Config 后续可继续增加流式状态、结果 diff 预览、失败重试和更严格 schema 校验。
   - NPZ merge 继续扩展语言 annotation 合并策略，进一步兼容 `merge_calvin_sessions.py`。
   - SSH 上传继续扩展远端剩余空间检查、保存服务器配置和更完整的上传进度解析。
 
