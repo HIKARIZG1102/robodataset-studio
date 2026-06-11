@@ -230,10 +230,11 @@ class ConfigManager:
             estimate,
             f"{config.get('dataset', {}).get('split', 'training')}/",
             "  episode_0000000.npz",
+            "    CALVIN-compatible core fields:",
         ]
         for stream in config.get("streams", []):
             if not isinstance(stream, dict):
-                lines.append(f"    malformed stream entry: {type(stream).__name__}")
+                lines.append(f"      malformed stream entry: {type(stream).__name__}")
                 continue
             key = stream.get("calvin_key") or stream.get("name")
             if not key:
@@ -242,33 +243,40 @@ class ConfigManager:
             shape_text = "x".join(str(part) for part in shape)
             dtype = stream.get("dtype", "auto")
             topic = stream.get("topic", "")
-            lines.append(f"    {key}: {shape_text} {dtype} <- {topic}")
+            lines.append(f"      {key}: {shape_text} {dtype} <- {topic}")
         state_keys = config.get("state", {}).get("keys", [])
         if not isinstance(state_keys, list):
             state_keys = []
         for state_key in state_keys:
             if not isinstance(state_key, dict):
-                lines.append(f"    malformed state key entry: {type(state_key).__name__}")
+                lines.append(f"      malformed state key entry: {type(state_key).__name__}")
                 continue
             dim = state_key.get("output_dim") or "auto"
-            lines.append(f"    {state_key.get('name', 'robot_obs')}: ({dim},) float32 <- {state_key.get('source_topic', '')}")
+            lines.append(f"      {state_key.get('name', 'robot_obs')}: ({dim},) float32 <- {state_key.get('source_topic', '')}")
         if config.get("dataset", {}).get("requires_actions", False):
             dim = config.get("action", {}).get("dim") or "auto"
-            lines.append(f"    rel_actions: ({dim},) float32")
-            lines.append(f"    actions: ({dim},) float32")
+            lines.append(f"      rel_actions: ({dim},) float32")
+            lines.append(f"      actions: ({dim},) float32")
+        lines.extend(
+            [
+                "    RoboDataset metadata extensions:",
+                "      episode_metadata: json scalar",
+                "      collection_config: json scalar",
+                "      task_info: json scalar",
+                "      environment_info: json scalar",
+                "      robot_info: json scalar",
+                "      stream_schema: json scalar",
+            ]
+        )
         if config.get("dataset", {}).get("write_language_annotations", True):
             ann = config.get("dataset", {}).get("language_annotation_file", "lang_annotations/auto_lang_ann.npy")
             lines.append(f"  {ann}")
         lines.extend(
             [
                 "  session_metadata.json",
-                "  metadata fields in each episode:",
-                "    episode_metadata: json",
-                "    collection_config: json",
-                "    task_info: json",
-                "    environment_info: json",
-                "    robot_info: json",
-                "    stream_schema: json",
+                "compatibility:",
+                "  CALVIN loaders should consume only configured core keys.",
+                "  Metadata extension keys are optional sidecar fields and may be ignored or stripped for strict CALVIN loaders.",
             ]
         )
         return "\n".join(lines)

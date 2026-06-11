@@ -817,8 +817,11 @@ def test_dataset_preview_reports_metadata_and_minimum_transition_samples() -> No
     assert "0 synchronized samples" not in preview
     assert "2 synchronized samples" in preview
     assert "about 1 transition files" in preview
-    assert "environment_info: json" in preview
-    assert "collection_config: json" in preview
+    assert "CALVIN-compatible core fields:" in preview
+    assert "RoboDataset metadata extensions:" in preview
+    assert "environment_info: json scalar" in preview
+    assert "collection_config: json scalar" in preview
+    assert "Metadata extension keys are optional sidecar fields" in preview
 
 
 def test_config_page_saves_loads_and_manages_yaml_library(tmp_path) -> None:

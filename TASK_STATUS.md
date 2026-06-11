@@ -170,6 +170,7 @@
 - Project 页和 Config 页的项目名、版本、operator、environment 已绑定到同一份 `ProjectState`：任一页面保存/应用后另一页同步；首次默认值保持空白，上次填写内容会保存到本机 user settings，下次启动自动恢复，不显示在 Settings 页面，也不写入 Git；当前 smoke tests 为 67 passed。
 - 数据集输出已跟随配置补齐 metadata 落盘：每个 transition NPZ 除 CALVIN 兼容核心键外，会写入 `episode_metadata`、`collection_config`、`task_info`、`environment_info`、`robot_info`、`stream_schema` JSON 字段；session 根目录额外写 `session_metadata.json`。数据集预览已显示这些 metadata 字段，并修正短时长低 Hz 时 `0 synchronized samples` 的误导显示；当前 smoke tests 为 69 passed。
 - Review/Convert 已继续跟随配置 schema：Review 的 action 维度检查改为读取 `config.action.dim` 或 state output_dim，不再固定 7 维；HDF5 转换会把 `collection_config`、`environment_info`、`task_info`、`robot_info`、`stream_schema` 等 JSON metadata 放入 episode attrs，而不是混入训练数组 dataset；当前 smoke tests 为 71 passed。
+- 数据结构预览已明确区分 `CALVIN-compatible core fields` 和 `RoboDataset metadata extensions`，并提示 metadata 扩展键是可忽略/可剥离的 sidecar 字段，严格 CALVIN loader 应只消费配置中的 core keys；当前 smoke tests 为 71 passed。
 
 ## 遇到的问题
 
