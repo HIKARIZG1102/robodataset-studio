@@ -196,6 +196,72 @@ def fetch_openai_compatible_models(base_url: str, api_key: str) -> list[str]:
     return list(dict.fromkeys(models))
 
 
+class AIConfigMatchWorker(QObject):
+    finished = Signal(object, object)
+
+    def __init__(self, base_url: str, api_key: str, payload: dict, timeout_sec: int = 60) -> None:
+        super().__init__()
+        self.base_url = base_url
+        self.api_key = api_key
+        self.payload = payload
+        self.timeout_sec = timeout_sec
+        self.cancelled = False
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            content = call_openai_compatible_chat(self.base_url, self.api_key, self.payload, self.timeout_sec)
+            if self.cancelled:
+                return
+            self.finished.emit(content, None)
+        except Exception as exc:
+            if self.cancelled:
+                return
+            self.finished.emit("", exc)
+
+
+def call_openai_compatible_chat(base_url: str, api_key: str, payload: dict, timeout_sec: int = 60) -> str:
+    endpoint = base_url
+    if not endpoint.endswith("/chat/completions"):
+        endpoint = endpoint.rstrip("/") + "/chat/completions"
+    data = json.dumps(payload).encode("utf-8")
+    req = urlrequest.Request(
+        endpoint,
+        data=data,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urlrequest.urlopen(req, timeout=timeout_sec) as response:
+            body = response.read().decode("utf-8")
+    except urlerror.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"HTTP {exc.code}: {body[:800]}") from exc
+    except TimeoutError as exc:
+        raise RuntimeError(f"timeout after {timeout_sec}s") from exc
+    except urlerror.URLError as exc:
+        reason = str(exc.reason)
+        if "timed out" in reason.lower():
+            raise RuntimeError(f"timeout after {timeout_sec}s") from exc
+        raise RuntimeError(reason) from exc
+    parsed = json.loads(body)
+    choices = parsed.get("choices", [])
+    if not choices:
+        raise RuntimeError("AI response has no choices")
+    message = choices[0].get("message", {})
+    content = message.get("content", "")
+    if isinstance(content, list):
+        parts = [part.get("text", "") for part in content if isinstance(part, dict)]
+        content = "\n".join(parts)
+    return str(content)
+
+
 class ImagePreviewWidget(QWidget):
     sampled = Signal(int, int, int, int, int)
 
@@ -1120,8 +1186,14 @@ class ConfigPage(QWidget):
         super().__init__()
         self.ctx = ctx
         self._updating_form = False
+        self._ai_thread: QThread | None = None
+        self._ai_worker: AIConfigMatchWorker | None = None
         self.editor = QPlainTextEdit()
         self.status = QLabel("")
+        self.ai_prompt = QPlainTextEdit()
+        self.ai_prompt.setMaximumHeight(180)
+        self.ai_preview = QPlainTextEdit()
+        self.ai_preview.setMaximumHeight(220)
         self.selected_topics_view = QPlainTextEdit()
         self.selected_topics_view.setReadOnly(True)
         self.selected_topics_view.setMaximumHeight(92)
@@ -1180,12 +1252,14 @@ class ConfigPage(QWidget):
         apply_form = QPushButton("Apply Form To YAML")
         reload_form = QPushButton("Reload Form From YAML")
         ai_match = QPushButton("AI Match Config")
+        replace_ai = QPushButton("Replace YAML From AI Preview")
         validate = QPushButton("Validate")
         save = QPushButton("Save collection_config.yaml")
         refresh_from_selection.clicked.connect(self.refresh_config_from_selected_topics)
         apply_form.clicked.connect(self.apply_form_to_yaml)
         reload_form.clicked.connect(self.reload_form_from_yaml)
         ai_match.clicked.connect(self.ai_match_config)
+        replace_ai.clicked.connect(self.replace_yaml_from_ai_preview)
         validate.clicked.connect(self.validate)
         save.clicked.connect(self.save)
         layout = QVBoxLayout(self)
@@ -1194,6 +1268,7 @@ class ConfigPage(QWidget):
         row.addWidget(reload_form)
         row.addWidget(apply_form)
         row.addWidget(ai_match)
+        row.addWidget(replace_ai)
         row.addWidget(validate)
         row.addWidget(save)
         layout.addLayout(row)
@@ -1209,6 +1284,10 @@ class ConfigPage(QWidget):
         layout.addWidget(self.status)
         layout.addWidget(QLabel("Dataset structure preview"))
         layout.addWidget(self.dataset_preview)
+        ai_tabs = QTabWidget()
+        ai_tabs.addTab(self.ai_prompt, "AI prompt")
+        ai_tabs.addTab(self.ai_preview, "AI config preview")
+        layout.addWidget(ai_tabs)
         layout.addWidget(QLabel("collection_config.yaml"))
         layout.addWidget(self.editor)
         self.ctx.config_changed.connect(self.load_context_config)
@@ -1486,30 +1565,65 @@ class ConfigPage(QWidget):
         if not ai_enabled:
             QMessageBox.warning(self, "AI Match Config", "Enable AI in Settings before using AI matching.")
             return
-        payload = self._ai_match_payload(config, model)
-        try:
-            content = self._call_openai_compatible_chat(base_url, api_key, payload)
-        except Exception as exc:
-            QMessageBox.warning(self, "AI Match Config", f"AI matching failed:\n{exc}")
+        if self._ai_thread is not None:
+            self.status.setText("AI match is already running.")
             return
-        matched = self._extract_config_from_ai_text(content)
-        if not matched:
-            self.status.setText("AI returned text, but no parseable YAML/JSON config was found.")
-            self.editor.setPlainText(self.editor.toPlainText() + "\n\n# AI response:\n" + content)
-            return
-        self.ctx.state.collection_config = matched
-        self.editor.setPlainText(self.ctx.config_manager.dumps(matched))
-        self.reload_form_from_yaml()
-        self.status.setText("AI matched config loaded into preview. Validate before saving.")
+        payload, prompt_text = self._ai_match_payload(config, model)
+        self.ai_prompt.setPlainText(prompt_text)
+        self.ai_preview.setPlainText("AI match running...")
+        self.status.setText("AI match running in background.")
+        self._ai_thread = QThread(self)
+        self._ai_worker = AIConfigMatchWorker(base_url, api_key, payload, timeout_sec=60)
+        self._ai_worker.moveToThread(self._ai_thread)
+        self._ai_thread.started.connect(self._ai_worker.run)
+        self._ai_worker.finished.connect(self.finish_ai_match)
+        self._ai_worker.finished.connect(self._ai_thread.quit)
+        self._ai_worker.finished.connect(self._ai_worker.deleteLater)
+        self._ai_thread.finished.connect(self._clear_ai_thread)
+        self._ai_thread.finished.connect(self._ai_thread.deleteLater)
+        self._ai_thread.start()
 
-    def _ai_match_payload(self, config: dict, model: str) -> dict:
+    @Slot(object, object)
+    def finish_ai_match(self, content: object, error: object) -> None:
+        if error is not None:
+            self.ai_preview.setPlainText(f"AI match failed:\n{error}")
+            self.status.setText(f"AI match failed: {error}")
+            return
+        text = str(content)
+        matched = self._extract_config_from_ai_text(text)
+        if matched:
+            self.ai_preview.setPlainText(self.ctx.config_manager.dumps(matched))
+            self.status.setText("AI matched config loaded into separate preview. Review or replace YAML.")
+        else:
+            self.ai_preview.setPlainText(text)
+            self.status.setText("AI returned text, but no parseable YAML/JSON config was found.")
+
+    def _clear_ai_thread(self) -> None:
+        self._ai_thread = None
+        self._ai_worker = None
+
+    def _ai_match_payload(self, config: dict, model: str) -> tuple[dict, str]:
+        self._apply_form_values(config)
+        topic_infos = []
+        for topic in self.ctx.state.selected_streams:
+            name = str(topic.get("name") or "")
+            info = self.ctx.discovery.topic_info(name) if name else None
+            topic_infos.append({"selected": topic, "topic_info": info or {}})
         selected_context = {
             "selected_nodes": self.ctx.state.selected_nodes,
             "selected_streams": self.ctx.state.selected_streams,
+            "selected_topic_info": topic_infos,
             "last_graph_topics": self.ctx.last_graph.get("topics", []),
         }
         template = self.ctx.config_manager.build_default_config(self.ctx.state, [])
-        prompt = "Map selected ROS2 nodes/topics into the listener-only dataset collection config."
+        prompt = (
+            "Map selected ROS2 nodes/topics into a complete listener-only dataset collection config. "
+            "Use the user's project, environment, robot, instruction, recording, crop, and resize values. "
+            "Infer image tracks from selected image topics, including rgb_static, rgb_wrist, rgb_overhead, depth, or extra tracks. "
+            "Infer robot_obs and action dimensions only from selected JointState topics or provided topic info. "
+            "Describe nodes/topics in robot/environment descriptions when useful. "
+            "Return only YAML matching the standard config shape."
+        )
         user_content = {
             "request": prompt,
             "constraints": [
@@ -1518,11 +1632,16 @@ class ConfigPage(QWidget):
                 "Do not invent robot_obs/action streams when no JointState topic is selected.",
                 "Classify depth image topics as depth streams with calvin_key null, not RGB.",
                 "Keep runtime listener-only and never enable robot command publishing.",
+                "Keep collection_config.yaml free of AI API fields.",
+                "If an optional user field is blank, keep it blank unless selected ROS context proves a value.",
             ],
             "selected_ros_context": selected_context,
+            "user_form_values": self._ai_user_form_values(),
             "current_config": config,
-            "default_template": template,
+            "standard_config_template": template,
+            "dataset_schema_notes": self.ctx.config_manager.dataset_structure_preview(config),
         }
+        prompt_text = json.dumps(user_content, ensure_ascii=False, indent=2)
         return {
             "model": model,
             "messages": [
@@ -1530,41 +1649,78 @@ class ConfigPage(QWidget):
                     "role": "system",
                     "content": "You convert ROS2 graph selections into safe listener-only robot dataset YAML configs.",
                 },
-                {"role": "user", "content": json.dumps(user_content, ensure_ascii=False, indent=2)},
+                {"role": "user", "content": prompt_text},
             ],
             "temperature": 0,
-        }
+        }, prompt_text
 
     def _call_openai_compatible_chat(self, base_url: str, api_key: str, payload: dict) -> str:
-        endpoint = base_url
-        if not endpoint.endswith("/chat/completions"):
-            endpoint = endpoint.rstrip("/") + "/chat/completions"
-        data = json.dumps(payload).encode("utf-8")
-        req = urlrequest.Request(
-            endpoint,
-            data=data,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
+        return call_openai_compatible_chat(base_url, api_key, payload, timeout_sec=60)
+
+    def replace_yaml_from_ai_preview(self) -> None:
+        matched = self._extract_config_from_ai_text(self.ai_preview.toPlainText())
+        if not matched:
+            QMessageBox.warning(self, "AI config preview", "AI preview does not contain parseable YAML/JSON config.")
+            return
+        matched.pop("ai_validation", None)
+        self.ctx.state.collection_config = matched
+        self.editor.setPlainText(self.ctx.config_manager.dumps(matched))
+        self.reload_form_from_yaml()
+        self.status.setText("Replaced collection_config.yaml preview with AI config.")
+
+    def stop_ai_match(self) -> None:
+        if self._ai_worker is not None:
+            self._ai_worker.cancel()
+        if self._ai_thread is not None:
+            self._ai_thread.quit()
+            if not self._ai_thread.wait(1500):
+                self._ai_thread.terminate()
+                self._ai_thread.wait(1500)
+        self._ai_thread = None
+        self._ai_worker = None
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        self.stop_ai_match()
+        super().closeEvent(event)
+
+    def _ai_user_form_values(self) -> dict:
+        return {
+            "project": {
+                "name": self.project_name.text().strip(),
+                "version": self.project_version.text().strip(),
+                "operator": self.project_operator.text().strip(),
+                "environment": self.project_environment.text().strip(),
             },
-            method="POST",
-        )
-        try:
-            with urlrequest.urlopen(req, timeout=60) as response:
-                body = response.read().decode("utf-8")
-        except urlerror.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"HTTP {exc.code}: {body[:800]}") from exc
-        parsed = json.loads(body)
-        choices = parsed.get("choices", [])
-        if not choices:
-            raise RuntimeError("AI response has no choices")
-        message = choices[0].get("message", {})
-        content = message.get("content", "")
-        if isinstance(content, list):
-            parts = [part.get("text", "") for part in content if isinstance(part, dict)]
-            content = "\n".join(parts)
-        return str(content)
+            "environment": {
+                "type": self.environment_type.text().strip(),
+                "description": self.scene_description.toPlainText().strip(),
+                "workspace": self.environment_workspace.text().strip(),
+                "lighting": self.environment_lighting.text().strip(),
+                "objects": self._split_csv(self.environment_objects.text()),
+                "notes": self.environment_notes.toPlainText().strip(),
+            },
+            "robot": {
+                "name": self.robot_name.text().strip(),
+                "model": self.robot_model.text().strip(),
+                "description": self.robot_description.text().strip(),
+                "joint_count": int(self.robot_joint_count.value()),
+                "joint_order": self._split_csv(self.robot_joint_order.text()),
+                "base_frame": self.robot_base_frame.text().strip(),
+                "end_effector_frame": self.robot_ee_frame.text().strip(),
+            },
+            "instruction": {
+                "text": self.instruction.text().strip(),
+                "language": self.instruction_language.text().strip(),
+                "task_family": self.task_family.text().strip(),
+                "success_condition": self.success_condition.text().strip(),
+            },
+            "recording": {
+                "sample_rate_hz": int(self.sample_rate.value()),
+                "stop_mode": str(self.stop_mode.currentData() or "duration_sec"),
+                "episode_duration_sec": float(self.episode_duration.value()),
+                "target_samples": int(self.target_samples.value()),
+            },
+        }
 
     def _extract_config_from_ai_text(self, text: str) -> dict:
         cleaned = text.strip()

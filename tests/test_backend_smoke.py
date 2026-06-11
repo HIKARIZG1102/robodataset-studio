@@ -965,7 +965,7 @@ def test_settings_language_toggle_updates_state() -> None:
     assert page.language.currentText() == "English"
 
 
-def test_settings_ai_values_are_shared_without_yaml_fields(monkeypatch) -> None:
+def test_ai_match_prompt_uses_settings_form_values_and_topic_info(monkeypatch) -> None:
     app = QApplication.instance() or QApplication([])
     ctx = AppContext()
     settings = SettingsPage(ctx)
@@ -973,30 +973,76 @@ def test_settings_ai_values_are_shared_without_yaml_fields(monkeypatch) -> None:
     settings.ai_base.setText("https://api.example.com/v1")
     settings.ai_model.setCurrentText("gpt-4.1")
     settings.ai_key.setText("secret-key")
+    ctx.state.selected_streams = [
+        {"name": "/camera/camera/color/image_raw", "type": "sensor_msgs/msg/Image"},
+        {"name": "/wx250s/joint_states", "type": "sensor_msgs/msg/JointState"},
+    ]
+    ctx.discovery.topic_info = lambda topic: {  # type: ignore[method-assign]
+        "name": topic,
+        "type": "sensor_msgs/msg/JointState" if topic.endswith("joint_states") else "sensor_msgs/msg/Image",
+        "publisher_count": 1,
+        "subscription_count": 0,
+    }
     config_page = ConfigPage(ctx)
     ctx.state.collection_config = ConfigManager().build_default_config(
         ProjectState(),
-        [{"name": "/camera/camera/color/image_raw", "type": "sensor_msgs/msg/Image"}],
+        ctx.state.selected_streams,
     )
     config_page.load_context_config()
-    captured = {}
+    config_page.instruction.setText("catch the satellite")
+    config_page.scene_description.setPlainText("lab scene")
 
-    def fake_call(base_url, api_key, payload):
-        captured["base_url"] = base_url
-        captured["api_key"] = api_key
-        captured["payload"] = payload
-        return config_page.editor.toPlainText()
-
-    monkeypatch.setattr(config_page, "_call_openai_compatible_chat", fake_call)
-
-    config_page.ai_match_config()
-    config = ctx.config_manager.loads(config_page.editor.toPlainText())
+    payload, prompt = config_page._ai_match_payload(ctx.state.collection_config, "gpt-4.1")
 
     assert app is not None
-    assert captured["base_url"] == "https://api.example.com/v1"
-    assert captured["api_key"] == "secret-key"
-    assert captured["payload"]["model"] == "gpt-4.1"
-    assert "ai_validation" not in config
+    assert payload["model"] == "gpt-4.1"
+    assert "standard_config_template" in prompt
+    assert "catch the satellite" in prompt
+    assert "lab scene" in prompt
+    assert "/wx250s/joint_states" in prompt
+    assert "selected_topic_info" in prompt
+
+
+def test_ai_match_preview_and_replace_are_separate() -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    config_page = ConfigPage(ctx)
+    original = ConfigManager().build_default_config(
+        ProjectState(),
+        [{"name": "/camera/camera/color/image_raw", "type": "sensor_msgs/msg/Image"}],
+    )
+    ctx.state.collection_config = original
+    config_page.load_context_config()
+    matched = ConfigManager().clone(original)
+    matched["instruction"]["text"] = "ai generated instruction"
+
+    config_page.finish_ai_match(ctx.config_manager.dumps(matched), None)
+
+    assert app is not None
+    assert "ai generated instruction" in config_page.ai_preview.toPlainText()
+    assert "ai generated instruction" not in config_page.editor.toPlainText()
+
+    config_page.replace_yaml_from_ai_preview()
+    assert "ai generated instruction" in config_page.editor.toPlainText()
+
+
+def test_ai_match_close_stops_background_worker() -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    ctx.state.ai_enabled = True
+    ctx.state.ai_base_url = "https://api.example.com/v1"
+    ctx.state.ai_model = "gpt-4.1"
+    ctx.state.ai_api_key = "secret-key"
+    ctx.state.selected_streams = [{"name": "/camera/camera/color/image_raw", "type": "sensor_msgs/msg/Image"}]
+    config_page = ConfigPage(ctx)
+    ctx.state.collection_config = ConfigManager().build_default_config(ProjectState(), ctx.state.selected_streams)
+    config_page.load_context_config()
+
+    config_page.ai_match_config()
+    config_page.close()
+
+    assert app is not None
+    assert config_page._ai_thread is None
 
 
 def test_settings_are_persisted_to_user_settings_store(tmp_path) -> None:
