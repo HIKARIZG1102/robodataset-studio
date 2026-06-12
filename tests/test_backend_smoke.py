@@ -971,6 +971,7 @@ def test_start_recording_does_not_stop_capture_monitors(tmp_path, monkeypatch) -
             self.program = ""
             self.arguments = []
             self.started = False
+            self.terminated = False
 
         def setProgram(self, program):  # type: ignore[no-untyped-def]
             self.program = program
@@ -988,6 +989,7 @@ def test_start_recording_does_not_stop_capture_monitors(tmp_path, monkeypatch) -
             self.started = True
 
         def terminate(self):  # type: ignore[no-untyped-def]
+            self.terminated = True
             return None
 
         def waitForFinished(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
@@ -1006,7 +1008,12 @@ def test_start_recording_does_not_stop_capture_monitors(tmp_path, monkeypatch) -
     assert page._recording_process.started is True
     assert "-m" in page._recording_process.arguments
     assert "robodataset_studio.ros.record_episode_cli" in page._recording_process.arguments
+    assert "--stop-file" in page._recording_process.arguments
     assert (ctx.state.raw_session_dir / "collection_config.yaml").exists()
+    page.stop_recording_request()
+    assert page._recording_stop_file is not None
+    assert page._recording_stop_file.exists()
+    assert page._recording_process.terminated is False
     page.close()
 
 

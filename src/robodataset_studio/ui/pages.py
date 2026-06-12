@@ -2343,13 +2343,14 @@ class RecordingPage(QWidget):
         super().__init__()
         self.ctx = ctx
         self.episode_index = 0
-        self._recording_thread: QThread | None = None
-        self._recording_worker: RosRecordingWorker | None = None
         self._recording_process: QProcess | None = None
+        self._recording_stop_file: Path | None = None
+        self._recording_force_stop_timer = QTimer(self)
+        self._recording_force_stop_timer.setSingleShot(True)
+        self._recording_force_stop_timer.timeout.connect(self.force_stop_recording_process)
         self._preflight_thread: QThread | None = None
         self._preflight_worker: RecordingPreflightWorker | None = None
         self._monitor_slots: list[CaptureMonitorSlot] = []
-        self._recording_cancel_event: Event | None = None
         self._monitors_were_active_before_recording = False
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
@@ -2585,7 +2586,11 @@ class RecordingPage(QWidget):
         recording["episode_duration_sec"] = float(self.duration.value())
         recording["target_samples"] = int(self.target_samples.value())
         session_config_path = self.write_session_config_snapshot()
-        self._recording_cancel_event = Event()
+        self._recording_stop_file = self.ctx.state.raw_session_dir / ".stop_recording"
+        try:
+            self._recording_stop_file.unlink()
+        except FileNotFoundError:
+            pass
         self._monitors_were_active_before_recording = False
         command, arguments = self._recording_process_command(session_config_path, duration_sec, target_samples)
         process = QProcess(self)
@@ -2621,6 +2626,8 @@ class RecordingPage(QWidget):
             "--episode-index",
             str(self.episode_index),
         ]
+        if self._recording_stop_file is not None:
+            arguments.extend(["--stop-file", str(self._recording_stop_file)])
         if duration_sec is not None:
             arguments.extend(["--duration-sec", str(duration_sec)])
         if target_samples is not None:
@@ -2637,8 +2644,18 @@ class RecordingPage(QWidget):
         if self._recording_process is None:
             self.log.appendPlainText("no active recording to stop")
             return
-        self._recording_process.terminate()
-        self.log.appendPlainText("stop requested; recorder subprocess is terminating")
+        if self._recording_stop_file is None:
+            self._recording_stop_file = self.ctx.state.raw_session_dir / ".stop_recording"
+        self._recording_stop_file.parent.mkdir(parents=True, exist_ok=True)
+        self._recording_stop_file.write_text("stop\n", encoding="utf-8")
+        self._recording_force_stop_timer.start(10_000)
+        self.log.appendPlainText("stop requested; recorder will finish current sample and write the episode")
+
+    def force_stop_recording_process(self) -> None:
+        if self._recording_process is None:
+            return
+        self.log.appendPlainText("recorder did not stop after soft request; forcing termination")
+        self._recording_process.kill()
 
     def preflight_recording(self) -> list[str]:
         config = self.ctx.state.collection_config
@@ -2706,7 +2723,14 @@ class RecordingPage(QWidget):
     def finish_ros_recording_process(self, exit_code: int, exit_status: QProcess.ExitStatus) -> None:
         process = self._recording_process
         self._recording_process = None
-        self._recording_cancel_event = None
+        self._recording_force_stop_timer.stop()
+        stop_file = self._recording_stop_file
+        self._recording_stop_file = None
+        if stop_file is not None:
+            try:
+                stop_file.unlink()
+            except FileNotFoundError:
+                pass
         self._monitors_were_active_before_recording = False
         if process is None:
             return
