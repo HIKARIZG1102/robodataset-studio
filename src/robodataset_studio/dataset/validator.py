@@ -22,6 +22,31 @@ METADATA_FIELDS = {
 
 
 class DatasetValidator:
+    def list_npz(self, episodes_dir: Path) -> list[dict[str, object]]:
+        rows: list[dict[str, object]] = []
+        for path in sorted(episodes_dir.glob("episode_*.npz")):
+            row: dict[str, object] = {
+                "path": str(path),
+                "name": path.name,
+                "size_mb": round(path.stat().st_size / 1024 / 1024, 3),
+                "status": "uncheck",
+                "missing": "",
+                "quality": "",
+            }
+            try:
+                with np.load(path, allow_pickle=True) as data:
+                    fields = list(data.files)
+                    row["fields"] = ", ".join(fields)
+                    row["steps"] = self._infer_transition_steps(data, fields)
+            except Exception as exc:
+                row["fields"] = ""
+                row["missing"] = str(exc)
+                row["steps"] = 0
+                row["quality"] = str(exc)
+                row["status"] = "error"
+            rows.append(row)
+        return rows
+
     def scan_npz(self, episodes_dir: Path, config: dict[str, Any] | None = None) -> list[dict[str, object]]:
         required_fields = self.required_fields(config)
         image_fields = self.image_fields(config)
@@ -146,6 +171,9 @@ class DatasetValidator:
                     dtype = getattr(value, "dtype", "-")
                     shape = getattr(value, "shape", ())
                     lines.append(f"  {field}: shape={tuple(shape)} dtype={dtype}")
+                    detail = self.value_summary(value)
+                    if detail:
+                        lines.append(f"    {detail}")
                 metadata = self.metadata_summary(data)
                 if metadata:
                     lines.append("")
@@ -190,6 +218,29 @@ class DatasetValidator:
             return json.loads(text)
         except Exception:
             return None
+
+    def value_summary(self, value: np.ndarray) -> str:
+        try:
+            if value.dtype.kind in {"f", "i", "u", "b"}:
+                if value.ndim == 0:
+                    return f"value={value.item()}"
+                if value.ndim == 1 and value.size <= 32:
+                    return "values=[" + ", ".join(f"{float(item):.5g}" for item in value.tolist()) + "]"
+                if value.ndim >= 3 and value.shape[-1] in {1, 3, 4}:
+                    return (
+                        f"image_stats mean={float(np.mean(value)):.2f} "
+                        f"std={float(np.std(value)):.2f} min={float(np.min(value)):.0f} max={float(np.max(value)):.0f}"
+                    )
+                return (
+                    f"stats mean={float(np.mean(value)):.5g} std={float(np.std(value)):.5g} "
+                    f"min={float(np.min(value)):.5g} max={float(np.max(value)):.5g}"
+                )
+            if value.shape == ():
+                text = str(value.item())
+                return "text=" + (text[:180] + "..." if len(text) > 180 else text)
+        except Exception:
+            return ""
+        return ""
 
     def required_fields(self, config: dict[str, Any] | None = None) -> list[str]:
         if not config:

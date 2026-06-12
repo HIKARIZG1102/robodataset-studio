@@ -3150,7 +3150,7 @@ class ReviewPage(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.currentCellChanged.connect(self.show_episode_detail)
         self.status_filter = QComboBox()
-        self.status_filter.addItems(["all", "ok", "warning", "error"])
+        self.status_filter.addItems(["all", "uncheck", "ok", "warning", "error"])
         self.status_filter.currentTextChanged.connect(self.apply_review_filter)
         self.mark_select = QComboBox()
         self.mark_select.addItems(["good", "bad", "uncertain", "unmarked"])
@@ -3165,8 +3165,12 @@ class ReviewPage(QWidget):
         self.hdf5_summary.setReadOnly(True)
         scan = QPushButton("Scan Session")
         scan.clicked.connect(self.scan)
+        local_checks = QPushButton("Run Local Checks")
+        local_checks.clicked.connect(self.run_local_checks)
         mark_selected = QPushButton("Mark Selected")
         mark_selected.clicked.connect(self.mark_selected)
+        delete_selected = QPushButton("Delete Selected")
+        delete_selected.clicked.connect(self.delete_selected)
         export_report = QPushButton("Export quality report")
         export_report.clicked.connect(self.export_quality_report)
         inspect_hdf5 = QPushButton("Inspect Current HDF5")
@@ -3188,6 +3192,8 @@ class ReviewPage(QWidget):
         controls.addWidget(QLabel("Manual mark"))
         controls.addWidget(self.mark_select)
         controls.addWidget(mark_selected)
+        controls.addWidget(delete_selected)
+        controls.addWidget(local_checks)
         controls.addWidget(export_report)
         layout.addLayout(controls)
         layout.addWidget(QLabel("Quality Summary"))
@@ -3236,13 +3242,30 @@ class ReviewPage(QWidget):
             return
         self.review_session_root = session_root
         self.review_config = self._load_review_config(session_root)
-        rows = self.ctx.validator.scan_npz(training, self.review_config)
+        rows = self.ctx.validator.list_npz(training)
         self._review_rows = rows
         self.apply_review_filter()
         self.update_quality_summary()
         self.session_summary.setText(
             f"session: {session_root} | training: {training} | episodes: {len(rows)} | "
-            f"config: {'yes' if config_path.exists() else 'using current UI config'}"
+            f"config: {'yes' if config_path.exists() else 'using current UI config'} | checks: not run"
+        )
+
+    def run_local_checks(self) -> None:
+        session_root = self._selected_session_root()
+        training = session_root / "training"
+        config_path = session_root / "collection_config.yaml"
+        if not training.exists() or not any(training.glob("episode_*.npz")):
+            QMessageBox.warning(self, "No episodes", f"No episode_*.npz files found under:\n{training}")
+            return
+        self.review_session_root = session_root
+        self.review_config = self._load_review_config(session_root)
+        self._review_rows = self.ctx.validator.scan_npz(training, self.review_config)
+        self.apply_review_filter()
+        self.update_quality_summary()
+        self.session_summary.setText(
+            f"session: {session_root} | training: {training} | episodes: {len(self._review_rows)} | "
+            f"config: {'yes' if config_path.exists() else 'using current UI config'} | checks: local script"
         )
 
     def apply_review_filter(self) -> None:
@@ -3272,6 +3295,40 @@ class ReviewPage(QWidget):
         self.apply_review_filter()
         self.update_quality_summary()
 
+    def delete_selected(self) -> None:
+        selected_rows = sorted({index.row() for index in self.table.selectedIndexes()}, reverse=True)
+        if not selected_rows:
+            return
+        trash_dir = self.review_session_root / "review_deleted"
+        trash_dir.mkdir(parents=True, exist_ok=True)
+        deleted = []
+        for row in selected_rows:
+            if row < 0 or row >= len(self._visible_rows):
+                continue
+            path = Path(str(self._visible_rows[row].get("path", "")))
+            if not path.exists():
+                continue
+            target = trash_dir / path.name
+            suffix = 1
+            while target.exists():
+                target = trash_dir / f"{path.stem}_{suffix}{path.suffix}"
+                suffix += 1
+            path.replace(target)
+            deleted.append(path.name)
+            self._review_marks.pop(path.name, None)
+        if deleted:
+            training = self.review_session_root / "training"
+            if any(training.glob("episode_*.npz")):
+                self.scan()
+            else:
+                self._review_rows = []
+                self.apply_review_filter()
+                self.update_quality_summary()
+                self.session_summary.setText(
+                    f"session: {self.review_session_root} | training: {training} | episodes: 0 | checks: not run"
+                )
+            self.summary.appendPlainText(f"moved to review_deleted: {', '.join(deleted)}")
+
     def update_quality_summary(self) -> None:
         report = self.ctx.validator.quality_report(self._review_rows, self._review_marks)
         issues = report["issue_counts"] or {"-": 0}
@@ -3279,7 +3336,8 @@ class ReviewPage(QWidget):
         lines = [
             f"total: {report['total']}",
             "status: "
-            f"ok={report['by_status']['ok']} warning={report['by_status']['warning']} error={report['by_status']['error']}",
+            f"ok={report['by_status']['ok']} warning={report['by_status']['warning']} error={report['by_status']['error']} "
+            f"uncheck={sum(1 for row in self._review_rows if row.get('status') == 'uncheck')}",
             "marks: " + ", ".join(f"{key}={value}" for key, value in marks.items()),
             "issues: " + ", ".join(f"{key}={value}" for key, value in issues.items()),
         ]

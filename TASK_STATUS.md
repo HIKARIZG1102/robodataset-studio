@@ -182,6 +182,7 @@
 - Manual 模式 Stop Recording 已从强制 terminate 改为软停止：UI 写入 session 下的 `.stop_recording` 文件，录制子进程检测到 stop 文件后自行退出采集循环并正常写出 episode；10 秒未退出才 force kill。这样 Manual 停止不会再因 SIGTERM 退出码 15 丢掉已采集数据；当前 smoke tests 为 81 passed。
 - Recording 页已增加图像前处理预览槽位：可在采集页选择 image stream，设置 crop/resize 并写回当前 YAML，对应 capture monitor 会实时显示裁切/缩放后的画面尺寸和平均亮度提示；曝光/滤波暂作为扩展槽位提示用户调整相机 node 参数，尚不直接控制设备。当前 smoke tests 为 83 passed。
 - Review 页已改为明确的 session 级扫描：页面顶部新增 Review session root、Browse Session、Use Current Session 和 Scan Session；扫描对象是指定 session 下的 `training/episode_*.npz`，并优先读取该 session 的 `collection_config.yaml` 做字段/维度校验，summary 明确显示 session/training/episode 数/config 来源；质量报告写回被扫描 session。当前 smoke tests 为 84 passed。
+- Review 页已拆分“浏览数据”和“本地脚本检查”：Scan Session 只加载 session 内 episode 并展示字段/数值摘要，Run Local Checks 才按 YAML 做缺字段、维度、黑白帧、NaN/Inf 等本地规则检查；详情面板会显示 robot_obs/actions 等一维数组具体数值和图像统计。新增 Delete Selected，会把不想要的 episode 移到 session 下 `review_deleted/` 并实时刷新；Manual mark 仍保留。当前 smoke tests 为 85 passed。
 
 ## 遇到的问题
 

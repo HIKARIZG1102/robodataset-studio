@@ -1488,6 +1488,9 @@ def test_review_page_filters_marks_and_exports_quality_report(tmp_path) -> None:
     page = ReviewPage(ctx)
 
     page.scan()
+    assert page.table.rowCount() == 2
+    assert page.table.item(0, 1).text() == "uncheck"
+    page.run_local_checks()
     page.status_filter.setCurrentText("warning")
     page.mark_select.setCurrentText("bad")
     page.mark_selected()
@@ -1533,8 +1536,38 @@ def test_review_page_scans_explicit_session_root(tmp_path) -> None:
     assert app is not None
     assert page.table.rowCount() == 1
     assert "episodes: 1" in page.session_summary.text()
+    assert "checks: not run" in page.session_summary.text()
     assert page._review_rows[0]["missing"] == ""
     assert (explicit_session / "collection_config.yaml").exists()
+    page.close()
+
+
+def test_review_page_detail_values_and_delete_selected(tmp_path) -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    ctx.state.dataset_root = tmp_path
+    training = ctx.state.episodes_dir
+    training.mkdir(parents=True)
+    path = training / "episode_0000000.npz"
+    np.savez_compressed(
+        path,
+        rgb_static=np.full((8, 8, 3), 128, dtype=np.uint8),
+        robot_obs=np.array([1.0, 2.0, 3.0], dtype=np.float32),
+        rel_actions=np.array([0.1, 0.2, 0.3], dtype=np.float32),
+        actions=np.array([0.1, 0.2, 0.3], dtype=np.float32),
+    )
+    page = ReviewPage(ctx)
+
+    page.scan()
+    page.show_episode_detail(0, 0, -1, -1)
+    detail = page.detail.toPlainText()
+    page.table.selectRow(0)
+    page.delete_selected()
+
+    assert app is not None
+    assert "values=[1, 2, 3]" in detail
+    assert not path.exists()
+    assert (ctx.state.raw_session_dir / "review_deleted" / "episode_0000000.npz").exists()
     page.close()
 
 
