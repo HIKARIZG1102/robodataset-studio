@@ -960,45 +960,52 @@ def test_start_recording_does_not_stop_capture_monitors(tmp_path, monkeypatch) -
     stopped = []
     monkeypatch.setattr(page, "stop_all_capture_monitors", lambda: stopped.append(True))
 
-    class FakeThread:
+    class SignalStub:
+        def connect(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+            return None
+
+    class FakeQProcess:
         def __init__(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
-            self.started = type("SignalStub", (), {"connect": lambda *_a, **_k: None})()
-            self.finished = type("SignalStub", (), {"connect": lambda *_a, **_k: None})()
+            self.finished = SignalStub()
+            self.errorOccurred = SignalStub()
+            self.program = ""
+            self.arguments = []
+            self.started = False
+
+        def setProgram(self, program):  # type: ignore[no-untyped-def]
+            self.program = program
+
+        def setArguments(self, arguments):  # type: ignore[no-untyped-def]
+            self.arguments = arguments
+
+        def processEnvironment(self):  # type: ignore[no-untyped-def]
+            return type("EnvStub", (), {"insert": lambda *_args, **_kwargs: None})()
+
+        def setProcessEnvironment(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+            return None
 
         def start(self):  # type: ignore[no-untyped-def]
+            self.started = True
+
+        def terminate(self):  # type: ignore[no-untyped-def]
             return None
 
-        def quit(self):  # type: ignore[no-untyped-def]
-            return None
-
-        def wait(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+        def waitForFinished(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
             return True
 
-        def deleteLater(self):  # type: ignore[no-untyped-def]
+        def kill(self):  # type: ignore[no-untyped-def]
             return None
 
-    class FakeWorker:
-        finished = type("SignalStub", (), {"connect": lambda *_a, **_k: None})()
-
-        def __init__(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
-            return None
-
-        def moveToThread(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
-            return None
-
-        def run(self):  # type: ignore[no-untyped-def]
-            return None
-
-        def deleteLater(self):  # type: ignore[no-untyped-def]
-            return None
-
-    monkeypatch.setattr("robodataset_studio.ui.pages.QThread", FakeThread)
-    monkeypatch.setattr("robodataset_studio.ui.pages.RosRecordingWorker", FakeWorker)
+    monkeypatch.setattr("robodataset_studio.ui.pages.QProcess", FakeQProcess)
 
     page.record_ros()
 
     assert app is not None
     assert stopped == []
+    assert page._recording_process is not None
+    assert page._recording_process.started is True
+    assert "-m" in page._recording_process.arguments
+    assert "robodataset_studio.ros.record_episode_cli" in page._recording_process.arguments
     assert (ctx.state.raw_session_dir / "collection_config.yaml").exists()
     page.close()
 
@@ -1053,6 +1060,20 @@ def test_ros_recording_worker_uses_isolated_subprocess(tmp_path, monkeypatch) ->
     assert results and results[0][1] is None
     assert results[0][0].steps == 1
 
+
+def test_recording_process_command_uses_cli_module(tmp_path, monkeypatch) -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    ctx.state.dataset_root = tmp_path / "datasets"
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    page = RecordingPage(ctx)
+    command, arguments = page._recording_process_command(tmp_path / "collection_config.yaml", None, 3)
+
+    assert app is not None
+    assert command
+    assert arguments[:2] == ["-m", "robodataset_studio.ros.record_episode_cli"]
+    assert "--target-samples" in arguments
+    page.close()
 
 def test_config_page_rejects_incomplete_ai_yaml_preview(monkeypatch) -> None:
     app = QApplication.instance() or QApplication([])

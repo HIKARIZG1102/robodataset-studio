@@ -15,7 +15,7 @@ from uuid import uuid4
 from urllib import error as urlerror, request as urlrequest
 
 import numpy as np
-from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import QObject, QProcess, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QImage, QPainter
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -2345,6 +2345,7 @@ class RecordingPage(QWidget):
         self.episode_index = 0
         self._recording_thread: QThread | None = None
         self._recording_worker: RosRecordingWorker | None = None
+        self._recording_process: QProcess | None = None
         self._preflight_thread: QThread | None = None
         self._preflight_worker: RecordingPreflightWorker | None = None
         self._monitor_slots: list[CaptureMonitorSlot] = []
@@ -2573,7 +2574,7 @@ class RecordingPage(QWidget):
         if not self.ctx.has_config():
             QMessageBox.warning(self, "Missing config", "Generate and save collection_config.yaml before recording.")
             return
-        if self._recording_thread is not None:
+        if self._recording_process is not None:
             QMessageBox.warning(self, "Recording active", "A ROS2 recording is already running.")
             return
         stop_mode = str(self.stop_mode.currentData() or "duration_sec")
@@ -2586,25 +2587,45 @@ class RecordingPage(QWidget):
         session_config_path = self.write_session_config_snapshot()
         self._recording_cancel_event = Event()
         self._monitors_were_active_before_recording = False
-        self._recording_thread = QThread(self)
-        self._recording_worker = RosRecordingWorker(
-            self.ctx.ros_recorder,
-            self.ctx.state.collection_config,
-            self.ctx.state.episodes_dir,
-            self.episode_index,
-            duration_sec=duration_sec,
-            target_samples=target_samples,
-            cancel_event=self._recording_cancel_event,
-        )
-        self._recording_worker.moveToThread(self._recording_thread)
-        self._recording_thread.started.connect(self._recording_worker.run)
-        self._recording_worker.finished.connect(self.finish_ros_recording)
-        self._recording_worker.finished.connect(self._recording_thread.quit)
-        self._recording_worker.finished.connect(self._recording_worker.deleteLater)
-        self._recording_thread.finished.connect(self._recording_thread.deleteLater)
-        self._recording_thread.start()
+        command, arguments = self._recording_process_command(session_config_path, duration_sec, target_samples)
+        process = QProcess(self)
+        process.setProgram(command)
+        process.setArguments(arguments)
+        env = os.environ.copy()
+        root_dir = Path(__file__).resolve().parents[3]
+        env["PYTHONPATH"] = f"{root_dir / 'src'}{os.pathsep}{env.get('PYTHONPATH', '')}"
+        process_env = process.processEnvironment()
+        for key, value in env.items():
+            process_env.insert(key, value)
+        process.setProcessEnvironment(process_env)
+        process.finished.connect(self.finish_ros_recording_process)
+        process.errorOccurred.connect(self.handle_ros_recording_process_error)
+        self._recording_process = process
+        process.start()
         self.log.appendPlainText(f"session config snapshot: {session_config_path}")
         self.log.appendPlainText(f"started ROS2 recording in background ({self.recording_plan_summary()})")
+
+    def _recording_process_command(
+        self,
+        config_path: Path,
+        duration_sec: float | None,
+        target_samples: int | None,
+    ) -> tuple[str, list[str]]:
+        arguments = [
+            "-m",
+            "robodataset_studio.ros.record_episode_cli",
+            "--config",
+            str(config_path),
+            "--episodes-dir",
+            str(self.ctx.state.episodes_dir),
+            "--episode-index",
+            str(self.episode_index),
+        ]
+        if duration_sec is not None:
+            arguments.extend(["--duration-sec", str(duration_sec)])
+        if target_samples is not None:
+            arguments.extend(["--target-samples", str(target_samples)])
+        return sys.executable, arguments
 
     def write_session_config_snapshot(self) -> Path:
         self.ctx.config_manager.sync_core_schema(self.ctx.state.collection_config)
@@ -2613,12 +2634,11 @@ class RecordingPage(QWidget):
         return path
 
     def stop_recording_request(self) -> None:
-        if self._recording_thread is None:
+        if self._recording_process is None:
             self.log.appendPlainText("no active recording to stop")
             return
-        if self._recording_cancel_event is not None:
-            self._recording_cancel_event.set()
-        self.log.appendPlainText("stop requested; recorder will finish after the current synchronized sample")
+        self._recording_process.terminate()
+        self.log.appendPlainText("stop requested; recorder subprocess is terminating")
 
     def preflight_recording(self) -> list[str]:
         config = self.ctx.state.collection_config
@@ -2682,19 +2702,35 @@ class RecordingPage(QWidget):
             return f"{label}: {topic} has type {expected_type} but no active publishers"
         return None
 
-    @Slot(object, object)
-    def finish_ros_recording(self, result: object, error: object) -> None:
-        self._recording_thread = None
-        self._recording_worker = None
+    @Slot(int, QProcess.ExitStatus)
+    def finish_ros_recording_process(self, exit_code: int, exit_status: QProcess.ExitStatus) -> None:
+        process = self._recording_process
+        self._recording_process = None
         self._recording_cancel_event = None
-        should_restart_monitors = self._monitors_were_active_before_recording and os.environ.get("QT_QPA_PLATFORM") != "offscreen"
         self._monitors_were_active_before_recording = False
-        if error is not None:
-            QMessageBox.warning(self, "ROS2 recording failed", str(error))
-            self.log.appendPlainText(f"recording failed: {error}")
-            if should_restart_monitors:
-                self.start_all_capture_monitors()
+        if process is None:
             return
+        stdout = bytes(process.readAllStandardOutput()).decode(errors="replace")
+        stderr = bytes(process.readAllStandardError()).decode(errors="replace")
+        if exit_status != QProcess.NormalExit or exit_code != 0:
+            detail = self._extract_process_error(stderr, stdout) or f"recording subprocess exited with code {exit_code}"
+            QMessageBox.warning(self, "ROS2 recording failed", detail)
+            self.log.appendPlainText(f"recording failed: {detail}")
+            process.deleteLater()
+            return
+        try:
+            payload = self._parse_recording_process_result(stdout)
+            result = RosEpisodeResult(
+                path=Path(str(payload.get("path") or self.ctx.state.episodes_dir / f"episode_{self.episode_index:07d}.npz")),
+                steps=int(payload.get("steps") or 0),
+                streams=[str(item) for item in payload.get("streams", [])],
+                warnings=[str(item) for item in payload.get("warnings", [])],
+            )
+        except Exception as exc:
+            self.log.appendPlainText(f"recording failed: {exc}")
+            process.deleteLater()
+            return
+        process.deleteLater()
         if not isinstance(result, RosEpisodeResult):
             self.log.appendPlainText("recording failed: unexpected recorder result")
             return
@@ -2704,8 +2740,38 @@ class RecordingPage(QWidget):
             f"recorded real ROS2 CALVIN transitions: {result.path.parent} count={result.steps} streams={', '.join(result.streams)}{warning_text}"
         )
         self.plan_summary.setText(self.recording_plan_summary())
-        if should_restart_monitors:
-            self.start_all_capture_monitors()
+
+    @Slot(QProcess.ProcessError)
+    def handle_ros_recording_process_error(self, error: QProcess.ProcessError) -> None:
+        self.log.appendPlainText(f"recording process error: {error}")
+
+    def _parse_recording_process_result(self, stdout: str) -> dict:
+        for line in reversed(stdout.splitlines()):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict) and payload.get("ok") is True:
+                return payload
+        raise RuntimeError(stdout.strip() or "recording subprocess produced no JSON result")
+
+    def _extract_process_error(self, stderr: str, stdout: str) -> str:
+        for text in [stderr, stdout]:
+            for line in reversed(text.splitlines()):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(payload, dict) and payload.get("ok") is False:
+                    return str(payload.get("error") or "")
+        combined = "\n".join(part.strip() for part in [stderr, stdout] if part.strip())
+        return combined[-2000:]
 
     def rebuild_capture_monitors(self, image_streams: list[dict]) -> None:
         self.stop_all_capture_monitors()
@@ -2865,11 +2931,12 @@ class RecordingPage(QWidget):
             self._preflight_thread.wait(1500)
             self._preflight_thread = None
             self._preflight_worker = None
-        if self._recording_thread is not None:
-            if self._recording_cancel_event is not None:
-                self._recording_cancel_event.set()
-            self._recording_thread.quit()
-            self._recording_thread.wait(1500)
+        if self._recording_process is not None:
+            self._recording_process.terminate()
+            if not self._recording_process.waitForFinished(1500):
+                self._recording_process.kill()
+                self._recording_process.waitForFinished(1500)
+            self._recording_process = None
         super().closeEvent(event)
 
 
