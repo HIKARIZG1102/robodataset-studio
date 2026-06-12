@@ -176,6 +176,7 @@
 - YAML 保存逻辑已按工程相对路径收口：Config 页的保存只写 `robodataset-studio/config_library/*.yaml`，不会提前写项目/数据集绝对路径下的 `collection_config.yaml`；Recording 页会监听配置库变化并刷新 Saved YAML 下拉；只有真正开始采集时才把当前配置快照写入本次 session 的 `collection_config.yaml`；当前 smoke tests 为 77 passed。
 - 采集页继续稳定化：Start Recording 前会停止图像监控，避免多个 rclpy listener 线程同时订阅引发崩溃风险，录制结束后会恢复监控；Manual 模式已支持 Stop Recording 通过 cancel event 结束 recorder；Stop mode 会动态隐藏无关输入，Manual 不显示时长/样本数也不显示预计 episode 数；项目根目录新增 `RoboDataset-Studio-Guide.html` 操作教程，主窗口左下角新增 Tutorial 按钮打开教程；当前 smoke tests 为 78 passed。
 - `RoboDataset-Studio-Guide.html` 已补成按键级完整手操流程：从外部 ROS2 数据源启动、Project 保存、Discovery 勾选 topic、Inspector 检查 echo/hz/image monitor、Config 生成和保存 YAML、Recording 载入 YAML/Check Nodes/Start Recording/Stop Recording，到 Review/Convert/Upload 的实际点击顺序。
+- 已修复点击 Start Recording 后 GUI 随 ROS2 recorder 崩溃一起退出的问题：真实 ROS2 录制现在通过独立子进程 `robodataset_studio.ros.record_episode_cli` 执行，Qt 主进程只接收 JSON 结果；即使 rclpy/底层 DDS 在录制进程里崩溃，也只会在 UI 中显示失败日志，不会关闭整个 app。新增测试覆盖 worker 使用隔离子进程路径；当前 smoke tests 为 79 passed。
 
 ## 遇到的问题
 

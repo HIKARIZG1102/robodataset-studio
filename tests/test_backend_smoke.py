@@ -21,7 +21,7 @@ from robodataset_studio.core.settings_store import UserSettingsStore
 from robodataset_studio.ros.episode_recorder import RosEpisodeRecorder, joint_state_to_robot_obs
 from robodataset_studio.ros.graph_discovery import RosGraphDiscovery
 from robodataset_studio.ros.image_conversion import image_bytes_to_rgb
-from robodataset_studio.ui.pages import AppContext, ConfigPage, DiscoveryPage, InspectorPage, ProjectPage, RecordingPage, RecordingPreflightWorker, ReviewPage, SettingsPage, UploadPage
+from robodataset_studio.ui.pages import AppContext, ConfigPage, DiscoveryPage, InspectorPage, ProjectPage, RecordingPage, RecordingPreflightWorker, ReviewPage, RosRecordingWorker, SettingsPage, UploadPage
 from robodataset_studio.ui.main_window import MainWindow
 from robodataset_studio.upload.manifest import UploadManifest
 from robodataset_studio.upload.ssh_uploader import SshConnection, SshUploader, parse_ssh_target
@@ -945,6 +945,57 @@ def test_recording_snapshot_is_written_only_when_recording_starts(tmp_path, monk
     assert path == ctx.state.raw_session_dir / "collection_config.yaml"
     assert path.exists()
     page.close()
+
+
+def test_ros_recording_worker_uses_isolated_subprocess(tmp_path, monkeypatch) -> None:
+    episodes_dir = tmp_path / "session" / "training"
+    episodes_dir.mkdir(parents=True)
+    (episodes_dir.parent / "collection_config.yaml").write_text("project:\n  name: subprocess\n", encoding="utf-8")
+    calls = []
+
+    class FakeProcess:
+        returncode = 0
+
+        def __init__(self, command, **kwargs):  # type: ignore[no-untyped-def]
+            calls.append((command, kwargs))
+
+        def poll(self):  # type: ignore[no-untyped-def]
+            return 0
+
+        def communicate(self):  # type: ignore[no-untyped-def]
+            return (
+                json.dumps(
+                    {
+                        "ok": True,
+                        "path": str(episodes_dir / "episode_0000000.npz"),
+                        "steps": 1,
+                        "streams": ["rgb_static"],
+                        "warnings": [],
+                    }
+                ),
+                "",
+            )
+
+    monkeypatch.setattr("robodataset_studio.ui.pages.subprocess.Popen", FakeProcess)
+    worker = RosRecordingWorker(
+        RosEpisodeRecorder(),
+        {"recording": {"stop_mode": "sample_count"}},
+        episodes_dir,
+        0,
+        target_samples=2,
+    )
+    results = []
+    worker.finished.connect(lambda result, error: results.append((result, error)))
+
+    worker.run()
+
+    assert calls
+    command = calls[0][0]
+    assert command[1:3] == ["-m", "robodataset_studio.ros.record_episode_cli"]
+    assert "--config" in command
+    assert "--target-samples" in command
+    assert results and results[0][1] is None
+    assert results[0][0].steps == 1
 
 
 def test_config_page_rejects_incomplete_ai_yaml_preview(monkeypatch) -> None:

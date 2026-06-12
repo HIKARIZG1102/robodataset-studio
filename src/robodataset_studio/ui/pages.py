@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
+import sys
 from pathlib import Path, PurePosixPath
 
 import threading
@@ -619,22 +621,90 @@ class RosRecordingWorker(QObject):
         self.duration_sec = duration_sec
         self.target_samples = target_samples
         self.cancel_event = cancel_event
+        self._process: subprocess.Popen[str] | None = None
 
     @Slot()
     def run(self) -> None:
+        config_path = self.episodes_dir.parent / "collection_config.yaml"
+        command = [
+            sys.executable,
+            "-m",
+            "robodataset_studio.ros.record_episode_cli",
+            "--config",
+            str(config_path),
+            "--episodes-dir",
+            str(self.episodes_dir),
+            "--episode-index",
+            str(self.episode_index),
+        ]
+        if self.duration_sec is not None:
+            command.extend(["--duration-sec", str(self.duration_sec)])
+        if self.target_samples is not None:
+            command.extend(["--target-samples", str(self.target_samples)])
         try:
-            result = self.recorder.record_episode(
-                self.config,
-                self.episodes_dir,
-                self.episode_index,
-                duration_sec=self.duration_sec,
-                target_samples=self.target_samples,
-                cancel_event=self.cancel_event,
+            env = os.environ.copy()
+            root_dir = Path(__file__).resolve().parents[3]
+            env["PYTHONPATH"] = f"{root_dir / 'src'}{os.pathsep}{env.get('PYTHONPATH', '')}"
+            self._process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+            )
+            while self._process.poll() is None:
+                if self.cancel_event is not None and self.cancel_event.is_set():
+                    self._process.terminate()
+                    try:
+                        self._process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        self._process.kill()
+                        self._process.wait(timeout=5)
+                    raise RuntimeError("recording cancelled")
+                time.sleep(0.1)
+            stdout, stderr = self._process.communicate()
+            if self._process.returncode != 0:
+                detail = self._extract_subprocess_error(stderr, stdout)
+                raise RuntimeError(detail or f"recording subprocess exited with code {self._process.returncode}")
+            payload = self._parse_result(stdout)
+            result = RosEpisodeResult(
+                path=Path(str(payload.get("path") or self.episodes_dir / f"episode_{self.episode_index:07d}.npz")),
+                steps=int(payload.get("steps") or 0),
+                streams=[str(item) for item in payload.get("streams", [])],
+                warnings=[str(item) for item in payload.get("warnings", [])],
             )
         except Exception as exc:
             self.finished.emit(None, exc)
             return
         self.finished.emit(result, None)
+
+    def _parse_result(self, stdout: str) -> dict:
+        for line in reversed(stdout.splitlines()):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict) and payload.get("ok") is True:
+                return payload
+        raise RuntimeError(stdout.strip() or "recording subprocess produced no JSON result")
+
+    def _extract_subprocess_error(self, stderr: str, stdout: str) -> str:
+        for text in [stderr, stdout]:
+            for line in reversed(text.splitlines()):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(payload, dict) and payload.get("ok") is False:
+                    return str(payload.get("error") or "")
+        combined = "\n".join(part.strip() for part in [stderr, stdout] if part.strip())
+        return combined[-2000:]
 
 
 class RecordingPreflightWorker(QObject):
