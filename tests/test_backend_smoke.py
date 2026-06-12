@@ -947,6 +947,62 @@ def test_recording_snapshot_is_written_only_when_recording_starts(tmp_path, monk
     page.close()
 
 
+def test_start_recording_does_not_stop_capture_monitors(tmp_path, monkeypatch) -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    ctx.state.dataset_root = tmp_path / "datasets"
+    ctx.state.collection_config = ConfigManager().build_default_config(
+        ProjectState(),
+        [{"name": "/camera/camera/color/image_raw", "type": "sensor_msgs/msg/Image"}],
+    )
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    page = RecordingPage(ctx)
+    stopped = []
+    monkeypatch.setattr(page, "stop_all_capture_monitors", lambda: stopped.append(True))
+
+    class FakeThread:
+        def __init__(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+            self.started = type("SignalStub", (), {"connect": lambda *_a, **_k: None})()
+            self.finished = type("SignalStub", (), {"connect": lambda *_a, **_k: None})()
+
+        def start(self):  # type: ignore[no-untyped-def]
+            return None
+
+        def quit(self):  # type: ignore[no-untyped-def]
+            return None
+
+        def wait(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+            return True
+
+        def deleteLater(self):  # type: ignore[no-untyped-def]
+            return None
+
+    class FakeWorker:
+        finished = type("SignalStub", (), {"connect": lambda *_a, **_k: None})()
+
+        def __init__(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+            return None
+
+        def moveToThread(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+            return None
+
+        def run(self):  # type: ignore[no-untyped-def]
+            return None
+
+        def deleteLater(self):  # type: ignore[no-untyped-def]
+            return None
+
+    monkeypatch.setattr("robodataset_studio.ui.pages.QThread", FakeThread)
+    monkeypatch.setattr("robodataset_studio.ui.pages.RosRecordingWorker", FakeWorker)
+
+    page.record_ros()
+
+    assert app is not None
+    assert stopped == []
+    assert (ctx.state.raw_session_dir / "collection_config.yaml").exists()
+    page.close()
+
+
 def test_ros_recording_worker_uses_isolated_subprocess(tmp_path, monkeypatch) -> None:
     episodes_dir = tmp_path / "session" / "training"
     episodes_dir.mkdir(parents=True)

@@ -2585,8 +2585,7 @@ class RecordingPage(QWidget):
         recording["target_samples"] = int(self.target_samples.value())
         session_config_path = self.write_session_config_snapshot()
         self._recording_cancel_event = Event()
-        self._monitors_were_active_before_recording = any(slot.thread is not None for slot in self._monitor_slots)
-        self.stop_all_capture_monitors()
+        self._monitors_were_active_before_recording = False
         self._recording_thread = QThread(self)
         self._recording_worker = RosRecordingWorker(
             self.ctx.ros_recorder,
