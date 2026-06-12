@@ -8,7 +8,7 @@ import h5py
 import numpy as np
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox, QTabWidget
 
 from robodataset_studio.dataset.merge_plan import CalvinMergePlanner, CalvinSessionMerger
 from robodataset_studio.dataset.recorder import MockRecorder
@@ -1568,6 +1568,17 @@ def test_review_page_detail_values_and_delete_selected(tmp_path) -> None:
     assert "values=[1, 2, 3]" in detail
     assert not path.exists()
     assert (ctx.state.raw_session_dir / "review_deleted" / "episode_0000000.npz").exists()
+    page.close()
+
+
+def test_review_page_uses_tabs_for_hdf5_and_layout() -> None:
+    app = QApplication.instance() or QApplication([])
+    page = ReviewPage(AppContext())
+    tabs = page.findChildren(QTabWidget)
+    tab_texts = [tabs[0].tabText(index) for index in range(tabs[0].count())]
+
+    assert app is not None
+    assert tab_texts == ["Episode Review", "HDF5 Inspect", "CALVIN Layout"]
     page.close()
 
 
