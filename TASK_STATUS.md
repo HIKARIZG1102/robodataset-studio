@@ -181,6 +181,7 @@
 - 根据复测日志 `QObject: shared QObject was deleted directly` 继续修复 Start Recording 闪退：UI 不再通过 `QThread + QObject worker` 间接管理录制子进程，改用 Qt 原生 `QProcess` 启动 `robodataset_studio.ros.record_episode_cli`，避免 QObject 跨线程删除顺序导致闪退；Stop Recording 改为 terminate/kill 录制进程；当前 smoke tests 为 81 passed。
 - Manual 模式 Stop Recording 已从强制 terminate 改为软停止：UI 写入 session 下的 `.stop_recording` 文件，录制子进程检测到 stop 文件后自行退出采集循环并正常写出 episode；10 秒未退出才 force kill。这样 Manual 停止不会再因 SIGTERM 退出码 15 丢掉已采集数据；当前 smoke tests 为 81 passed。
 - Recording 页已增加图像前处理预览槽位：可在采集页选择 image stream，设置 crop/resize 并写回当前 YAML，对应 capture monitor 会实时显示裁切/缩放后的画面尺寸和平均亮度提示；曝光/滤波暂作为扩展槽位提示用户调整相机 node 参数，尚不直接控制设备。当前 smoke tests 为 83 passed。
+- Review 页已改为明确的 session 级扫描：页面顶部新增 Review session root、Browse Session、Use Current Session 和 Scan Session；扫描对象是指定 session 下的 `training/episode_*.npz`，并优先读取该 session 的 `collection_config.yaml` 做字段/维度校验，summary 明确显示 session/training/episode 数/config 来源；质量报告写回被扫描 session。当前 smoke tests 为 84 passed。
 
 ## 遇到的问题
 

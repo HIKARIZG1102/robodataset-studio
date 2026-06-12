@@ -3137,6 +3137,14 @@ class ReviewPage(QWidget):
         self._review_rows: list[dict[str, object]] = []
         self._visible_rows: list[dict[str, object]] = []
         self._review_marks: dict[str, str] = {}
+        self.review_config: dict[str, object] | None = None
+        self.review_session_root = self.ctx.state.raw_session_dir
+        self.session_root = QLineEdit(str(self.review_session_root))
+        browse_session = QPushButton("Browse Session")
+        browse_session.clicked.connect(self.browse_session)
+        use_current = QPushButton("Use Current Session")
+        use_current.clicked.connect(self.use_current_session)
+        self.session_summary = QLabel("")
         self.table = QTableWidget(0, 8)
         self.table.setHorizontalHeaderLabels(["Episode", "Status", "Mark", "Steps", "Size MB", "Missing", "Quality", "Fields"])
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -3155,7 +3163,7 @@ class ReviewPage(QWidget):
         self.detail.setReadOnly(True)
         self.hdf5_summary = QPlainTextEdit()
         self.hdf5_summary.setReadOnly(True)
-        scan = QPushButton("Scan Episodes")
+        scan = QPushButton("Scan Session")
         scan.clicked.connect(self.scan)
         mark_selected = QPushButton("Mark Selected")
         mark_selected.clicked.connect(self.mark_selected)
@@ -3166,8 +3174,15 @@ class ReviewPage(QWidget):
         scan_layout = QPushButton("Scan CALVIN Layout")
         scan_layout.clicked.connect(self.scan_layout)
         layout = QVBoxLayout(self)
+        target_row = QHBoxLayout()
+        target_row.addWidget(QLabel("Review session root"))
+        target_row.addWidget(self.session_root, 1)
+        target_row.addWidget(browse_session)
+        target_row.addWidget(use_current)
+        target_row.addWidget(scan)
+        layout.addLayout(target_row)
+        layout.addWidget(self.session_summary)
         controls = QHBoxLayout()
-        controls.addWidget(scan)
         controls.addWidget(QLabel("Status filter"))
         controls.addWidget(self.status_filter)
         controls.addWidget(QLabel("Manual mark"))
@@ -3191,14 +3206,44 @@ class ReviewPage(QWidget):
         layout.addWidget(scan_layout)
         layout.addWidget(self.layout_table)
 
+    def browse_session(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Select session root", self.session_root.text() or str(self.ctx.state.raw_session_dir))
+        if path:
+            self.session_root.setText(path)
+
+    def use_current_session(self) -> None:
+        self.session_root.setText(str(self.ctx.state.raw_session_dir))
+        self.scan()
+
+    def _selected_session_root(self) -> Path:
+        text = self.session_root.text().strip()
+        return Path(text).expanduser() if text else self.ctx.state.raw_session_dir
+
+    def _load_review_config(self, session_root: Path) -> dict:
+        config_path = session_root / "collection_config.yaml"
+        if config_path.exists():
+            config = self.ctx.config_manager.loads(config_path.read_text(encoding="utf-8"))
+            self.ctx.config_manager.sync_core_schema(config)
+            return config
+        return self.ctx.state.collection_config
+
     def scan(self) -> None:
-        if not self.ctx.has_raw_episodes():
-            QMessageBox.warning(self, "No episodes", "Record at least one episode before review.")
+        session_root = self._selected_session_root()
+        training = session_root / "training"
+        config_path = session_root / "collection_config.yaml"
+        if not training.exists() or not any(training.glob("episode_*.npz")):
+            QMessageBox.warning(self, "No episodes", f"No episode_*.npz files found under:\n{training}")
             return
-        rows = self.ctx.validator.scan_npz(self.ctx.state.episodes_dir, self.ctx.state.collection_config)
+        self.review_session_root = session_root
+        self.review_config = self._load_review_config(session_root)
+        rows = self.ctx.validator.scan_npz(training, self.review_config)
         self._review_rows = rows
         self.apply_review_filter()
         self.update_quality_summary()
+        self.session_summary.setText(
+            f"session: {session_root} | training: {training} | episodes: {len(rows)} | "
+            f"config: {'yes' if config_path.exists() else 'using current UI config'}"
+        )
 
     def apply_review_filter(self) -> None:
         status = self.status_filter.currentText()
@@ -3245,7 +3290,7 @@ class ReviewPage(QWidget):
             QMessageBox.warning(self, "Quality report", "Scan episodes before exporting a quality report.")
             return
         report = self.ctx.validator.quality_report(self._review_rows, self._review_marks)
-        output = self.ctx.state.raw_session_dir / "quality_report.json"
+        output = self.review_session_root / "quality_report.json"
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         self.summary.appendPlainText(f"exported: {output}")
@@ -3273,7 +3318,7 @@ class ReviewPage(QWidget):
     def show_episode_detail(self, current_row: int, _current_col: int, _previous_row: int, _previous_col: int) -> None:
         if current_row < 0 or current_row >= len(self._episode_paths):
             return
-        self.detail.setPlainText(self.ctx.validator.describe_npz(self._episode_paths[current_row], self.ctx.state.collection_config))
+        self.detail.setPlainText(self.ctx.validator.describe_npz(self._episode_paths[current_row], self.review_config or self.ctx.state.collection_config))
 
     def inspect_hdf5(self) -> None:
         candidates = [path for path in self.ctx.state.conversion_outputs if path.exists()]

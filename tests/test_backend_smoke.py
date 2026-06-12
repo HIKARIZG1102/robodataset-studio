@@ -1502,6 +1502,42 @@ def test_review_page_filters_marks_and_exports_quality_report(tmp_path) -> None:
     assert report["issue_counts"] == {"black_frame:rgb_static": 1}
 
 
+def test_review_page_scans_explicit_session_root(tmp_path) -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    ctx.state.dataset_root = tmp_path / "default_root"
+    explicit_session = tmp_path / "external_session"
+    training = explicit_session / "training"
+    training.mkdir(parents=True)
+    config = ConfigManager().build_default_config(
+        ProjectState(),
+        [{"name": "/camera/camera/color/image_raw", "type": "sensor_msgs/msg/Image"}],
+    )
+    config["streams"] = [
+        {
+            "name": "rgb_custom",
+            "calvin_key": "rgb_custom",
+            "message_type": "sensor_msgs/msg/Image",
+            "required": True,
+        }
+    ]
+    config["dataset"]["requires_robot_obs"] = False
+    config["dataset"]["requires_actions"] = False
+    ConfigManager().save(explicit_session / "collection_config.yaml", config)
+    np.savez_compressed(training / "episode_0000000.npz", rgb_custom=np.full((8, 8, 3), 128, dtype=np.uint8))
+    page = ReviewPage(ctx)
+
+    page.session_root.setText(str(explicit_session))
+    page.scan()
+
+    assert app is not None
+    assert page.table.rowCount() == 1
+    assert "episodes: 1" in page.session_summary.text()
+    assert page._review_rows[0]["missing"] == ""
+    assert (explicit_session / "collection_config.yaml").exists()
+    page.close()
+
+
 def test_discovery_topic_selection_uses_checkboxes() -> None:
     app = QApplication.instance() or QApplication([])
     ctx = AppContext()
