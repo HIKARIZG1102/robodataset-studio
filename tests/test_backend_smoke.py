@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from pathlib import Path
 
 import h5py
 import numpy as np
@@ -16,18 +17,29 @@ from robodataset_studio.dataset.validator import DatasetValidator
 from robodataset_studio.dataset.converter import Hdf5Converter
 from robodataset_studio.core.config_library import ConfigLibrary
 from robodataset_studio.core.config_manager import ConfigManager
-from robodataset_studio.core.models import ProjectState
+from robodataset_studio.core.models import ProjectState, project_root
 from robodataset_studio.core.settings_store import UserSettingsStore
 from robodataset_studio.ros.episode_recorder import RosEpisodeRecorder, joint_state_to_robot_obs
 from robodataset_studio.ros.graph_discovery import RosGraphDiscovery
 from robodataset_studio.ros.image_conversion import image_bytes_to_rgb
-from robodataset_studio.ui.pages import AppContext, ConfigPage, DiscoveryPage, InspectorPage, ProjectPage, RecordingPage, RecordingPreflightWorker, ReviewPage, RosRecordingWorker, SettingsPage, UploadPage
+from robodataset_studio.ui.pages import AppContext, ConfigPage, ConvertPage, DiscoveryPage, InspectorPage, ProjectPage, RecordingPage, RecordingPreflightWorker, RemoteManifestVerifyWorker, ReviewPage, RosRecordingWorker, SettingsPage, UploadPage, UploadRepairWorker, UploadSftpWorker
 from robodataset_studio.ui.main_window import MainWindow
 from robodataset_studio.upload.manifest import UploadManifest
 from robodataset_studio.upload.ssh_uploader import SshConnection, SshUploader, parse_ssh_target
 from robodataset_studio.upload.ssh_profiles import SshProfile, SshProfileStore
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+
+def wait_for_qt(condition, timeout: float = 5.0) -> None:  # type: ignore[no-untyped-def]
+    app = QApplication.instance() or QApplication([])
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        app.processEvents()
+        if condition():
+            return
+        time.sleep(0.01)
+    raise TimeoutError("Qt condition was not reached before timeout")
 
 
 @pytest.fixture(autouse=True)
@@ -70,6 +82,27 @@ def test_calvin_session_merge_reindexes_episodes(tmp_path) -> None:
     ]
     saved_manifest = json.loads((merged_training.parent / "merge_manifest.json").read_text(encoding="utf-8"))
     assert saved_manifest["episode_count"] == 4
+    annotations = np.load(merged_training / "lang_annotations" / "auto_lang_ann.npy", allow_pickle=True).item()
+    assert annotations["info"]["indx"].tolist() == [[0, 1], [2, 3]]
+
+
+def test_calvin_session_merge_filters_selected_sessions(tmp_path) -> None:
+    raw_root = tmp_path / "raw_sessions" / "task" / "v1"
+    recorder = MockRecorder()
+    recorder.record_episode(raw_root / "session_a" / "training", 3, steps=2)
+    recorder.record_episode(raw_root / "session_b" / "training", 8, steps=2)
+
+    merged_training = tmp_path / "merged_calvin" / "task" / "v1" / "training"
+    manifest = CalvinSessionMerger().merge(raw_root, merged_training, selected_sessions=["session_b"])
+
+    assert manifest["session_count"] == 1
+    assert manifest["episode_count"] == 2
+    assert [path.name for path in sorted(merged_training.glob("episode_*.npz"))] == [
+        "episode_0000000.npz",
+        "episode_0000001.npz",
+    ]
+    annotations = np.load(merged_training / "lang_annotations" / "auto_lang_ann.npy", allow_pickle=True).item()
+    assert annotations["info"]["indx"].tolist() == [[0, 1]]
 
 
 def test_mock_recorder_writes_calvin_transition_files(tmp_path) -> None:
@@ -307,6 +340,23 @@ def test_hdf5_converter_stores_config_metadata_as_attrs(tmp_path) -> None:
         assert "rgb_static" in episode
 
 
+def test_hdf5_converter_can_convert_explicit_episode_paths(tmp_path) -> None:
+    session_a = tmp_path / "session_a" / "training"
+    session_b = tmp_path / "session_b" / "training"
+    MockRecorder().record_episode(session_a, 0, steps=2)
+    MockRecorder().record_episode(session_b, 10, steps=3)
+
+    output = Hdf5Converter().convert_episode_paths(
+        sorted(session_b.glob("episode_*.npz")),
+        tmp_path / "selected.hdf5",
+        config_yaml="project:\n  name: selected\n",
+    )
+
+    with h5py.File(output, "r") as h5:
+        assert len(h5["episodes"].keys()) == 3
+        assert h5["metadata"].attrs["num_episodes"] == 3
+
+
 def test_upload_manifest_roundtrip(tmp_path) -> None:
     payload = tmp_path / "payload.txt"
     payload.write_text("hello dataset\n", encoding="utf-8")
@@ -318,6 +368,19 @@ def test_upload_manifest_roundtrip(tmp_path) -> None:
     assert result["ok"] is True
     assert result["checked"] == 1
     assert parse_ssh_target("user@example.com:/data/out") == ("user@example.com", "/data/out")
+
+
+def test_upload_manifest_supports_single_file_source(tmp_path) -> None:
+    payload = tmp_path / "payload.txt"
+    payload.write_text("hello dataset\n", encoding="utf-8")
+
+    summary = UploadManifest().build(payload)
+
+    assert summary["root"] == str(tmp_path.resolve())
+    assert summary["source"] == str(payload.resolve())
+    assert summary["source_type"] == "file"
+    assert summary["file_count"] == 1
+    assert summary["files"][0]["path"] == "payload.txt"
 
 
 def test_config_library_roundtrip_and_delete(tmp_path) -> None:
@@ -401,6 +464,76 @@ def test_rsync_upload_uses_port_and_key(tmp_path) -> None:
 
     assert "-e" in command
     assert "ssh -p 2200 -i /home/user/.ssh/id_rsa" in command
+    assert "--partial" in command
+    assert "--append-verify" in command
+    assert "--partial-dir=.rsync-partial" not in command
+
+
+def test_rsync_upload_supports_single_file_source(tmp_path) -> None:
+    ctx = AppContext()
+    local_file = tmp_path / "calvin.hdf5"
+    local_file.write_bytes(b"data")
+
+    command = SshUploader(ctx.process_manager).rsync_command(
+        local_file,
+        "trainer@example.com:/data/out",
+        port=2200,
+    )
+
+    assert str(local_file) in command
+    assert f"{tmp_path}/" not in command
+
+
+def test_repair_rsync_upload_uses_partial_append_verify_and_files_from(tmp_path) -> None:
+    ctx = AppContext()
+    local = tmp_path / "dataset"
+    local.mkdir()
+    files_from = tmp_path / "repair.txt"
+    files_from.write_text("training/episode_0000001.npz\n", encoding="utf-8")
+    command = SshUploader(ctx.process_manager).repair_rsync_command(
+        local,
+        "trainer@example.com:/data/out",
+        files_from,
+        port=2200,
+        key_path="/home/user/.ssh/id_rsa",
+    )
+
+    assert "--partial" in command
+    assert "--append-verify" in command
+    assert "--partial-dir=.rsync-partial" not in command
+    assert "--files-from" in command
+    assert str(files_from) in command
+    assert command[-2] == f"{local}/"
+    assert command[-1] == "trainer@example.com:/data/out"
+
+
+def test_repair_rsync_single_file_uses_parent_as_source_root(tmp_path) -> None:
+    ctx = AppContext()
+    local_file = tmp_path / "calvin.hdf5"
+    local_file.write_bytes(b"data")
+    files_from = tmp_path / "repair.txt"
+    files_from.write_text("calvin.hdf5\n", encoding="utf-8")
+
+    command = SshUploader(ctx.process_manager).repair_rsync_command(
+        local_file,
+        "trainer@example.com:/data/out",
+        files_from,
+        port=2200,
+    )
+
+    assert command[-2] == f"{tmp_path}/"
+    assert command[-1] == "trainer@example.com:/data/out"
+
+
+def test_repair_paths_from_result_filters_unsafe_paths() -> None:
+    paths = SshUploader(AppContext().process_manager).repair_paths_from_result(
+        {
+            "missing": ["training/a.npz", "../escape", "/absolute"],
+            "mismatched": ["training/b.npz", "training/a.npz"],
+        }
+    )
+
+    assert paths == ["training/a.npz", "training/b.npz"]
 
 
 def test_upload_page_builds_connection_from_split_fields() -> None:
@@ -420,6 +553,61 @@ def test_upload_page_builds_connection_from_split_fields() -> None:
     assert connection.target == "robot@10.0.0.5:/data/calvin"
     page.password.setText("secret")
     assert page.auth_hint.text() == "auth: password"
+
+
+def test_convert_page_merges_checked_sessions_to_selected_output(tmp_path) -> None:
+    app = QApplication.instance() or QApplication([])
+    raw_root = tmp_path / "raw_sessions" / "task" / "v1"
+    recorder = MockRecorder()
+    recorder.record_episode(raw_root / "session_a" / "training", 0, steps=2)
+    recorder.record_episode(raw_root / "session_b" / "training", 10, steps=3)
+    ctx = AppContext()
+    page = ConvertPage(ctx)
+    page.raw_root.setText(str(raw_root))
+    page.output_root.setText(str(tmp_path / "merged_calvin" / "task" / "v1"))
+
+    page.build_dry_run()
+    page.plan_table.item(0, 0).setCheckState(Qt.CheckState.Unchecked)
+    page.merge_sessions()
+    wait_for_qt(lambda: page._conversion_thread is None)
+
+    merged_training = tmp_path / "merged_calvin" / "task" / "v1" / "training"
+    assert app is not None
+    assert page.plan_table.rowCount() == 2
+    assert [path.name for path in sorted(merged_training.glob("episode_*.npz"))] == [
+        "episode_0000000.npz",
+        "episode_0000001.npz",
+        "episode_0000002.npz",
+    ]
+    manifest = json.loads((merged_training.parent / "merge_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["session_count"] == 1
+    assert manifest["episodes"][0]["source_session"] == "session_b"
+
+
+def test_convert_page_converts_checked_sessions_to_hdf5_at_output_root(tmp_path) -> None:
+    app = QApplication.instance() or QApplication([])
+    raw_root = tmp_path / "raw_sessions" / "task" / "v1"
+    recorder = MockRecorder()
+    recorder.record_episode(raw_root / "session_a" / "training", 0, steps=2)
+    recorder.record_episode(raw_root / "session_b" / "training", 10, steps=3)
+    ctx = AppContext()
+    page = ConvertPage(ctx)
+    output_root = tmp_path / "merged_sessions" / "test"
+    page.raw_root.setText(str(raw_root))
+    page.output_root.setText(str(output_root))
+
+    page.build_dry_run()
+    page.plan_table.item(0, 0).setCheckState(Qt.CheckState.Unchecked)
+    page.convert()
+    wait_for_qt(lambda: page._conversion_thread is None)
+
+    assert app is not None
+    assert not (output_root / "training" / "episode_0000000.npz").exists()
+    assert (output_root / "calvin.hdf5").exists()
+    assert not (output_root / "training" / "calvin.hdf5").exists()
+    with h5py.File(output_root / "calvin.hdf5", "r") as h5:
+        assert len(h5["episodes"].keys()) == 3
+    assert ctx.state.conversion_outputs[-1] == output_root / "calvin.hdf5"
 
 
 def test_upload_page_saves_and_loads_server_profile_without_password(tmp_path) -> None:
@@ -486,7 +674,120 @@ def test_upload_page_local_size_and_format_bytes(tmp_path) -> None:
 
     assert app is not None
     assert page._local_size_bytes(local) == 12
+    assert page._local_size_bytes(local / "a.bin") == 5
     assert page._format_bytes(1536) == "1.50 KB"
+
+
+def test_upload_page_uses_temporary_manifest_not_local_dataset_file(tmp_path) -> None:
+    app = QApplication.instance() or QApplication([])
+    local = tmp_path / "dataset"
+    local.mkdir()
+    (local / "sample.bin").write_bytes(b"payload")
+    page = UploadPage(AppContext())
+    page.local.setText(str(local))
+
+    manifest_path = page.build_manifest()
+
+    assert app is not None
+    assert manifest_path is not None
+    assert manifest_path.exists()
+    assert manifest_path.parent != local
+    assert not (local / "upload_manifest.json").exists()
+    assert page._ensure_manifest() == manifest_path
+    page._cleanup_temp_manifest()
+    assert not manifest_path.exists()
+
+
+def test_upload_page_upload_refreshes_temporary_manifest(tmp_path, monkeypatch) -> None:
+    app = QApplication.instance() or QApplication([])
+    local = tmp_path / "dataset"
+    local.mkdir()
+    (local / "sample.bin").write_bytes(b"payload")
+    ctx = AppContext()
+    page = UploadPage(ctx)
+    page.local.setText(str(local))
+    page.lan_host.setText("10.0.0.5")
+    page.username.setText("robot")
+    page.remote_path.setText("/data/out")
+    old_manifest = page.build_manifest()
+    assert old_manifest is not None
+
+    class FakeUploader:
+        def __init__(self, _process_manager):  # type: ignore[no-untyped-def]
+            pass
+
+        def upload_connection_with_rsync(self, local_path, connection):  # type: ignore[no-untyped-def]
+            assert local_path == local
+            assert connection.target == "robot@10.0.0.5:/data/out"
+
+            class Record:
+                process_id = "proc_upload_1"
+
+            return Record()
+
+    monkeypatch.setattr("robodataset_studio.ui.pages.SshUploader", FakeUploader)
+
+    page.upload()
+
+    assert app is not None
+    assert page._manifest_path is not None
+    assert page._manifest_path.exists()
+    assert page._manifest_path != old_manifest
+    assert not old_manifest.exists()
+    assert not (local / "upload_manifest.json").exists()
+    page._cleanup_temp_manifest()
+
+
+def test_upload_page_uses_temporary_manifest_for_single_file(tmp_path) -> None:
+    app = QApplication.instance() or QApplication([])
+    local_file = tmp_path / "calvin.hdf5"
+    local_file.write_bytes(b"payload")
+    page = UploadPage(AppContext())
+    page.local.setText(str(local_file))
+
+    manifest_path = page.build_manifest()
+
+    assert app is not None
+    assert manifest_path is not None
+    assert manifest_path.exists()
+    assert manifest_path.parent != tmp_path
+    assert not (tmp_path / "upload_manifest.json").exists()
+    summary = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert summary["source_type"] == "file"
+    assert summary["files"][0]["path"] == "calvin.hdf5"
+    page._cleanup_temp_manifest()
+
+
+def test_upload_page_browses_local_path(tmp_path, monkeypatch) -> None:
+    app = QApplication.instance() or QApplication([])
+    selected = tmp_path / "selected_dataset"
+    selected.mkdir()
+    page = UploadPage(AppContext())
+    monkeypatch.setattr(
+        "robodataset_studio.ui.pages.QFileDialog.getExistingDirectory",
+        lambda *_args, **_kwargs: str(selected),
+    )
+
+    page.browse_local_path()
+
+    assert app is not None
+    assert page.local.text() == str(selected)
+
+
+def test_upload_page_browses_local_file(tmp_path, monkeypatch) -> None:
+    app = QApplication.instance() or QApplication([])
+    selected = tmp_path / "calvin.hdf5"
+    selected.write_bytes(b"data")
+    page = UploadPage(AppContext())
+    monkeypatch.setattr(
+        "robodataset_studio.ui.pages.QFileDialog.getOpenFileName",
+        lambda *_args, **_kwargs: (str(selected), ""),
+    )
+
+    page.browse_local_file()
+
+    assert app is not None
+    assert page.local.text() == str(selected)
 
 
 def test_upload_page_parses_rsync_progress() -> None:
@@ -508,6 +809,131 @@ def test_upload_page_parses_rsync_progress() -> None:
         "speed": "12.34MB/s",
         "eta": "0:00:03",
     }
+
+
+def test_upload_repair_worker_starts_selective_rsync(tmp_path) -> None:
+    app = QApplication.instance() or QApplication([])
+    manifest_path = tmp_path / "upload_manifest.json"
+    manifest_path.write_text("{}", encoding="utf-8")
+    local_path = tmp_path / "dataset"
+    local_path.mkdir()
+    connection = SshConnection(host="example.com", port=22, username="robot", remote_path="/data/out")
+    calls = {}
+
+    class FakeRecord:
+        process_id = "proc_repair_1"
+
+    class FakeUploader:
+        def remote_manifest_result(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+            calls["verified"] = True
+            return {"checked": 1, "missing": ["training/a.npz"], "mismatched": ["training/b.npz"]}
+
+        def repair_paths_from_result(self, result):  # type: ignore[no-untyped-def]
+            return SshUploader(AppContext().process_manager).repair_paths_from_result(result)
+
+        def write_files_from(self, rel_paths):  # type: ignore[no-untyped-def]
+            calls["rel_paths"] = rel_paths
+            path = tmp_path / "files_from.txt"
+            path.write_text("\n".join(rel_paths) + "\n", encoding="utf-8")
+            return path
+
+        def repair_resume_connection_with_rsync(self, local, conn, files_from):  # type: ignore[no-untyped-def]
+            calls["repair"] = (local, conn, files_from)
+            return FakeRecord()
+
+    worker = UploadRepairWorker(FakeUploader(), manifest_path, local_path, connection)  # type: ignore[arg-type]
+    results = []
+    worker.finished.connect(lambda result, error: results.append((result, error)))
+
+    worker.run()
+
+    assert app is not None
+    assert calls["verified"] is True
+    assert calls["rel_paths"] == ["training/a.npz", "training/b.npz"]
+    assert calls["repair"][0] == local_path
+    assert results[0][1] is None
+    assert results[0][0]["record_id"] == "proc_repair_1"
+
+
+def test_upload_repair_worker_uses_sftp_for_password_auth(tmp_path) -> None:
+    app = QApplication.instance() or QApplication([])
+    manifest_path = tmp_path / "upload_manifest.json"
+    manifest_path.write_text("{}", encoding="utf-8")
+    local_path = tmp_path / "dataset"
+    local_path.mkdir()
+    connection = SshConnection(host="example.com", port=22, username="robot", password="secret", remote_path="/data/out")
+    calls = {}
+
+    class FakeUploader:
+        def remote_manifest_result_connection(self, manifest, conn):  # type: ignore[no-untyped-def]
+            calls["verified"] = (manifest, conn)
+            return {"checked": 1, "missing": ["training/a.npz"], "mismatched": []}
+
+        def repair_paths_from_result(self, result):  # type: ignore[no-untyped-def]
+            return SshUploader(AppContext().process_manager).repair_paths_from_result(result)
+
+        def upload_connection_with_sftp(self, local, conn, rel_paths=None):  # type: ignore[no-untyped-def]
+            calls["sftp"] = (local, conn, rel_paths)
+            return {"uploaded_count": len(rel_paths or []), "uploaded": rel_paths or []}
+
+    worker = UploadRepairWorker(FakeUploader(), manifest_path, local_path, connection)  # type: ignore[arg-type]
+    results = []
+    worker.finished.connect(lambda result, error: results.append((result, error)))
+
+    worker.run()
+
+    assert app is not None
+    assert calls["verified"] == (manifest_path, connection)
+    assert calls["sftp"] == (local_path, connection, ["training/a.npz"])
+    assert results[0][1] is None
+    assert results[0][0]["sftp_result"]["uploaded_count"] == 1
+    assert results[0][0]["record_id"] == ""
+
+
+def test_upload_sftp_worker_runs_background_upload(tmp_path) -> None:
+    app = QApplication.instance() or QApplication([])
+    local_path = tmp_path / "dataset"
+    local_path.mkdir()
+    connection = SshConnection(host="example.com", port=22, username="robot", password="secret", remote_path="/data/out")
+
+    class FakeUploader:
+        def upload_connection_with_sftp(self, local, conn):  # type: ignore[no-untyped-def]
+            assert local == local_path
+            assert conn == connection
+            return {"uploaded_count": 2, "uploaded": ["a", "b"]}
+
+    worker = UploadSftpWorker(FakeUploader(), local_path, connection)  # type: ignore[arg-type]
+    results = []
+    worker.finished.connect(lambda result, error: results.append((result, error)))
+
+    worker.run()
+
+    assert app is not None
+    assert results[0][1] is None
+    assert results[0][0]["uploaded_count"] == 2
+
+
+def test_remote_manifest_verify_worker_uses_password_connection(tmp_path) -> None:
+    app = QApplication.instance() or QApplication([])
+    manifest_path = tmp_path / "upload_manifest.json"
+    manifest_path.write_text("{}", encoding="utf-8")
+    connection = SshConnection(host="example.com", port=22, username="robot", password="secret", remote_path="/data/out")
+
+    class FakeUploader:
+        def remote_manifest_result_connection(self, manifest, conn):  # type: ignore[no-untyped-def]
+            assert manifest == manifest_path
+            assert conn == connection
+            return {"ok": True, "checked": 1, "missing": [], "mismatched": []}
+
+    worker = RemoteManifestVerifyWorker(FakeUploader(), manifest_path, connection)  # type: ignore[arg-type]
+    results = []
+    worker.finished.connect(lambda result, error: results.append((result, error)))
+
+    worker.run()
+
+    assert app is not None
+    assert results[0][1] is None
+    assert results[0][0]["ok"] is True
 
 
 def test_joint_state_to_robot_obs_pads_to_output_dim() -> None:
@@ -804,6 +1230,20 @@ def test_project_fields_sync_between_project_and_config_pages() -> None:
     assert project_page.task.text() == "config_task"
     assert project_page.version.text() == "v4"
     assert project_page.operator.text() == "operator_b"
+
+
+def test_default_dataset_root_is_project_relative() -> None:
+    state = ProjectState(task_name="task", version="v1")
+
+    assert state.effective_dataset_root == project_root() / "robodataset"
+    assert state.raw_session_dir == project_root() / "robodataset" / "raw_sessions" / "task" / "v1" / state.current_session
+
+
+def test_relative_dataset_root_resolves_inside_project() -> None:
+    state = ProjectState(task_name="task", version="v1", dataset_root=Path("portable_data"))
+
+    assert state.effective_dataset_root == project_root() / "portable_data"
+    assert state.raw_session_dir == project_root() / "portable_data" / "raw_sessions" / "task" / "v1" / state.current_session
 
 
 def test_config_page_refresh_from_selected_topics_updates_yaml_and_preview() -> None:
@@ -1571,6 +2011,35 @@ def test_review_page_detail_values_and_delete_selected(tmp_path) -> None:
     page.close()
 
 
+def test_review_page_persists_marks_per_session(tmp_path) -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    ctx.state.dataset_root = tmp_path
+    training = ctx.state.episodes_dir
+    training.mkdir(parents=True)
+    np.savez_compressed(
+        training / "episode_0000000.npz",
+        rgb_static=np.full((8, 8, 3), 128, dtype=np.uint8),
+        robot_obs=np.zeros((6,), dtype=np.float32),
+        rel_actions=np.zeros((7,), dtype=np.float32),
+        actions=np.zeros((7,), dtype=np.float32),
+    )
+    first = ReviewPage(ctx)
+    first.scan()
+    first.table.selectRow(0)
+    first.mark_select.setCurrentText("bad")
+    first.mark_selected()
+    first.close()
+
+    second = ReviewPage(ctx)
+    second.scan()
+
+    assert app is not None
+    assert (ctx.state.raw_session_dir / "review_marks.json").exists()
+    assert second.table.item(0, 2).text() == "bad"
+    second.close()
+
+
 def test_review_page_uses_tabs_for_hdf5_and_layout() -> None:
     app = QApplication.instance() or QApplication([])
     page = ReviewPage(AppContext())
@@ -1579,6 +2048,98 @@ def test_review_page_uses_tabs_for_hdf5_and_layout() -> None:
 
     assert app is not None
     assert tab_texts == ["Episode Review", "HDF5 Inspect", "CALVIN Layout"]
+    page.close()
+
+
+def test_review_page_checks_selected_hdf5_file(tmp_path) -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    hdf5_path = tmp_path / "bad.hdf5"
+    with h5py.File(hdf5_path, "w") as h5:
+        episodes = h5.create_group("episodes")
+        episode = episodes.create_group("0000000")
+        episode.create_dataset("rgb_static", data=np.full((8, 8, 3), 128, dtype=np.uint8))
+        episode.create_dataset("actions", data=np.zeros((3,), dtype=np.float32))
+        h5.create_group("metadata")
+    page = ReviewPage(ctx)
+
+    page.hdf5_path.setText(str(hdf5_path))
+    page.run_hdf5_checks()
+    issues = [page.hdf5_table.item(row, 2).text() for row in range(page.hdf5_table.rowCount())]
+    summary = page.hdf5_check_summary.toPlainText()
+
+    assert app is not None
+    assert "missing_required_fields" in issues
+    assert "action_dim" in issues
+    assert "episodes: total=1 valid=0 invalid=1" in summary
+    assert "0000000: error" in summary
+    assert "missing_required_fields" in summary
+    page.close()
+
+
+def test_review_page_checks_selected_layout_root(tmp_path) -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    session = tmp_path / "raw_sessions" / "task" / "v1" / "session_001"
+    training = session / "training"
+    training.mkdir(parents=True)
+    np.savez_compressed(
+        training / "episode_0000000.npz",
+        rgb_static=np.full((8, 8, 3), 128, dtype=np.uint8),
+        robot_obs=np.zeros((6,), dtype=np.float32),
+        rel_actions=np.zeros((7,), dtype=np.float32),
+        actions=np.zeros((7,), dtype=np.float32),
+    )
+    page = ReviewPage(ctx)
+
+    page.layout_root.setText(str(tmp_path))
+    page.run_layout_checks()
+    issues = [page.layout_table.item(row, 2).text() for row in range(page.layout_table.rowCount())]
+
+    assert app is not None
+    assert "-" in issues
+    assert "missing_collection_config" in issues
+    assert "missing_language_annotations" in issues
+    page.close()
+
+
+def test_review_page_builds_ai_review_prompt_from_episode_stats(tmp_path) -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    ctx.state.dataset_root = tmp_path
+    training = ctx.state.episodes_dir
+    training.mkdir(parents=True)
+    np.savez_compressed(
+        training / "episode_0000000.npz",
+        rgb_static=np.zeros((8, 8, 3), dtype=np.uint8),
+        robot_obs=np.zeros((6,), dtype=np.float32),
+        rel_actions=np.zeros((7,), dtype=np.float32),
+        actions=np.zeros((7,), dtype=np.float32),
+    )
+    page = ReviewPage(ctx)
+
+    page.run_local_checks()
+    page.build_ai_review_prompt()
+    prompt = page.ai_review_prompt.toPlainText()
+
+    assert app is not None
+    assert "DATASET_REVIEW_INPUT_JSON" in prompt
+    assert "low motion" in prompt
+    assert "sample count too small" in prompt
+    assert "episode_0000000.npz" in prompt
+    assert "abs_sum" in prompt
+    assert "black_frame:rgb_static" in prompt
+    page.close()
+
+
+def test_review_page_ai_review_result_callback() -> None:
+    app = QApplication.instance() or QApplication([])
+    page = ReviewPage(AppContext())
+
+    page.finish_ai_review("## Overall verdict\nwarning", None)
+
+    assert app is not None
+    assert "Overall verdict" in page.ai_review_result.toPlainText()
     page.close()
 
 
@@ -1858,6 +2419,48 @@ def test_project_fields_are_restored_from_user_settings_store(tmp_path) -> None:
     assert restored.state.operator == "operator_c"
     assert restored.state.environment == "physical"
     assert str(restored.state.dataset_root) == "/tmp/saved_root"
+
+
+def test_session_state_restores_config_selection_and_ui_paths(tmp_path) -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    ctx.settings_store = UserSettingsStore(tmp_path / "settings.json")
+    ctx.last_graph = {
+        "nodes": [{"name": "/camera_node"}],
+        "topics": [{"name": "/camera/front/image_raw", "type": "sensor_msgs/msg/Image"}],
+        "services": [],
+    }
+    ctx.state.selected_nodes = ["/camera_node"]
+    ctx.state.selected_streams = [{"name": "/camera/front/image_raw", "type": "sensor_msgs/msg/Image"}]
+    config = ConfigManager().build_default_config(ctx.state, ctx.state.selected_streams)
+    ctx.set_collection_config(config)
+    ctx.set_ui_state("review", session_root=str(tmp_path / "session"), hdf5_path=str(tmp_path / "calvin.hdf5"))
+    ctx.set_ui_state("convert", raw_root=str(tmp_path / "raw"), output_root=str(tmp_path / "out"), split="validation")
+    ctx.set_ui_state("upload", local_path=str(tmp_path / "out"), remote_path="/data/last", username="student")
+
+    restored = AppContext()
+    restored.settings_store = UserSettingsStore(tmp_path / "settings.json")
+    restored.load_user_settings()
+    review_page = ReviewPage(restored)
+    convert_page = ConvertPage(restored)
+    upload_page = UploadPage(restored)
+
+    assert app is not None
+    assert restored.state.selected_nodes == ["/camera_node"]
+    assert restored.state.selected_streams == [{"name": "/camera/front/image_raw", "type": "sensor_msgs/msg/Image"}]
+    assert restored.last_graph["topics"][0]["name"] == "/camera/front/image_raw"
+    assert restored.state.collection_config["streams"][0]["topic"] == "/camera/front/image_raw"
+    assert review_page.session_root.text() == str(tmp_path / "session")
+    assert review_page.hdf5_path.text() == str(tmp_path / "calvin.hdf5")
+    assert convert_page.raw_root.text() == str(tmp_path / "raw")
+    assert convert_page.output_root.text() == str(tmp_path / "out")
+    assert convert_page.split.text() == "validation"
+    assert upload_page.local.text() == str(tmp_path / "out")
+    assert upload_page.remote_path.text() == "/data/last"
+    assert upload_page.username.text() == "student"
+    review_page.close()
+    convert_page.close()
+    upload_page.close()
 
 
 def test_settings_refresh_models_populates_model_combo(monkeypatch) -> None:

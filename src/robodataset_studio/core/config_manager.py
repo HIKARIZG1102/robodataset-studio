@@ -133,8 +133,20 @@ class ConfigManager:
                 "hdf5_schema": "pi05_calvin_hdf5",
                 "requires_robot_obs": bool(joint_topic),
                 "requires_actions": bool(joint_topic),
-                "cache_root": str(state.raw_session_dir),
-                "merged_root": str(state.merged_dir),
+                "cache_root": str(
+                    Path("robodataset")
+                    / "raw_sessions"
+                    / state.effective_task_name
+                    / state.effective_version
+                    / state.current_session
+                ),
+                "merged_root": str(
+                    Path("robodataset")
+                    / "merged_calvin"
+                    / state.effective_task_name
+                    / state.effective_version
+                    / "training"
+                ),
                 "split": "training",
                 "episode_prefix": "episode_",
                 "write_language_annotations": True,

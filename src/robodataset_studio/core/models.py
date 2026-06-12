@@ -6,6 +6,10 @@ from pathlib import Path
 from typing import Any
 
 
+def project_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
 def now_id(prefix: str) -> str:
     return f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
@@ -28,6 +32,7 @@ class ProjectState:
     ai_base_url: str = ""
     ai_model: str = ""
     ai_api_key: str = ""
+    ui_state: dict[str, Any] = field(default_factory=dict)
 
     @property
     def effective_task_name(self) -> str:
@@ -39,7 +44,11 @@ class ProjectState:
 
     @property
     def effective_dataset_root(self) -> Path:
-        return self.dataset_root if str(self.dataset_root) not in {"", "."} else Path.home() / "robot_datasets" / "robodataset_studio"
+        if str(self.dataset_root) in {"", "."}:
+            return project_root() / "robodataset"
+        if self.dataset_root.is_absolute():
+            return self.dataset_root
+        return project_root() / self.dataset_root
 
     @property
     def raw_session_dir(self) -> Path:

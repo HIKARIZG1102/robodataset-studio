@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path, PurePosixPath
 
 import threading
@@ -57,7 +58,7 @@ from robodataset_studio.ros.episode_recorder import RosEpisodeRecorder, RosEpiso
 from robodataset_studio.ros.graph_discovery import RosGraphDiscovery
 from robodataset_studio.ros.image_conversion import image_bytes_to_rgb
 from robodataset_studio.ui.i18n import apply_i18n
-from robodataset_studio.upload.manifest import MANIFEST_NAME, UploadManifest
+from robodataset_studio.upload.manifest import UploadManifest
 from robodataset_studio.upload.ssh_uploader import SshConnection, SshUploader
 from robodataset_studio.upload.ssh_profiles import SshProfile, SshProfileStore
 
@@ -123,6 +124,24 @@ class AppContext(QObject):
             self.state.ai_base_url = str(ai.get("base_url", ""))
             self.state.ai_model = str(ai.get("model", ""))
             self.state.ai_api_key = str(ai.get("api_key", ""))
+        selection = settings.get("selection", {})
+        if isinstance(selection, dict):
+            nodes = selection.get("selected_nodes", [])
+            streams = selection.get("selected_streams", [])
+            self.state.selected_nodes = [str(node) for node in nodes] if isinstance(nodes, list) else []
+            self.state.selected_streams = [dict(stream) for stream in streams if isinstance(stream, dict)] if isinstance(streams, list) else []
+            graph = selection.get("last_graph", {})
+            if isinstance(graph, dict):
+                self.last_graph = {
+                    "nodes": [dict(item) for item in graph.get("nodes", []) if isinstance(item, dict)],
+                    "topics": [dict(item) for item in graph.get("topics", []) if isinstance(item, dict)],
+                    "services": [dict(item) for item in graph.get("services", []) if isinstance(item, dict)],
+                }
+        collection_config = settings.get("collection_config")
+        if isinstance(collection_config, dict):
+            self.state.collection_config = collection_config
+        ui_state = settings.get("ui", {})
+        self.state.ui_state = dict(ui_state) if isinstance(ui_state, dict) else {}
 
     def save_user_settings(self) -> None:
         settings = {
@@ -140,6 +159,13 @@ class AppContext(QObject):
                 "model": self.state.ai_model,
                 "api_key": self.state.ai_api_key,
             },
+            "selection": {
+                "selected_nodes": list(self.state.selected_nodes),
+                "selected_streams": [dict(stream) for stream in self.state.selected_streams],
+                "last_graph": self.last_graph,
+            },
+            "collection_config": self.state.collection_config,
+            "ui": self.state.ui_state,
         }
         try:
             self.settings_store.save(settings)
@@ -150,7 +176,23 @@ class AppContext(QObject):
 
     def set_collection_config(self, config: dict) -> None:
         self.state.collection_config = config
+        self.save_user_settings()
         self.config_changed.emit()
+
+    def set_ui_state(self, page: str, **values: object) -> None:
+        existing = self.state.ui_state.get(page, {})
+        page_state = dict(existing) if isinstance(existing, dict) else {}
+        for key, value in values.items():
+            if isinstance(value, Path):
+                page_state[key] = str(value)
+            else:
+                page_state[key] = value
+        self.state.ui_state[page] = page_state
+        self.save_user_settings()
+
+    def get_ui_state(self, page: str) -> dict[str, object]:
+        existing = self.state.ui_state.get(page, {})
+        return dict(existing) if isinstance(existing, dict) else {}
 
     def set_project_fields(
         self,
@@ -789,6 +831,166 @@ class RecordingPreflightWorker(QObject):
         return items
 
 
+class DatasetConversionWorker(QObject):
+    finished = Signal(object, object)
+
+    def __init__(
+        self,
+        merger: CalvinSessionMerger,
+        converter: Hdf5Converter,
+        raw_root: Path,
+        output_root: Path,
+        split: str,
+        selected_sessions: list[str],
+        config_yaml: str,
+        write_hdf5: bool,
+    ) -> None:
+        super().__init__()
+        self.merger = merger
+        self.converter = converter
+        self.raw_root = raw_root
+        self.output_root = output_root
+        self.split = split
+        self.selected_sessions = selected_sessions
+        self.config_yaml = config_yaml
+        self.write_hdf5 = write_hdf5
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            split_dir = self.output_root / self.split
+            manifest = None
+            if not self.write_hdf5:
+                manifest = self.merger.merge(
+                    self.raw_root,
+                    split_dir,
+                    split=self.split,
+                    selected_sessions=self.selected_sessions,
+                )
+                hdf5_path = None
+            else:
+                episode_paths = self._selected_episode_paths()
+                if not episode_paths:
+                    raise RuntimeError("No episode_*.npz files found in the selected sessions")
+                hdf5_path = self.converter.convert_episode_paths(episode_paths, self.output_root / "calvin.hdf5", self.config_yaml)
+        except Exception as exc:
+            self.finished.emit(None, exc)
+            return
+        self.finished.emit(
+            {
+                "manifest": manifest,
+                "hdf5_path": str(hdf5_path) if hdf5_path else "",
+                "split_dir": str(split_dir),
+                "output_root": str(self.output_root),
+                "selected_sessions": self.selected_sessions,
+                "write_hdf5": self.write_hdf5,
+            },
+            None,
+        )
+
+    def _selected_episode_paths(self) -> list[Path]:
+        planner = CalvinMergePlanner()
+        selected_names = {str(session) for session in self.selected_sessions}
+        episode_paths: list[Path] = []
+        for row in planner.build_plan(self.raw_root, split=self.split):
+            if selected_names and row["session"] not in selected_names and row["path"] not in selected_names:
+                continue
+            session_split = Path(str(row["path"])) / self.split
+            episode_paths.extend(sorted(session_split.glob("episode_*.npz"), key=planner._episode_index))
+        return episode_paths
+
+
+class UploadRepairWorker(QObject):
+    finished = Signal(object, object)
+
+    def __init__(
+        self,
+        uploader: SshUploader,
+        manifest_path: Path,
+        local_path: Path,
+        connection: SshConnection,
+    ) -> None:
+        super().__init__()
+        self.uploader = uploader
+        self.manifest_path = manifest_path
+        self.local_path = local_path
+        self.connection = connection
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            if self.connection.password:
+                result = self.uploader.remote_manifest_result_connection(self.manifest_path, self.connection)
+            else:
+                result = self.uploader.remote_manifest_result(
+                    self.manifest_path,
+                    self.connection.target,
+                    self.connection.port,
+                    self.connection.key_path,
+                )
+            repair_paths = self.uploader.repair_paths_from_result(result)
+            files_from = None
+            record = None
+            sftp_result = None
+            if repair_paths:
+                if self.connection.password:
+                    sftp_result = self.uploader.upload_connection_with_sftp(self.local_path, self.connection, repair_paths)
+                else:
+                    files_from = self.uploader.write_files_from(repair_paths)
+                    record = self.uploader.repair_resume_connection_with_rsync(self.local_path, self.connection, files_from)
+        except Exception as exc:
+            self.finished.emit(None, exc)
+            return
+        self.finished.emit(
+            {
+                "verify_result": result,
+                "repair_paths": repair_paths,
+                "files_from": str(files_from) if files_from else "",
+                "record_id": record.process_id if record else "",
+                "sftp_result": sftp_result,
+            },
+            None,
+        )
+
+
+class UploadSftpWorker(QObject):
+    finished = Signal(object, object)
+
+    def __init__(self, uploader: SshUploader, local_path: Path, connection: SshConnection) -> None:
+        super().__init__()
+        self.uploader = uploader
+        self.local_path = local_path
+        self.connection = connection
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            result = self.uploader.upload_connection_with_sftp(self.local_path, self.connection)
+        except Exception as exc:
+            self.finished.emit(None, exc)
+            return
+        self.finished.emit(result, None)
+
+
+class RemoteManifestVerifyWorker(QObject):
+    finished = Signal(object, object)
+
+    def __init__(self, uploader: SshUploader, manifest_path: Path, connection: SshConnection) -> None:
+        super().__init__()
+        self.uploader = uploader
+        self.manifest_path = manifest_path
+        self.connection = connection
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            result = self.uploader.remote_manifest_result_connection(self.manifest_path, self.connection)
+        except Exception as exc:
+            self.finished.emit(None, exc)
+            return
+        self.finished.emit(result, None)
+
+
 @dataclass
 class CaptureMonitorSlot:
     stream_name: str
@@ -852,7 +1054,7 @@ class ProjectPage(QWidget):
             self.root.setText(path)
 
     def use_gello_preset(self) -> None:
-        self.root.setText("/data/dataset/calvin/robot_datasets/gello_widowx")
+        self.root.setText("robodataset")
         self.task.setText("catch_the_satellite_2fig")
         self.version.setText("v1")
 
@@ -878,7 +1080,7 @@ class ProjectPage(QWidget):
         self.update_summary()
 
     def _root_text(self) -> str:
-        return str(self.ctx.state.dataset_root) if str(self.ctx.state.dataset_root) not in {"", "."} else ""
+        return str(self.ctx.state.dataset_root) if str(self.ctx.state.dataset_root) not in {"", "."} else "robodataset"
 
     def update_summary(self) -> None:
         self.summary.setPlainText(
@@ -932,10 +1134,13 @@ class DiscoveryPage(QWidget):
         layout.addWidget(QLabel("Topics"))
         layout.addWidget(self.topics)
         layout.addWidget(generate)
+        if self.ctx.last_graph.get("nodes") or self.ctx.last_graph.get("topics"):
+            self.populate_graph(self.ctx.last_graph)
 
     def refresh(self) -> None:
         graph = self.ctx.discovery.discover()
         self.ctx.last_graph = graph
+        self.ctx.save_user_settings()
         self.populate_graph(graph)
 
     def populate_graph(self, graph: dict[str, list[dict[str, str]]]) -> None:
@@ -944,16 +1149,20 @@ class DiscoveryPage(QWidget):
         for node in graph.get("nodes", []):
             self.nodes.addItem(node["name"])
         topics = graph.get("topics", [])
+        selected_names = {str(topic.get("name", "")) for topic in self.ctx.state.selected_streams}
         self.topics.setRowCount(len(topics))
         for row, topic in enumerate(topics):
-            self.topics.setItem(row, 0, self._make_check_item(Qt.Unchecked))
+            check_state = Qt.Checked if topic.get("name", "") in selected_names else Qt.Unchecked
+            self.topics.setItem(row, 0, self._make_check_item(check_state))
             self.topics.setItem(row, 1, self._text_item(topic.get("name", "")))
             self.topics.setItem(row, 2, self._text_item(topic.get("type", "")))
         self.topics.resizeRowsToContents()
         self.topics.blockSignals(False)
         self.update_selected_topics()
         if graph.get("nodes"):
-            self.nodes.setCurrentRow(0)
+            selected_node = self.ctx.state.selected_nodes[0] if self.ctx.state.selected_nodes else ""
+            node_names = [node.get("name", "") for node in graph.get("nodes", [])]
+            self.nodes.setCurrentRow(node_names.index(selected_node) if selected_node in node_names else 0)
 
     def generate_config(self) -> None:
         topics = self._selected_topics()
@@ -976,6 +1185,7 @@ class DiscoveryPage(QWidget):
         nodes = self.ctx.last_graph.get("nodes", [])
         if 0 <= row < len(nodes):
             self.ctx.state.selected_nodes = [nodes[row].get("name", "")]
+            self.ctx.save_user_settings()
 
     def _make_check_item(self, state: Qt.CheckState) -> QTableWidgetItem:
         item = QTableWidgetItem("")
@@ -1000,6 +1210,7 @@ class DiscoveryPage(QWidget):
 
     def update_selected_topics(self) -> None:
         self.ctx.state.selected_streams = self._selected_topics()
+        self.ctx.save_user_settings()
         self.ctx.config_changed.emit()
 
 
@@ -1683,6 +1894,11 @@ class ConfigPage(QWidget):
             field.editingFinished.connect(self.sync_project_to_state)
         self.editor.textChanged.connect(self.refresh_dataset_preview_from_editor)
         self.refresh_config_library()
+        config_ui = self.ctx.get_ui_state("config")
+        current_library = str(config_ui.get("current_library", ""))
+        if current_library:
+            self.config_library_select.setCurrentText(current_library)
+            self._current_library_name = current_library
         self.refresh_selected_topics_view()
         if self.ctx.state.collection_config:
             self.load_context_config()
@@ -1798,7 +2014,7 @@ class ConfigPage(QWidget):
 
     def _current_config(self) -> dict:
         config = self.ctx.config_manager.loads(self.editor.toPlainText())
-        self.ctx.state.collection_config = config
+        self.ctx.set_collection_config(config)
         return config
 
     def reload_form_from_yaml(self) -> None:
@@ -1807,7 +2023,7 @@ class ConfigPage(QWidget):
         except Exception as exc:
             self.status.setText(f"Cannot load form from YAML: {exc}")
             return
-        self.ctx.state.collection_config = config
+        self.ctx.set_collection_config(config)
         recording = config.get("recording", {})
         project = config.get("project", {})
         instruction = config.get("instruction", {})
@@ -1881,7 +2097,7 @@ class ConfigPage(QWidget):
         if not config:
             config = self.ctx.config_manager.build_default_config(self.ctx.state, [])
         self._apply_form_values(config)
-        self.ctx.state.collection_config = config
+        self.ctx.set_collection_config(config)
         self.editor.setPlainText(self.ctx.config_manager.dumps(config))
         self.refresh_dataset_preview(config)
         self.status.setText("Applied quick form settings to YAML.")
@@ -1920,8 +2136,20 @@ class ConfigPage(QWidget):
         recording["target_samples"] = int(self.target_samples.value())
         config.pop("ai_validation", None)
         dataset = config.setdefault("dataset", {})
-        dataset["cache_root"] = str(self.ctx.state.raw_session_dir)
-        dataset["merged_root"] = str(self.ctx.state.merged_dir)
+        dataset["cache_root"] = str(
+            Path("robodataset")
+            / "raw_sessions"
+            / self.ctx.state.effective_task_name
+            / self.ctx.state.effective_version
+            / self.ctx.state.current_session
+        )
+        dataset["merged_root"] = str(
+            Path("robodataset")
+            / "merged_calvin"
+            / self.ctx.state.effective_task_name
+            / self.ctx.state.effective_version
+            / "training"
+        )
         self.ctx.config_manager.sync_core_schema(config)
 
         crop = {
@@ -2015,11 +2243,12 @@ class ConfigPage(QWidget):
         except Exception as exc:
             QMessageBox.warning(self, "Saved YAML", f"Cannot load YAML config:\n{exc}")
             return
-        self.ctx.state.collection_config = config
+        self.ctx.set_collection_config(config)
         self.editor.setPlainText(self.ctx.config_manager.dumps(config))
         self.reload_form_from_yaml()
         self._current_library_name = name
         self.config_library_select.setCurrentText(name)
+        self.ctx.set_ui_state("config", current_library=name)
         self.status.setText(f"Loaded saved YAML: {name}")
 
     def save_current_config_to_library(self, config: dict, text: str) -> Path:
@@ -2029,6 +2258,7 @@ class ConfigPage(QWidget):
         self.refresh_config_library()
         self.config_library_select.setCurrentText(path.stem)
         self.ctx.config_library_changed.emit()
+        self.ctx.set_ui_state("config", current_library=path.stem)
         return path
 
     def delete_selected_library_config(self) -> None:
@@ -2043,6 +2273,7 @@ class ConfigPage(QWidget):
         self._current_library_name = ""
         self.refresh_config_library()
         self.ctx.config_library_changed.emit()
+        self.ctx.set_ui_state("config", current_library="")
         self.status.setText(f"Deleted saved YAML: {path.name}")
 
     def rename_selected_library_config(self) -> None:
@@ -2065,6 +2296,7 @@ class ConfigPage(QWidget):
         self.config_library_select.setCurrentText(path.stem)
         self._current_library_name = path.stem
         self.ctx.config_library_changed.emit()
+        self.ctx.set_ui_state("config", current_library=path.stem)
         self.status.setText(f"Renamed saved YAML: {old_name} -> {path.stem}")
 
     def build_default_ai_prompt(self) -> None:
@@ -2211,7 +2443,7 @@ class ConfigPage(QWidget):
             QMessageBox.warning(self, "AI config preview", f"AI YAML looks incomplete:\n{exc}")
             return
         matched.pop("ai_validation", None)
-        self.ctx.state.collection_config = matched
+        self.ctx.set_collection_config(matched)
         self.editor.setPlainText(self.ctx.config_manager.dumps(matched))
         self.reload_form_from_yaml()
         self.status.setText("Replaced collection_config.yaml preview with AI config.")
@@ -3133,13 +3365,16 @@ class ReviewPage(QWidget):
     def __init__(self, ctx: AppContext) -> None:
         super().__init__()
         self.ctx = ctx
+        self._review_ai_thread: QThread | None = None
+        self._review_ai_worker: AIConfigMatchWorker | None = None
         self._episode_paths: list[Path] = []
         self._review_rows: list[dict[str, object]] = []
         self._visible_rows: list[dict[str, object]] = []
         self._review_marks: dict[str, str] = {}
         self.review_config: dict[str, object] | None = None
         self.review_session_root = self.ctx.state.raw_session_dir
-        self.session_root = QLineEdit(str(self.review_session_root))
+        review_ui = self.ctx.get_ui_state("review")
+        self.session_root = QLineEdit(str(review_ui.get("session_root") or self.review_session_root))
         browse_session = QPushButton("Browse Session")
         browse_session.clicked.connect(self.browse_session)
         use_current = QPushButton("Use Current Session")
@@ -3157,12 +3392,29 @@ class ReviewPage(QWidget):
         self.summary = QPlainTextEdit()
         self.summary.setReadOnly(True)
         self.summary.setMaximumHeight(110)
-        self.layout_table = QTableWidget(0, 6)
-        self.layout_table.setHorizontalHeaderLabels(["Area", "Task", "Version", "NPZ", "HDF5", "Manifest"])
+        self.ai_review_prompt = QPlainTextEdit()
+        self.ai_review_prompt.setMaximumHeight(160)
+        self.ai_review_result = QPlainTextEdit()
+        self.ai_review_result.setReadOnly(True)
+        self.hdf5_path = QLineEdit(str(review_ui.get("hdf5_path") or self._default_hdf5_path()))
+        browse_hdf5 = QPushButton("Browse HDF5")
+        browse_hdf5.clicked.connect(self.browse_hdf5)
+        self.hdf5_table = QTableWidget(0, 4)
+        self.hdf5_table.setHorizontalHeaderLabels(["Scope", "Status", "Issue", "Detail"])
+        self.hdf5_table.horizontalHeader().setStretchLastSection(True)
+        self.layout_root = QLineEdit(str(review_ui.get("layout_root") or self.ctx.state.effective_dataset_root))
+        browse_layout_root = QPushButton("Browse Folder")
+        browse_layout_root.clicked.connect(self.browse_layout_root)
+        self.layout_table = QTableWidget(0, 4)
+        self.layout_table.setHorizontalHeaderLabels(["Path", "Status", "Issue", "Detail"])
+        self.layout_table.horizontalHeader().setStretchLastSection(True)
         self.detail = QPlainTextEdit()
         self.detail.setReadOnly(True)
         self.hdf5_summary = QPlainTextEdit()
         self.hdf5_summary.setReadOnly(True)
+        self.hdf5_check_summary = QPlainTextEdit()
+        self.hdf5_check_summary.setReadOnly(True)
+        self.hdf5_check_summary.setMaximumHeight(150)
         scan = QPushButton("Scan Session")
         scan.clicked.connect(self.scan)
         local_checks = QPushButton("Run Local Checks")
@@ -3173,10 +3425,18 @@ class ReviewPage(QWidget):
         delete_selected.clicked.connect(self.delete_selected)
         export_report = QPushButton("Export quality report")
         export_report.clicked.connect(self.export_quality_report)
-        inspect_hdf5 = QPushButton("Inspect Current HDF5")
+        build_ai_review = QPushButton("Default AI Review Prompt")
+        build_ai_review.clicked.connect(self.build_ai_review_prompt)
+        send_ai_review = QPushButton("Send AI Review")
+        send_ai_review.clicked.connect(self.send_ai_review)
+        inspect_hdf5 = QPushButton("Inspect HDF5")
         inspect_hdf5.clicked.connect(self.inspect_hdf5)
+        check_hdf5 = QPushButton("Run HDF5 Checks")
+        check_hdf5.clicked.connect(self.run_hdf5_checks)
         scan_layout = QPushButton("Scan CALVIN Layout")
         scan_layout.clicked.connect(self.scan_layout)
+        check_layout = QPushButton("Run Layout Checks")
+        check_layout.clicked.connect(self.run_layout_checks)
         layout = QVBoxLayout(self)
         tabs = QTabWidget()
         episode_page = QWidget()
@@ -3208,17 +3468,49 @@ class ReviewPage(QWidget):
         detail_col.addWidget(self.detail)
         episode_row.addLayout(detail_col, 2)
         episode_layout.addLayout(episode_row)
+        ai_review_row = QHBoxLayout()
+        ai_review_row.addWidget(QLabel("AI Review"))
+        ai_review_row.addWidget(build_ai_review)
+        ai_review_row.addWidget(send_ai_review)
+        ai_review_row.addStretch(1)
+        episode_layout.addLayout(ai_review_row)
+        ai_review_boxes = QHBoxLayout()
+        prompt_col = QVBoxLayout()
+        prompt_col.addWidget(QLabel("AI Review Prompt"))
+        prompt_col.addWidget(self.ai_review_prompt)
+        result_col = QVBoxLayout()
+        result_col.addWidget(QLabel("AI Review Result"))
+        result_col.addWidget(self.ai_review_result)
+        ai_review_boxes.addLayout(prompt_col, 1)
+        ai_review_boxes.addLayout(result_col, 1)
+        episode_layout.addLayout(ai_review_boxes)
 
         hdf5_page = QWidget()
         hdf5_layout = QVBoxLayout(hdf5_page)
-        hdf5_layout.addWidget(QLabel("Current HDF5 Overview"))
-        hdf5_layout.addWidget(inspect_hdf5)
+        hdf5_target_row = QHBoxLayout()
+        hdf5_target_row.addWidget(QLabel("HDF5 file"))
+        hdf5_target_row.addWidget(self.hdf5_path, 1)
+        hdf5_target_row.addWidget(browse_hdf5)
+        hdf5_target_row.addWidget(inspect_hdf5)
+        hdf5_target_row.addWidget(check_hdf5)
+        hdf5_layout.addLayout(hdf5_target_row)
+        hdf5_layout.addWidget(QLabel("HDF5 Overview"))
         hdf5_layout.addWidget(self.hdf5_summary)
+        hdf5_layout.addWidget(QLabel("HDF5 Check Summary"))
+        hdf5_layout.addWidget(self.hdf5_check_summary)
+        hdf5_layout.addWidget(QLabel("HDF5 Check Results"))
+        hdf5_layout.addWidget(self.hdf5_table)
 
         layout_page = QWidget()
         layout_page_layout = QVBoxLayout(layout_page)
-        layout_page_layout.addWidget(QLabel("CALVIN Dataset Layout"))
-        layout_page_layout.addWidget(scan_layout)
+        layout_target_row = QHBoxLayout()
+        layout_target_row.addWidget(QLabel("Dataset/session folder"))
+        layout_target_row.addWidget(self.layout_root, 1)
+        layout_target_row.addWidget(browse_layout_root)
+        layout_target_row.addWidget(scan_layout)
+        layout_target_row.addWidget(check_layout)
+        layout_page_layout.addLayout(layout_target_row)
+        layout_page_layout.addWidget(QLabel("CALVIN Layout / Check Results"))
         layout_page_layout.addWidget(self.layout_table)
 
         tabs.addTab(episode_page, "Episode Review")
@@ -3230,14 +3522,43 @@ class ReviewPage(QWidget):
         path = QFileDialog.getExistingDirectory(self, "Select session root", self.session_root.text() or str(self.ctx.state.raw_session_dir))
         if path:
             self.session_root.setText(path)
+            self.ctx.set_ui_state("review", session_root=path)
 
     def use_current_session(self) -> None:
         self.session_root.setText(str(self.ctx.state.raw_session_dir))
+        self.ctx.set_ui_state("review", session_root=str(self.ctx.state.raw_session_dir))
         self.scan()
 
     def _selected_session_root(self) -> Path:
         text = self.session_root.text().strip()
         return Path(text).expanduser() if text else self.ctx.state.raw_session_dir
+
+    def _default_hdf5_path(self) -> Path:
+        candidates = [path for path in self.ctx.state.conversion_outputs if path.exists()]
+        if candidates:
+            return candidates[-1]
+        return self.ctx.state.merged_dir / "calvin.hdf5"
+
+    def browse_hdf5(self) -> None:
+        start = str(Path(self.hdf5_path.text()).expanduser().parent) if self.hdf5_path.text().strip() else str(self.ctx.state.dataset_root)
+        path, _filter = QFileDialog.getOpenFileName(self, "Select HDF5 file", start, "HDF5 files (*.hdf5 *.h5);;All files (*)")
+        if path:
+            self.hdf5_path.setText(path)
+            self.ctx.set_ui_state("review", hdf5_path=path)
+
+    def _selected_hdf5_path(self) -> Path:
+        text = self.hdf5_path.text().strip()
+        return Path(text).expanduser() if text else self._default_hdf5_path()
+
+    def browse_layout_root(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Select dataset, session, or output folder", self.layout_root.text() or str(self.ctx.state.dataset_root))
+        if path:
+            self.layout_root.setText(path)
+            self.ctx.set_ui_state("review", layout_root=path)
+
+    def _selected_layout_root(self) -> Path:
+        text = self.layout_root.text().strip()
+        return Path(text).expanduser() if text else self.ctx.state.dataset_root
 
     def _load_review_config(self, session_root: Path) -> dict:
         config_path = session_root / "collection_config.yaml"
@@ -3247,6 +3568,45 @@ class ReviewPage(QWidget):
             return config
         return self.ctx.state.collection_config
 
+    def _marks_path(self, session_root: Path | None = None) -> Path:
+        return (session_root or self.review_session_root) / "review_marks.json"
+
+    def load_review_marks(self, session_root: Path) -> None:
+        path = self._marks_path(session_root)
+        if not path.exists():
+            self._review_marks = {}
+            return
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            self._review_marks = {}
+            return
+        if not isinstance(loaded, dict):
+            self._review_marks = {}
+            return
+        marks = loaded.get("marks", loaded)
+        if not isinstance(marks, dict):
+            self._review_marks = {}
+            return
+        allowed = {"good", "bad", "uncertain", "unmarked"}
+        self._review_marks = {
+            str(name): str(mark)
+            for name, mark in marks.items()
+            if str(mark) in allowed and str(name)
+        }
+
+    def save_review_marks(self) -> None:
+        if not self.review_session_root:
+            return
+        path = self._marks_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schema": "robodataset_studio.review_marks.v1",
+            "session_root": str(self.review_session_root),
+            "marks": dict(sorted(self._review_marks.items())),
+        }
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
     def scan(self) -> None:
         session_root = self._selected_session_root()
         training = session_root / "training"
@@ -3255,7 +3615,9 @@ class ReviewPage(QWidget):
             QMessageBox.warning(self, "No episodes", f"No episode_*.npz files found under:\n{training}")
             return
         self.review_session_root = session_root
+        self.ctx.set_ui_state("review", session_root=str(session_root))
         self.review_config = self._load_review_config(session_root)
+        self.load_review_marks(session_root)
         rows = self.ctx.validator.list_npz(training)
         self._review_rows = rows
         self.apply_review_filter()
@@ -3273,7 +3635,9 @@ class ReviewPage(QWidget):
             QMessageBox.warning(self, "No episodes", f"No episode_*.npz files found under:\n{training}")
             return
         self.review_session_root = session_root
+        self.ctx.set_ui_state("review", session_root=str(session_root))
         self.review_config = self._load_review_config(session_root)
+        self.load_review_marks(session_root)
         self._review_rows = self.ctx.validator.scan_npz(training, self.review_config)
         self.apply_review_filter()
         self.update_quality_summary()
@@ -3306,6 +3670,7 @@ class ReviewPage(QWidget):
             return
         name = str(self._visible_rows[row].get("name", ""))
         self._review_marks[name] = self.mark_select.currentText()
+        self.save_review_marks()
         self.apply_review_filter()
         self.update_quality_summary()
 
@@ -3331,6 +3696,7 @@ class ReviewPage(QWidget):
             deleted.append(path.name)
             self._review_marks.pop(path.name, None)
         if deleted:
+            self.save_review_marks()
             training = self.review_session_root / "training"
             if any(training.glob("episode_*.npz")):
                 self.scan()
@@ -3367,25 +3733,169 @@ class ReviewPage(QWidget):
         output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         self.summary.appendPlainText(f"exported: {output}")
 
+    def build_ai_review_prompt(self) -> None:
+        if not self._review_rows:
+            self.run_local_checks()
+        if not self._review_rows:
+            return
+        config = self.review_config or self._load_review_config(self._selected_session_root())
+        report = self.ctx.validator.quality_report(self._review_rows, self._review_marks)
+        episode_summaries = self.ctx.validator.episode_ai_summaries(self._review_rows, config, limit=80)
+        payload = {
+            "session_root": str(self.review_session_root),
+            "training_dir": str(self.review_session_root / "training"),
+            "collection_config": config,
+            "local_quality_report": report,
+            "episode_summaries": episode_summaries,
+            "review_targets": [
+                "low motion or nearly constant robot_obs/actions",
+                "sample count too small for a useful training trajectory",
+                "image brightness/contrast problems that local thresholding may miss",
+                "repeated or duplicate-looking transitions",
+                "field/schema mismatch with collection_config",
+                "metadata/instruction/environment inconsistencies",
+                "episodes that should be manually inspected or removed",
+            ],
+        }
+        prompt = (
+            "You are reviewing a robot manipulation dataset session for training quality.\n"
+            "Use the structured local script results and numeric summaries below. Do not invent image content; "
+            "only infer from provided statistics and metadata. Focus on problems local scripts cannot fully decide: "
+            "very small data variation, too few samples, weak action signal, repeated samples, suspicious brightness/contrast, "
+            "metadata mismatch, and episodes that look unhelpful for learning.\n\n"
+            "Return a concise Markdown report with these sections exactly:\n"
+            "1. Overall verdict\n"
+            "2. Dataset-level risks\n"
+            "3. Problem episodes\n"
+            "4. Episodes likely usable\n"
+            "5. Recommended operator actions\n\n"
+            "For each problem episode, include: episode name, severity (error/warning), evidence from the provided stats, "
+            "and whether to delete, recollect, or manually inspect. If evidence is insufficient, say so explicitly.\n\n"
+            "DATASET_REVIEW_INPUT_JSON:\n"
+            f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
+        )
+        self.ai_review_prompt.setPlainText(prompt)
+        self.ai_review_result.setPlainText("Default AI review prompt generated. Review it, then click Send AI Review.")
+
+    def send_ai_review(self) -> None:
+        base_url = self.ctx.state.ai_base_url.strip().rstrip("/")
+        model = self.ctx.state.ai_model.strip()
+        api_key = self.ctx.state.ai_api_key.strip()
+        if not base_url or not model or not api_key:
+            QMessageBox.warning(self, "AI Review", "Set AI base URL, model, and API key in Settings before using AI review.")
+            return
+        if not self.ctx.state.ai_enabled:
+            QMessageBox.warning(self, "AI Review", "Enable AI in Settings before using AI review.")
+            return
+        if self._review_ai_thread is not None:
+            self.ai_review_result.setPlainText("AI review is already running.")
+            return
+        prompt_text = self.ai_review_prompt.toPlainText().strip()
+        if not prompt_text:
+            self.build_ai_review_prompt()
+            prompt_text = self.ai_review_prompt.toPlainText().strip()
+        if not prompt_text:
+            return
+        payload = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are a careful robot dataset quality reviewer. Return specific episode-level findings.",
+                },
+                {"role": "user", "content": prompt_text},
+            ],
+            "temperature": 0,
+        }
+        self.ai_review_result.setPlainText("AI review running in background...")
+        self._review_ai_thread = QThread(self)
+        self._review_ai_worker = AIConfigMatchWorker(base_url, api_key, payload, timeout_sec=90)
+        self._review_ai_worker.moveToThread(self._review_ai_thread)
+        self._review_ai_thread.started.connect(self._review_ai_worker.run)
+        self._review_ai_worker.finished.connect(self.finish_ai_review)
+        self._review_ai_worker.finished.connect(self._review_ai_thread.quit)
+        self._review_ai_worker.finished.connect(self._review_ai_worker.deleteLater)
+        self._review_ai_thread.finished.connect(self._clear_review_ai_thread)
+        self._review_ai_thread.finished.connect(self._review_ai_thread.deleteLater)
+        self._review_ai_thread.start()
+
+    @Slot(object, object)
+    def finish_ai_review(self, content: object, error: object) -> None:
+        if error is not None:
+            self.ai_review_result.setPlainText(f"AI review failed:\n{error}")
+            return
+        self.ai_review_result.setPlainText(str(content))
+
+    def _clear_review_ai_thread(self) -> None:
+        self._review_ai_thread = None
+        self._review_ai_worker = None
+
+    def stop_ai_review(self) -> None:
+        if self._review_ai_worker is not None:
+            self._review_ai_worker.cancel()
+        if self._review_ai_thread is not None:
+            self._review_ai_thread.quit()
+            if not self._review_ai_thread.wait(1500):
+                self._review_ai_thread.terminate()
+                self._review_ai_thread.wait(1500)
+        self._review_ai_thread = None
+        self._review_ai_worker = None
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        self.stop_ai_review()
+        super().closeEvent(event)
+
     def scan_layout(self) -> None:
-        layout = self.ctx.layout_scanner.scan(self.ctx.state.dataset_root)
-        rows: list[tuple[str, dict[str, object]]] = []
-        rows.extend(("raw_sessions", row) for row in layout.get("raw_sessions", []))
-        rows.extend(("merged_calvin", row) for row in layout.get("merged", []))
+        root = self._selected_layout_root()
+        self.ctx.set_ui_state("review", layout_root=str(root))
+        layout = self.ctx.layout_scanner.scan(root)
+        rows: list[dict[str, object]] = []
+        rows.extend(
+            {
+                "path": row.get("path", ""),
+                "status": "ok" if int(row.get("npz_count", 0) or 0) > 0 else "warning",
+                "issue": "-",
+                "detail": (
+                    f"area=raw_sessions task={row.get('task', '')} version={row.get('version', '')} "
+                    f"npz={row.get('npz_count', '')} hdf5={row.get('has_hdf5', '')} manifest={row.get('has_manifest', '')}"
+                ),
+            }
+            for row in layout.get("raw_sessions", [])
+        )
+        rows.extend(
+            {
+                "path": row.get("path", ""),
+                "status": "ok" if int(row.get("npz_count", 0) or 0) > 0 else "warning",
+                "issue": "-",
+                "detail": (
+                    f"area=merged_calvin task={row.get('task', '')} version={row.get('version', '')} "
+                    f"npz={row.get('npz_count', '')} hdf5={row.get('has_hdf5', '')} manifest={row.get('has_manifest', '')}"
+                ),
+            }
+            for row in layout.get("merged", [])
+        )
+        rows.extend(
+            {"path": str(root / str(path)), "status": "ok", "issue": "-", "detail": "HDF5 file"}
+            for path in layout.get("hdf5", [])
+        )
         if not layout.get("exists"):
-            QMessageBox.warning(self, "Dataset root missing", f"Dataset root does not exist locally:\n{self.ctx.state.dataset_root}")
-        self.layout_table.setRowCount(len(rows))
-        for row_idx, (area, row) in enumerate(rows):
-            values = [
-                area,
-                row.get("task", ""),
-                row.get("version", ""),
-                row.get("npz_count", ""),
-                row.get("has_hdf5", ""),
-                row.get("has_manifest", ""),
-            ]
+            QMessageBox.warning(self, "Dataset root missing", f"Dataset root does not exist locally:\n{root}")
+        if not rows and layout.get("exists"):
+            rows.append({"path": str(root), "status": "warning", "issue": "empty_layout", "detail": "no CALVIN artifacts found"})
+        self._populate_issue_table(self.layout_table, rows, ["path", "status", "issue", "detail"])
+
+    def run_layout_checks(self) -> None:
+        root = self._selected_layout_root()
+        self.ctx.set_ui_state("review", layout_root=str(root))
+        rows = self.ctx.validator.check_calvin_layout(root)
+        self._populate_issue_table(self.layout_table, rows, ["path", "status", "issue", "detail"])
+
+    def _populate_issue_table(self, table: QTableWidget, rows: list[dict[str, object]], keys: list[str]) -> None:
+        table.setRowCount(len(rows))
+        for row_idx, row in enumerate(rows):
+            values = [row.get(key, "") for key in keys]
             for col, value in enumerate(values):
-                self.layout_table.setItem(row_idx, col, QTableWidgetItem(str(value)))
+                table.setItem(row_idx, col, QTableWidgetItem(str(value)))
 
     def show_episode_detail(self, current_row: int, _current_col: int, _previous_row: int, _previous_col: int) -> None:
         if current_row < 0 or current_row >= len(self._episode_paths):
@@ -3393,10 +3903,19 @@ class ReviewPage(QWidget):
         self.detail.setPlainText(self.ctx.validator.describe_npz(self._episode_paths[current_row], self.review_config or self.ctx.state.collection_config))
 
     def inspect_hdf5(self) -> None:
-        candidates = [path for path in self.ctx.state.conversion_outputs if path.exists()]
-        default_path = self.ctx.state.merged_dir / "calvin.hdf5"
-        path = candidates[-1] if candidates else default_path
+        path = self._selected_hdf5_path()
+        self.hdf5_path.setText(str(path))
+        self.ctx.set_ui_state("review", hdf5_path=str(path))
         self.hdf5_summary.setPlainText(self.ctx.validator.describe_hdf5(path))
+
+    def run_hdf5_checks(self) -> None:
+        path = self._selected_hdf5_path()
+        self.hdf5_path.setText(str(path))
+        self.ctx.set_ui_state("review", hdf5_path=str(path))
+        config = self.review_config or self.ctx.state.collection_config
+        rows = self.ctx.validator.check_hdf5(path, config)
+        self.hdf5_check_summary.setPlainText(self.ctx.validator.hdf5_check_summary(path, rows))
+        self._populate_issue_table(self.hdf5_table, rows, ["scope", "status", "issue", "detail"])
 
 
 class ConvertPage(QWidget):
@@ -3405,29 +3924,101 @@ class ConvertPage(QWidget):
         self.ctx = ctx
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
-        self.plan_table = QTableWidget(0, 7)
-        self.plan_table.setHorizontalHeaderLabels(["Session", "Status", "Episodes", "Annotations", "First", "Last", "Path"])
+        convert_ui = self.ctx.get_ui_state("convert")
+        self.raw_root = QLineEdit(str(convert_ui.get("raw_root") or self._default_raw_root()))
+        self.output_root = QLineEdit(str(convert_ui.get("output_root") or self._default_output_root()))
+        self.split = QLineEdit(str(convert_ui.get("split") or "training"))
+        self._conversion_thread: QThread | None = None
+        self._conversion_worker: DatasetConversionWorker | None = None
+        self.plan_table = QTableWidget(0, 8)
+        self.plan_table.setHorizontalHeaderLabels(["Use", "Session", "Status", "Episodes", "Annotations", "First", "Last", "Path"])
+        self.plan_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.plan_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.plan_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.plan_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.plan_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.Stretch)
+        browse_raw = QPushButton("Browse Raw Root")
+        browse_raw.clicked.connect(self.browse_raw_root)
+        browse_output = QPushButton("Browse Output Root")
+        browse_output.clicked.connect(self.browse_output_root)
         dry_run = QPushButton("Build Merge Dry Run")
         dry_run.clicked.connect(self.build_dry_run)
-        merge = QPushButton("Merge NPZ Sessions")
-        merge.clicked.connect(self.merge_sessions)
-        convert = QPushButton("Convert NPZ to HDF5")
-        convert.clicked.connect(self.convert)
+        self.merge_button = QPushButton("Merge NPZ Sessions")
+        self.merge_button.clicked.connect(self.merge_sessions)
+        self.convert_button = QPushButton("Convert Selected Raw Sessions to HDF5")
+        self.convert_button.clicked.connect(self.convert)
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Merge Dry Run"))
-        layout.addWidget(dry_run)
+        form = QFormLayout()
+        raw_row = QHBoxLayout()
+        raw_row.addWidget(self.raw_root, 1)
+        raw_row.addWidget(browse_raw)
+        output_row = QHBoxLayout()
+        output_row.addWidget(self.output_root, 1)
+        output_row.addWidget(browse_output)
+        form.addRow("Raw sessions root", raw_row)
+        form.addRow("Output CALVIN root", output_row)
+        form.addRow("Split", self.split)
+        layout.addLayout(form)
+        buttons = QHBoxLayout()
+        buttons.addWidget(dry_run)
+        buttons.addWidget(self.merge_button)
+        buttons.addWidget(self.convert_button)
+        buttons.addStretch(1)
+        layout.addLayout(buttons)
         layout.addWidget(self.plan_table)
-        layout.addWidget(merge)
-        layout.addWidget(convert)
         layout.addWidget(self.log)
 
+    def _default_raw_root(self) -> Path:
+        return self.ctx.state.effective_dataset_root / "raw_sessions" / self.ctx.state.effective_task_name / self.ctx.state.effective_version
+
+    def _default_output_root(self) -> Path:
+        return self.ctx.state.merged_dir.parent
+
+    def _raw_root_path(self) -> Path:
+        return Path(self.raw_root.text().strip()).expanduser()
+
+    def _output_root_path(self) -> Path:
+        return Path(self.output_root.text().strip()).expanduser()
+
+    def _split_name(self) -> str:
+        return self.split.text().strip() or "training"
+
+    def browse_raw_root(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Select raw sessions root", self.raw_root.text().strip())
+        if path:
+            self.raw_root.setText(path)
+            self._save_convert_state()
+            self.build_dry_run()
+
+    def browse_output_root(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Select output CALVIN root", self.output_root.text().strip())
+        if path:
+            self.output_root.setText(path)
+            self._save_convert_state()
+
+    def _save_convert_state(self) -> None:
+        self.ctx.set_ui_state(
+            "convert",
+            raw_root=self.raw_root.text().strip(),
+            output_root=self.output_root.text().strip(),
+            split=self._split_name(),
+        )
+
     def build_dry_run(self) -> None:
-        raw_root = self.ctx.state.dataset_root / "raw_sessions" / self.ctx.state.task_name / self.ctx.state.version
-        rows = self.ctx.merge_planner.build_plan(raw_root)
+        self._save_convert_state()
+        raw_root = self._raw_root_path()
+        split = self._split_name()
+        rows = self.ctx.merge_planner.build_plan(raw_root, split=split)
         if not rows:
             QMessageBox.information(self, "Dry run", f"No raw sessions found under:\n{raw_root}")
         self.plan_table.setRowCount(len(rows))
         for row_idx, row in enumerate(rows):
+            use_item = QTableWidgetItem("")
+            use_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable)
+            use_item.setCheckState(Qt.CheckState.Checked if row["episodes"] else Qt.CheckState.Unchecked)
+            use_item.setData(Qt.ItemDataRole.UserRole, str(row["session"]))
+            use_item.setData(Qt.ItemDataRole.UserRole + 1, str(row["path"]))
+            self.plan_table.setItem(row_idx, 0, use_item)
             values = [
                 row["session"],
                 row["status"],
@@ -3438,50 +4029,136 @@ class ConvertPage(QWidget):
                 row["path"],
             ]
             for col, value in enumerate(values):
-                self.plan_table.setItem(row_idx, col, QTableWidgetItem(str(value)))
+                item = QTableWidgetItem(str(value))
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.plan_table.setItem(row_idx, col + 1, item)
+        self.log.appendPlainText(f"dry run: {len(rows)} session(s) under {raw_root} split={split}")
+
+    def _checked_sessions(self) -> list[str]:
+        sessions: list[str] = []
+        for row_idx in range(self.plan_table.rowCount()):
+            item = self.plan_table.item(row_idx, 0)
+            if item is None or item.checkState() != Qt.CheckState.Checked:
+                continue
+            session = item.data(Qt.ItemDataRole.UserRole)
+            if session:
+                sessions.append(str(session))
+        return sessions
 
     def merge_sessions(self) -> None:
-        raw_root = self.ctx.state.dataset_root / "raw_sessions" / self.ctx.state.task_name / self.ctx.state.version
-        try:
-            manifest = self.ctx.session_merger.merge(raw_root, self.ctx.state.merged_dir)
-        except Exception as exc:
-            QMessageBox.warning(self, "Merge failed", str(exc))
-            self.log.appendPlainText(f"merge failed: {exc}")
+        self._save_convert_state()
+        raw_root = self._raw_root_path()
+        output_root = self._output_root_path()
+        split = self._split_name()
+        selected_sessions = self._checked_sessions()
+        if not selected_sessions:
+            QMessageBox.warning(self, "No sessions selected", "Select at least one session to merge.")
             return
-        self.log.appendPlainText(
-            "merged sessions: "
-            f"{manifest['session_count']} session(s), {manifest['episode_count']} episode(s) -> {manifest['merged_training_dir']}"
-        )
+        self._start_conversion_task(raw_root, output_root, split, selected_sessions, write_hdf5=False)
 
     def convert(self) -> None:
-        if not self.ctx.has_raw_episodes():
-            QMessageBox.warning(self, "No episodes", "Record or import raw NPZ episodes before conversion.")
+        self._save_convert_state()
+        output_root = self._output_root_path()
+        selected_sessions = self._checked_sessions()
+        if not selected_sessions:
+            QMessageBox.warning(
+                self,
+                "No sessions selected",
+                "Select at least one raw session to convert directly to HDF5.",
+            )
             return
         config_yaml = self.ctx.config_manager.dumps(self.ctx.state.collection_config or {})
-        output = self.ctx.state.merged_dir / "calvin.hdf5"
-        path = self.ctx.converter.convert(self.ctx.state.episodes_dir, output, config_yaml)
-        self.ctx.state.conversion_outputs.append(path)
-        self.log.appendPlainText(f"converted: {path}")
+        self._start_conversion_task(
+            self._raw_root_path(),
+            output_root,
+            self._split_name(),
+            selected_sessions,
+            write_hdf5=True,
+            config_yaml=config_yaml,
+        )
+
+    def _start_conversion_task(
+        self,
+        raw_root: Path,
+        output_root: Path,
+        split: str,
+        selected_sessions: list[str],
+        *,
+        write_hdf5: bool,
+        config_yaml: str = "",
+    ) -> None:
+        if self._conversion_thread is not None:
+            QMessageBox.information(self, "Conversion running", "A merge/conversion task is already running.")
+            return
+        self.merge_button.setEnabled(False)
+        self.convert_button.setEnabled(False)
+        action = "direct raw-session hdf5 conversion" if write_hdf5 else "merge"
+        self.log.appendPlainText(f"started {action}: output root={output_root}, split={split}")
+        self._conversion_thread = QThread(self)
+        self._conversion_worker = DatasetConversionWorker(
+            self.ctx.session_merger,
+            self.ctx.converter,
+            raw_root,
+            output_root,
+            split,
+            selected_sessions,
+            config_yaml,
+            write_hdf5,
+        )
+        self._conversion_worker.moveToThread(self._conversion_thread)
+        self._conversion_thread.started.connect(self._conversion_worker.run)
+        self._conversion_worker.finished.connect(self._conversion_finished)
+        self._conversion_worker.finished.connect(self._conversion_thread.quit)
+        self._conversion_worker.finished.connect(self._conversion_worker.deleteLater)
+        self._conversion_thread.finished.connect(self._conversion_thread.deleteLater)
+        self._conversion_thread.finished.connect(self._clear_conversion_thread)
+        self._conversion_thread.start()
+
+    @Slot(object, object)
+    def _conversion_finished(self, result: object, error: object) -> None:
+        self.merge_button.setEnabled(True)
+        self.convert_button.setEnabled(True)
+        if error is not None:
+            self.log.appendPlainText(f"conversion failed: {error}")
+            QMessageBox.warning(self, "Conversion failed", str(error))
+            return
+        payload = result if isinstance(result, dict) else {}
+        manifest = payload.get("manifest")
+        if isinstance(manifest, dict):
+            self.log.appendPlainText(
+                "merged sessions: "
+                f"{manifest['session_count']} session(s), {manifest['episode_count']} episode(s) -> {manifest['merged_training_dir']}"
+            )
+        hdf5_path = str(payload.get("hdf5_path") or "")
+        if hdf5_path:
+            path = Path(hdf5_path)
+            self.ctx.state.conversion_outputs.append(path)
+            self.log.appendPlainText(f"converted: {path}")
+
+    def _clear_conversion_thread(self) -> None:
+        self._conversion_thread = None
+        self._conversion_worker = None
 
 
 class UploadPage(QWidget):
     def __init__(self, ctx: AppContext) -> None:
         super().__init__()
         self.ctx = ctx
-        self.local = QLineEdit(str(ctx.state.merged_dir))
-        self.profile_name = QLineEdit("lab_server")
+        upload_ui = self.ctx.get_ui_state("upload")
+        self.local = QLineEdit(str(upload_ui.get("local_path") or ctx.state.merged_dir))
+        self.profile_name = QLineEdit(str(upload_ui.get("profile_name") or "lab_server"))
         self.profile_select = QComboBox()
-        self.lan_host = QLineEdit("")
-        self.wan_host = QLineEdit("")
+        self.lan_host = QLineEdit(str(upload_ui.get("lan_host") or ""))
+        self.wan_host = QLineEdit(str(upload_ui.get("wan_host") or ""))
         self.port = QSpinBox()
         self.port.setRange(1, 65535)
-        self.port.setValue(22)
-        self.username = QLineEdit("")
+        self.port.setValue(int(upload_ui.get("port") or 22))
+        self.username = QLineEdit(str(upload_ui.get("username") or ""))
         self.password = QLineEdit("")
         self.password.setEchoMode(QLineEdit.Password)
-        self.key_path = QLineEdit("")
+        self.key_path = QLineEdit(str(upload_ui.get("key_path") or ""))
         self.auth_hint = QLabel("auth: agent_or_default_key")
-        self.remote_path = QLineEdit("/data/dataset")
+        self.remote_path = QLineEdit(str(upload_ui.get("remote_path") or "/data/dataset"))
         self.path_breadcrumbs = QHBoxLayout()
         self.new_folder = QLineEdit("")
         self.remote_files = QTableWidget(0, 3)
@@ -3493,8 +4170,17 @@ class UploadPage(QWidget):
         self.upload_progress = QLabel("upload progress: -")
         self.report = QPlainTextEdit()
         self.report.setReadOnly(True)
-        build_manifest = QPushButton("Build upload manifest")
-        verify_manifest = QPushButton("Verify upload manifest")
+        self._repair_thread: QThread | None = None
+        self._repair_worker: UploadRepairWorker | None = None
+        self._sftp_upload_thread: QThread | None = None
+        self._sftp_upload_worker: UploadSftpWorker | None = None
+        self._remote_verify_thread: QThread | None = None
+        self._remote_verify_worker: RemoteManifestVerifyWorker | None = None
+        self._manifest_path: Path | None = None
+        browse_local = QPushButton("Browse folder")
+        browse_local.clicked.connect(self.browse_local_path)
+        browse_local_file = QPushButton("Browse file")
+        browse_local_file.clicked.connect(self.browse_local_file)
         save_profile = QPushButton("Save server profile")
         load_profile = QPushButton("Load server profile")
         delete_profile = QPushButton("Delete server profile")
@@ -3506,10 +4192,9 @@ class UploadPage(QWidget):
         upload = QPushButton("Start rsync upload")
         refresh_upload_progress = QPushButton("Refresh upload progress")
         remote_verify = QPushButton("Verify remote manifest")
+        self.repair_resume_button = QPushButton("Repair / Resume verified upload")
         self.password.textChanged.connect(self.update_auth_hint)
         self.key_path.textChanged.connect(self.update_auth_hint)
-        build_manifest.clicked.connect(self.build_manifest)
-        verify_manifest.clicked.connect(self.verify_manifest)
         save_profile.clicked.connect(self.save_server_profile)
         load_profile.clicked.connect(self.load_server_profile)
         delete_profile.clicked.connect(self.delete_server_profile)
@@ -3521,8 +4206,16 @@ class UploadPage(QWidget):
         upload.clicked.connect(self.upload)
         refresh_upload_progress.clicked.connect(self.refresh_upload_progress)
         remote_verify.clicked.connect(self.verify_remote)
+        self.repair_resume_button.clicked.connect(self.repair_resume_upload)
+        for widget in [self.local, self.profile_name, self.lan_host, self.wan_host, self.username, self.key_path, self.remote_path]:
+            widget.editingFinished.connect(self.save_upload_state)
+        self.port.valueChanged.connect(lambda _value: self.save_upload_state())
         layout = QFormLayout(self)
-        layout.addRow("Local path", self.local)
+        local_row = QHBoxLayout()
+        local_row.addWidget(self.local, 1)
+        local_row.addWidget(browse_local)
+        local_row.addWidget(browse_local_file)
+        layout.addRow("Local path", local_row)
         profile_row = QHBoxLayout()
         profile_row.addWidget(self.profile_select, 2)
         profile_row.addWidget(QLabel("Name"))
@@ -3551,10 +4244,9 @@ class UploadPage(QWidget):
         mkdir_row.addWidget(mkdir)
         layout.addRow("New folder", mkdir_row)
         layout.addRow(self.remote_files)
-        layout.addRow(build_manifest)
-        layout.addRow(verify_manifest)
         layout.addRow(check_space)
         layout.addRow(upload)
+        layout.addRow(self.repair_resume_button)
         layout.addRow(refresh_upload_progress)
         layout.addRow("Upload progress", self.upload_progress)
         layout.addRow(remote_verify)
@@ -3564,17 +4256,40 @@ class UploadPage(QWidget):
         self.upload_progress_timer.start(1500)
         self.refresh_server_profiles()
         self.update_remote_breadcrumbs()
+        self.save_upload_state()
 
     def _local_path(self) -> Path:
         return Path(self.local.text()).expanduser()
+
+    def browse_local_path(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Select local dataset directory", self.local.text().strip())
+        if path:
+            self.local.setText(path)
+            self.save_upload_state()
+
+    def browse_local_file(self) -> None:
+        path, _selected_filter = QFileDialog.getOpenFileName(self, "Select local file to upload", self.local.text().strip())
+        if path:
+            self.local.setText(path)
+            self.save_upload_state()
+
+    def save_upload_state(self) -> None:
+        self.ctx.set_ui_state(
+            "upload",
+            local_path=self.local.text().strip(),
+            profile_name=self.profile_name.text().strip(),
+            lan_host=self.lan_host.text().strip(),
+            wan_host=self.wan_host.text().strip(),
+            port=int(self.port.value()),
+            username=self.username.text().strip(),
+            key_path=self.key_path.text().strip(),
+            remote_path=self.remote_path.text().strip(),
+        )
 
     def _validate_local_path(self) -> Path | None:
         local_path = self._local_path()
         if not local_path.exists():
             QMessageBox.warning(self, "Missing local path", f"Local path does not exist:\n{local_path}")
-            return None
-        if not local_path.is_dir():
-            QMessageBox.warning(self, "Local path", f"Local path must be a directory:\n{local_path}")
             return None
         return local_path
 
@@ -3584,25 +4299,52 @@ class UploadPage(QWidget):
             return None
         manifest = UploadManifest()
         summary = manifest.build(local_path)
-        manifest_path = manifest.write(local_path, summary)
+        manifest_path = self._write_temp_manifest(summary)
         self.report.setPlainText(
-            f"manifest: {manifest_path}\n"
+            f"temporary manifest: {manifest_path}\n"
             f"files: {summary['file_count']}\n"
             f"total_size_mb: {summary['total_size_bytes'] / 1024 / 1024:.3f}"
         )
         return manifest_path
 
+    def _write_temp_manifest(self, summary: dict[str, object]) -> Path:
+        self._cleanup_temp_manifest()
+        handle = tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            prefix="robodataset_upload_manifest_",
+            suffix=".json",
+            delete=False,
+        )
+        with handle:
+            json.dump(summary, handle, indent=2, ensure_ascii=False)
+            handle.write("\n")
+        self._manifest_path = Path(handle.name)
+        return self._manifest_path
+
+    def _ensure_manifest(self, *, refresh: bool = False) -> Path | None:
+        if not refresh and self._manifest_path and self._manifest_path.exists():
+            return self._manifest_path
+        return self.build_manifest()
+
+    def _cleanup_temp_manifest(self) -> None:
+        if self._manifest_path and self._manifest_path.exists():
+            try:
+                self._manifest_path.unlink()
+            except OSError:
+                pass
+        self._manifest_path = None
+
     def verify_manifest(self) -> None:
         local_path = self._validate_local_path()
         if not local_path:
             return
-        manifest_path = local_path / MANIFEST_NAME
-        if not manifest_path.exists():
-            QMessageBox.warning(self, "Manifest missing", f"Build {MANIFEST_NAME} before verification.")
+        manifest_path = self._ensure_manifest()
+        if manifest_path is None:
             return
         result = UploadManifest().verify(manifest_path)
         self.report.setPlainText(
-            f"manifest: {manifest_path}\n"
+            f"temporary manifest: {manifest_path}\n"
             f"ok: {result['ok']}\n"
             f"checked: {result['checked']}\n"
             f"missing: {len(result['missing'])}\n"
@@ -3610,6 +4352,8 @@ class UploadPage(QWidget):
         )
 
     def _local_size_bytes(self, local_path: Path) -> int:
+        if local_path.is_file():
+            return local_path.stat().st_size
         return sum(path.stat().st_size for path in local_path.rglob("*") if path.is_file())
 
     def _connection(self) -> SshConnection | None:
@@ -3684,6 +4428,7 @@ class UploadPage(QWidget):
         self.remote_path.setText(profile.remote_path)
         self.password.clear()
         self.update_auth_hint()
+        self.save_upload_state()
         self.report.setPlainText(f"loaded server profile: {profile.name}\npassword was not loaded")
 
     def delete_server_profile(self) -> None:
@@ -3741,6 +4486,7 @@ class UploadPage(QWidget):
 
     def jump_remote_path(self, path: str) -> None:
         self.remote_path.setText(path or "/")
+        self.save_upload_state()
         self.refresh_remote_listing()
 
     def _set_remote_listing(self, entries: list[dict[str, object]]) -> None:
@@ -3788,12 +4534,14 @@ class UploadPage(QWidget):
             return
         base = self.remote_path.text().rstrip("/")
         self.remote_path.setText(f"{base}/{item.text()}" if base else f"/{item.text()}")
+        self.save_upload_state()
         self.refresh_remote_listing()
 
     def go_parent_dir(self) -> None:
         path = PurePosixPath(self.remote_path.text().strip() or "/")
         parent = str(path.parent)
         self.remote_path.setText(parent if parent else "/")
+        self.save_upload_state()
         self.refresh_remote_listing()
 
     def select_current_remote_dir(self) -> None:
@@ -3813,6 +4561,7 @@ class UploadPage(QWidget):
             return
         self.remote_path.setText(created)
         self.new_folder.clear()
+        self.save_upload_state()
         self.refresh_remote_listing()
 
     def check_remote_space(self) -> None:
@@ -3850,13 +4599,52 @@ class UploadPage(QWidget):
         connection = self._connection()
         if connection is None:
             return
-        manifest_path = self.build_manifest()
+        manifest_path = self._ensure_manifest(refresh=True)
         if manifest_path is None:
             return
         uploader = SshUploader(self.ctx.process_manager)
+        if connection.password:
+            self._start_sftp_upload(uploader, local_path, connection)
+            return
         record = uploader.upload_connection_with_rsync(local_path, connection)
         self.upload_progress.setText(f"upload progress: started {record.process_id}")
         self.report.setPlainText(f"started rsync upload: {record.process_id}\nOpen Process for full logs.")
+
+    def _start_sftp_upload(self, uploader: SshUploader, local_path: Path, connection: SshConnection) -> None:
+        if self._sftp_upload_thread is not None:
+            QMessageBox.information(self, "Upload running", "An SFTP upload task is already running.")
+            return
+        self.upload_progress.setText("upload progress: sftp running")
+        self.report.setPlainText("started password-auth SFTP upload in background")
+        self._sftp_upload_thread = QThread(self)
+        self._sftp_upload_worker = UploadSftpWorker(uploader, local_path, connection)
+        self._sftp_upload_worker.moveToThread(self._sftp_upload_thread)
+        self._sftp_upload_thread.started.connect(self._sftp_upload_worker.run)
+        self._sftp_upload_worker.finished.connect(self._sftp_upload_finished)
+        self._sftp_upload_worker.finished.connect(self._sftp_upload_thread.quit)
+        self._sftp_upload_worker.finished.connect(self._sftp_upload_worker.deleteLater)
+        self._sftp_upload_thread.finished.connect(self._sftp_upload_thread.deleteLater)
+        self._sftp_upload_thread.finished.connect(self._clear_sftp_upload_thread)
+        self._sftp_upload_thread.start()
+
+    @Slot(object, object)
+    def _sftp_upload_finished(self, result: object, error: object) -> None:
+        if error is not None:
+            self.upload_progress.setText("upload progress: sftp failed")
+            self.report.setPlainText(f"sftp upload failed: {error}")
+            QMessageBox.warning(self, "SFTP upload failed", str(error))
+            return
+        payload = result if isinstance(result, dict) else {}
+        uploaded_count = int(payload.get("uploaded_count", 0)) if isinstance(payload, dict) else 0
+        self.upload_progress.setText(f"upload progress: sftp uploaded {uploaded_count} file(s)")
+        self.report.setPlainText(
+            f"sftp upload completed\nuploaded files: {uploaded_count}\n"
+            "Run Verify remote manifest to confirm hashes."
+        )
+
+    def _clear_sftp_upload_thread(self) -> None:
+        self._sftp_upload_thread = None
+        self._sftp_upload_worker = None
 
     def refresh_upload_progress(self) -> None:
         upload_records = [record for record in self.ctx.process_manager.records() if record.type == "uploader"]
@@ -3901,12 +4689,14 @@ class UploadPage(QWidget):
         local_path = self._validate_local_path()
         if not local_path:
             return
-        manifest_path = local_path / MANIFEST_NAME
-        if not manifest_path.exists():
-            QMessageBox.warning(self, "Manifest missing", f"Build {MANIFEST_NAME} before remote verification.")
+        manifest_path = self._ensure_manifest(refresh=True)
+        if manifest_path is None:
             return
         connection = self._connection()
         if connection is None:
+            return
+        if connection.password:
+            self._start_password_remote_verify(manifest_path, connection)
             return
         try:
             record = SshUploader(self.ctx.process_manager).verify_remote_manifest(
@@ -3920,6 +4710,116 @@ class UploadPage(QWidget):
             return
         self.report.setPlainText(f"started remote manifest verification: {record.process_id}\nOpen Process to inspect details.")
 
+    def _start_password_remote_verify(self, manifest_path: Path, connection: SshConnection) -> None:
+        if self._remote_verify_thread is not None:
+            QMessageBox.information(self, "Remote verify running", "A remote manifest verification task is already running.")
+            return
+        uploader = SshUploader(self.ctx.process_manager)
+        self.report.setPlainText("remote manifest verification: password-auth check running in background...")
+        self._remote_verify_thread = QThread(self)
+        self._remote_verify_worker = RemoteManifestVerifyWorker(uploader, manifest_path, connection)
+        self._remote_verify_worker.moveToThread(self._remote_verify_thread)
+        self._remote_verify_thread.started.connect(self._remote_verify_worker.run)
+        self._remote_verify_worker.finished.connect(self._password_remote_verify_finished)
+        self._remote_verify_worker.finished.connect(self._remote_verify_thread.quit)
+        self._remote_verify_worker.finished.connect(self._remote_verify_worker.deleteLater)
+        self._remote_verify_thread.finished.connect(self._remote_verify_thread.deleteLater)
+        self._remote_verify_thread.finished.connect(self._clear_remote_verify_thread)
+        self._remote_verify_thread.start()
+
+    @Slot(object, object)
+    def _password_remote_verify_finished(self, result: object, error: object) -> None:
+        if error is not None:
+            self.report.setPlainText(f"remote manifest verification failed: {error}")
+            QMessageBox.warning(self, "Remote verify", str(error))
+            return
+        payload = result if isinstance(result, dict) else {}
+        self.report.setPlainText(
+            "remote manifest verification completed\n"
+            f"ok: {payload.get('ok')}\n"
+            f"checked: {payload.get('checked', 0)}\n"
+            f"missing: {len(payload.get('missing', []))}\n"
+            f"mismatched: {len(payload.get('mismatched', []))}"
+        )
+
+    def _clear_remote_verify_thread(self) -> None:
+        self._remote_verify_thread = None
+        self._remote_verify_worker = None
+
+    def repair_resume_upload(self) -> None:
+        if self._repair_thread is not None:
+            QMessageBox.information(self, "Repair running", "A repair/resume task is already running.")
+            return
+        local_path = self._validate_local_path()
+        if not local_path:
+            return
+        manifest_path = self._ensure_manifest(refresh=True)
+        if manifest_path is None:
+            return
+        connection = self._connection()
+        if connection is None:
+            return
+        uploader = SshUploader(self.ctx.process_manager)
+        self.repair_resume_button.setEnabled(False)
+        self.report.setPlainText("repair/resume: verifying remote manifest before selective rsync...")
+        self._repair_thread = QThread(self)
+        self._repair_worker = UploadRepairWorker(uploader, manifest_path, local_path, connection)
+        self._repair_worker.moveToThread(self._repair_thread)
+        self._repair_thread.started.connect(self._repair_worker.run)
+        self._repair_worker.finished.connect(self._repair_resume_finished)
+        self._repair_worker.finished.connect(self._repair_thread.quit)
+        self._repair_worker.finished.connect(self._repair_worker.deleteLater)
+        self._repair_thread.finished.connect(self._repair_thread.deleteLater)
+        self._repair_thread.finished.connect(self._clear_repair_thread)
+        self._repair_thread.start()
+
+    @Slot(object, object)
+    def _repair_resume_finished(self, result: object, error: object) -> None:
+        self.repair_resume_button.setEnabled(True)
+        if error is not None:
+            self.report.setPlainText(f"repair/resume failed: {error}")
+            QMessageBox.warning(self, "Repair / Resume failed", str(error))
+            return
+        payload = result if isinstance(result, dict) else {}
+        verify_result = payload.get("verify_result", {})
+        repair_paths = payload.get("repair_paths", [])
+        record_id = str(payload.get("record_id") or "")
+        missing = len(verify_result.get("missing", [])) if isinstance(verify_result, dict) else 0
+        mismatched = len(verify_result.get("mismatched", [])) if isinstance(verify_result, dict) else 0
+        if not repair_paths:
+            self.report.setPlainText(
+                "repair/resume: remote manifest already matches local manifest\n"
+                f"checked: {verify_result.get('checked', 0) if isinstance(verify_result, dict) else 0}\n"
+                "started upload: no"
+            )
+            return
+        sftp_result = payload.get("sftp_result")
+        if isinstance(sftp_result, dict):
+            uploaded_count = int(sftp_result.get("uploaded_count", 0))
+            self.upload_progress.setText(f"upload progress: repair sftp uploaded {uploaded_count} file(s)")
+            self.report.setPlainText(
+                "repair/resume: password-auth SFTP repair completed\n"
+                f"missing: {missing}\n"
+                f"mismatched: {mismatched}\n"
+                f"files_repaired: {uploaded_count}\n"
+                "Run Verify remote manifest again."
+            )
+            return
+        self.upload_progress.setText(f"upload progress: repair started {record_id}")
+        self.report.setPlainText(
+            "repair/resume: selective rsync started\n"
+            f"missing: {missing}\n"
+            f"mismatched: {mismatched}\n"
+            f"files_to_repair: {len(repair_paths)}\n"
+            f"files_from: {payload.get('files_from', '')}\n"
+            f"process: {record_id}\n"
+            "After it exits, run Verify remote manifest again."
+        )
+
+    def _clear_repair_thread(self) -> None:
+        self._repair_thread = None
+        self._repair_worker = None
+
     def _format_bytes(self, size: int) -> str:
         value = float(size)
         for unit in ["B", "KB", "MB", "GB", "TB", "PB"]:
@@ -3929,6 +4829,16 @@ class UploadPage(QWidget):
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
         self.upload_progress_timer.stop()
+        self._cleanup_temp_manifest()
+        if self._sftp_upload_thread is not None:
+            self._sftp_upload_thread.quit()
+            self._sftp_upload_thread.wait(1000)
+        if self._remote_verify_thread is not None:
+            self._remote_verify_thread.quit()
+            self._remote_verify_thread.wait(1000)
+        if self._repair_thread is not None:
+            self._repair_thread.quit()
+            self._repair_thread.wait(1000)
         super().closeEvent(event)
 
 

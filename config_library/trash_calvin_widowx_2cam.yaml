@@ -181,8 +181,8 @@ dataset:
   hdf5_schema: pi05_calvin_hdf5
   requires_robot_obs: true
   requires_actions: true
-  cache_root: /home/microsate/robot_datasets/robodataset_studio/raw_sessions/catch_the_satellite/v1
-  merged_root: /home/microsate/robot_datasets/robodataset_studio/merged_calvin/catch_the_satellite/v1/training
+  cache_root: robodataset/raw_sessions/catch_the_satellite/v1
+  merged_root: robodataset/merged_calvin/catch_the_satellite/v1/training
   split: training
   episode_prefix: episode_
   write_language_annotations: true

@@ -23,6 +23,8 @@ dist/
 *.egg-info/
 raw_sessions/
 merged_calvin/
+robodataset/*
+!robodataset/.gitkeep
 *.npz
 *.hdf5
 *.h5

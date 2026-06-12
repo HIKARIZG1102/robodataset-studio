@@ -12,14 +12,15 @@ MANIFEST_NAME = "upload_manifest.json"
 
 class UploadManifest:
     def build(self, root: Path) -> dict[str, Any]:
-        root = root.expanduser().resolve()
+        source = root.expanduser().resolve()
+        base, paths = self.source_base_and_files(source)
         files: list[dict[str, Any]] = []
-        for path in sorted(root.rglob("*")):
+        for path in paths:
             if not path.is_file() or path.name == MANIFEST_NAME:
                 continue
             files.append(
                 {
-                    "path": path.relative_to(root).as_posix(),
+                    "path": path.relative_to(base).as_posix(),
                     "size_bytes": path.stat().st_size,
                     "sha256": self._sha256(path),
                 }
@@ -27,18 +28,28 @@ class UploadManifest:
         return {
             "schema": "robodataset_studio.upload_manifest.v1",
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "root": str(root),
+            "root": str(base),
+            "source": str(source),
+            "source_type": "file" if source.is_file() else "directory",
             "file_count": len(files),
             "total_size_bytes": sum(int(file["size_bytes"]) for file in files),
             "files": files,
         }
 
     def write(self, root: Path, manifest: dict[str, Any] | None = None) -> Path:
-        resolved_root = root.expanduser().resolve()
-        manifest = manifest or self.build(resolved_root)
-        output = resolved_root / MANIFEST_NAME
+        source = root.expanduser().resolve()
+        base, _paths = self.source_base_and_files(source)
+        manifest = manifest or self.build(source)
+        output = base / MANIFEST_NAME
         output.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         return output
+
+    def source_base_and_files(self, source: Path) -> tuple[Path, list[Path]]:
+        if source.is_file():
+            return source.parent, [source]
+        if source.is_dir():
+            return source, sorted(source.rglob("*"))
+        raise FileNotFoundError(f"Upload source does not exist: {source}")
 
     def verify(self, manifest_path: Path) -> dict[str, Any]:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))

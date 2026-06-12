@@ -184,6 +184,13 @@
 - Review 页已改为明确的 session 级扫描：页面顶部新增 Review session root、Browse Session、Use Current Session 和 Scan Session；扫描对象是指定 session 下的 `training/episode_*.npz`，并优先读取该 session 的 `collection_config.yaml` 做字段/维度校验，summary 明确显示 session/training/episode 数/config 来源；质量报告写回被扫描 session。当前 smoke tests 为 84 passed。
 - Review 页已拆分“浏览数据”和“本地脚本检查”：Scan Session 只加载 session 内 episode 并展示字段/数值摘要，Run Local Checks 才按 YAML 做缺字段、维度、黑白帧、NaN/Inf 等本地规则检查；详情面板会显示 robot_obs/actions 等一维数组具体数值和图像统计。新增 Delete Selected，会把不想要的 episode 移到 session 下 `review_deleted/` 并实时刷新；Manual mark 仍保留。当前 smoke tests 为 85 passed。
 - Review 页面布局已拆成顶部 tabs：Episode Review 只保留 session 扫描、本地检查、标记、删除和 NPZ 详情；HDF5 Inspect 与 CALVIN Layout 分别移动到独立 tab，避免主审核界面臃肿。当前 smoke tests 为 86 passed。
+- Convert 页面已改为可交互选择合并源和输出：可 Browse Raw Root，扫描后用复选框勾选需要处理的 sessions，可 Browse Output CALVIN Root；`Merge NPZ Sessions` 只负责把勾选 sessions 合并并保留为 `<output_root>/<split>/episode_*.npz`；`Convert Selected Raw Sessions to HDF5` 只负责直接读取勾选 raw sessions 写 `<output_root>/calvin.hdf5`，不会隐式生成 merged NPZ；合并/转换均为后台线程执行，不阻塞前端；后端 merger 支持只合并选中 session，并会重编号 episode、清理旧输出、重映射合并 `auto_lang_ann.npy` 标注区间。当前 smoke tests 为 90 passed。
+- Upload 页面新增 `Repair / Resume verified upload`：先在后台执行远端 manifest 校验，找出 missing/mismatched 文件，再生成 `--files-from` 列表并只重传这些文件；普通上传和修复上传的 rsync 均启用 `--partial --partial-dir=.rsync-partial --append-verify`，提高中断续传可靠性。当前 smoke tests 为 93 passed。
+- Upload 页的 manifest 改为 UI 会话临时文件：`Build upload manifest`、本地校验、远端校验和 Repair/Resume 共用 `/tmp` 下临时 JSON，不再在待上传数据目录写入长期保留的 `upload_manifest.json`，关闭页面时会清理临时 manifest。当前 smoke tests 为 94 passed。
+- Upload 页 `Local path` 改为输入框 + Browse 按钮，可从文件选择器直接选择本地待上传目录。当前 smoke tests 为 95 passed。
+- Upload 源路径支持目录或单个文件：Local path 可 Browse folder 或 Browse file；manifest 会按目录内容或单文件生成，rsync 可直接上传单文件，Repair/Resume 对单文件使用父目录作为 `--files-from` 根目录以保持远端相对路径一致。当前 smoke tests 为 100 passed。
+- 修复 rsync `syntax or usage error(code 1) at main.c`：确认原因是 `--append-verify` 与 `--partial-dir` 参数冲突，已移除 `--partial-dir`，保留 `--partial --append-verify`；Upload 页不再显示手动 Build/Verify manifest 按钮，普通上传、远端校验和 Repair/Resume 会自动刷新临时 manifest，且临时 manifest 不会上传到服务器。当前 smoke tests 为 101 passed。
+- Upload 密码认证链路已改为后台 Paramiko SFTP，不再依赖本机 `sshpass` 或交互式 rsync；密码模式下普通上传、远端 manifest 校验和 Repair/Resume 都在后台线程执行。`Check remote space` 增加 `df -PB1` fallback，解决当前 Paramiko `SFTPClient` 无 `statvfs` 的服务器兼容问题。已实测将 `docs/` 上传到 `student@10.110.10.12:/data/zhangzexu/test`，3 个文件远端 sha256 校验通过。当前 smoke tests 为 104 passed。
 
 ## 遇到的问题
 

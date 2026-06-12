@@ -11,8 +11,11 @@ from robodataset_studio.dataset.validator import METADATA_FIELDS
 
 class Hdf5Converter:
     def convert(self, episodes_dir: Path, output_path: Path, config_yaml: str = "") -> Path:
-        output_path.parent.mkdir(parents=True, exist_ok=True)
         episode_paths = sorted(episodes_dir.glob("episode_*.npz"))
+        return self.convert_episode_paths(episode_paths, output_path, config_yaml)
+
+    def convert_episode_paths(self, episode_paths: list[Path], output_path: Path, config_yaml: str = "") -> Path:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         with h5py.File(output_path, "w") as h5:
             episodes_group = h5.create_group("episodes")
             for idx, episode_path in enumerate(episode_paths):
