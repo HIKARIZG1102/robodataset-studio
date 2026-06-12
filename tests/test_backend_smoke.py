@@ -1082,6 +1082,64 @@ def test_recording_process_command_uses_cli_module(tmp_path, monkeypatch) -> Non
     assert "--target-samples" in arguments
     page.close()
 
+def test_recording_page_applies_preprocess_to_selected_stream(tmp_path, monkeypatch) -> None:
+    app = QApplication.instance() or QApplication([])
+    ctx = AppContext()
+    ctx.state.dataset_root = tmp_path / "datasets"
+    ctx.state.collection_config = ConfigManager().build_default_config(
+        ProjectState(),
+        [
+            {"name": "/camera/camera/color/image_raw", "type": "sensor_msgs/msg/Image"},
+            {"name": "/camera/camera_wrist/color/image_raw", "type": "sensor_msgs/msg/Image"},
+        ],
+    )
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    page = RecordingPage(ctx)
+
+    page.preprocess_stream.setCurrentText("rgb_wrist")
+    page.preprocess_crop_enabled.setChecked(True)
+    page.preprocess_crop_x.setValue(4)
+    page.preprocess_crop_y.setValue(5)
+    page.preprocess_crop_width.setValue(16)
+    page.preprocess_crop_height.setValue(12)
+    page.preprocess_resize_enabled.setChecked(True)
+    page.preprocess_resize_width.setValue(8)
+    page.preprocess_resize_height.setValue(6)
+    page.apply_preprocess_to_yaml()
+
+    streams = {stream["name"]: stream for stream in ctx.state.collection_config["streams"]}
+    assert app is not None
+    assert streams["rgb_wrist"]["preview"]["crop"]["width"] == 16
+    assert streams["rgb_wrist"]["preview"]["resize"]["height"] == 6
+    assert streams["rgb_static"].get("preview", {}).get("crop", {}).get("width") != 16
+    page.close()
+
+
+def test_recording_page_preview_preprocess_crops_and_resizes(monkeypatch) -> None:
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    page = RecordingPage(AppContext())
+    slot = type(
+        "Slot",
+        (),
+        {
+            "stream_config": {
+                "preview": {
+                    "crop": {"enabled": True, "x": 1, "y": 2, "width": 4, "height": 3},
+                    "resize": {"enabled": True, "width": 2, "height": 2},
+                }
+            }
+        },
+    )()
+    frame = np.full((10, 12, 3), 50, dtype=np.uint8)
+    processed = page.apply_preview_preprocess(slot, frame)
+
+    assert app is not None
+    assert processed.shape == (2, 2, 3)
+    assert "low" in page.brightness_hint(10.0)
+    page.close()
+
+
 def test_config_page_rejects_incomplete_ai_yaml_preview(monkeypatch) -> None:
     app = QApplication.instance() or QApplication([])
     ctx = AppContext()

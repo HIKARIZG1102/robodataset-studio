@@ -793,6 +793,7 @@ class RecordingPreflightWorker(QObject):
 class CaptureMonitorSlot:
     stream_name: str
     topic: str
+    stream_config: dict
     widget: QWidget
     preview: ImagePreviewWidget
     status: QLabel
@@ -2360,6 +2361,28 @@ class RecordingPage(QWidget):
         self.streams = QTableWidget(0, 6)
         self.streams.setHorizontalHeaderLabels(["Name", "Modality", "Source", "Topic/Endpoint", "Role", "Runtime"])
         self.monitor_grid = QHBoxLayout()
+        self.preprocess_stream = QComboBox()
+        self.preprocess_crop_enabled = QCheckBox("Enable crop preview")
+        self.preprocess_crop_x = QSpinBox()
+        self.preprocess_crop_y = QSpinBox()
+        self.preprocess_crop_width = QSpinBox()
+        self.preprocess_crop_height = QSpinBox()
+        self.preprocess_resize_enabled = QCheckBox("Enable resize preview")
+        self.preprocess_resize_width = QSpinBox()
+        self.preprocess_resize_height = QSpinBox()
+        for spin in [
+            self.preprocess_crop_x,
+            self.preprocess_crop_y,
+            self.preprocess_crop_width,
+            self.preprocess_crop_height,
+            self.preprocess_resize_width,
+            self.preprocess_resize_height,
+        ]:
+            spin.setRange(0, 8192)
+        self.preprocess_resize_width.setValue(224)
+        self.preprocess_resize_height.setValue(224)
+        self.preprocess_status = QLabel("preprocess: select a stream to preview crop/resize")
+        apply_preprocess = QPushButton("Apply Preprocess To YAML")
         self.stop_mode = QComboBox()
         self.stop_mode.addItem("Manual", "manual")
         self.stop_mode.addItem("Duration", "duration_sec")
@@ -2380,6 +2403,8 @@ class RecordingPage(QWidget):
         refresh.clicked.connect(self.refresh_plan)
         load_yaml.clicked.connect(self.load_selected_yaml)
         check_nodes.clicked.connect(self.check_nodes_async)
+        self.preprocess_stream.currentIndexChanged.connect(lambda _index: self.load_preprocess_controls())
+        apply_preprocess.clicked.connect(self.apply_preprocess_to_yaml)
         self.stop_mode.currentIndexChanged.connect(lambda _index: self.update_recording_mode_ui())
         self.duration.valueChanged.connect(lambda _value: self.plan_summary.setText(self.recording_plan_summary()))
         self.target_samples.valueChanged.connect(lambda _value: self.plan_summary.setText(self.recording_plan_summary()))
@@ -2401,6 +2426,30 @@ class RecordingPage(QWidget):
         layout.addLayout(yaml_row)
         layout.addWidget(self.plan_summary)
         layout.addWidget(self.streams)
+        preprocess_form = QFormLayout()
+        preprocess_form.addRow("Image stream", self.preprocess_stream)
+        crop_row = QHBoxLayout()
+        crop_row.addWidget(self.preprocess_crop_enabled)
+        crop_row.addWidget(QLabel("x"))
+        crop_row.addWidget(self.preprocess_crop_x)
+        crop_row.addWidget(QLabel("y"))
+        crop_row.addWidget(self.preprocess_crop_y)
+        crop_row.addWidget(QLabel("w"))
+        crop_row.addWidget(self.preprocess_crop_width)
+        crop_row.addWidget(QLabel("h"))
+        crop_row.addWidget(self.preprocess_crop_height)
+        preprocess_form.addRow("Crop preview", crop_row)
+        resize_row = QHBoxLayout()
+        resize_row.addWidget(self.preprocess_resize_enabled)
+        resize_row.addWidget(QLabel("w"))
+        resize_row.addWidget(self.preprocess_resize_width)
+        resize_row.addWidget(QLabel("h"))
+        resize_row.addWidget(self.preprocess_resize_height)
+        resize_row.addWidget(apply_preprocess)
+        preprocess_form.addRow("Resize preview", resize_row)
+        preprocess_form.addRow("Exposure/filter slot", QLabel("reserved: use brightness hint below or adjust camera node parameters"))
+        preprocess_form.addRow("Preview status", self.preprocess_status)
+        layout.addLayout(preprocess_form)
         layout.addWidget(QLabel("Capture monitors"))
         layout.addLayout(self.monitor_grid)
         controls = QHBoxLayout()
@@ -2476,10 +2525,77 @@ class RecordingPage(QWidget):
             for stream in streams
             if stream.get("message_type") == "sensor_msgs/msg/Image" and stream.get("topic")
         ][:4]
+        self.refresh_preprocess_streams(image_streams)
         self.rebuild_capture_monitors(image_streams)
         self.plan_summary.setText(self.recording_plan_summary())
         if os.environ.get("QT_QPA_PLATFORM") != "offscreen":
             self.start_all_capture_monitors()
+
+    def refresh_preprocess_streams(self, image_streams: list[dict]) -> None:
+        current = self.preprocess_stream.currentData()
+        self.preprocess_stream.blockSignals(True)
+        self.preprocess_stream.clear()
+        for stream in image_streams:
+            name = str(stream.get("name") or stream.get("calvin_key") or stream.get("topic") or "")
+            self.preprocess_stream.addItem(name, name)
+        if current:
+            index = self.preprocess_stream.findData(current)
+            if index >= 0:
+                self.preprocess_stream.setCurrentIndex(index)
+        self.preprocess_stream.blockSignals(False)
+        self.load_preprocess_controls()
+
+    def _selected_preprocess_stream(self) -> dict | None:
+        name = str(self.preprocess_stream.currentData() or self.preprocess_stream.currentText() or "")
+        if not name or not self.ctx.has_config():
+            return None
+        for stream in self.ctx.state.collection_config.get("streams", []):
+            stream_name = str(stream.get("name") or stream.get("calvin_key") or stream.get("topic") or "")
+            if stream_name == name:
+                return stream
+        return None
+
+    def load_preprocess_controls(self) -> None:
+        stream = self._selected_preprocess_stream()
+        preview = stream.get("preview", {}) if isinstance(stream, dict) else {}
+        crop = preview.get("crop", {}) if isinstance(preview, dict) else {}
+        resize = preview.get("resize", {}) if isinstance(preview, dict) else {}
+        self.preprocess_crop_enabled.setChecked(bool(crop.get("enabled", False)))
+        self.preprocess_crop_x.setValue(int(crop.get("x", 0) or 0))
+        self.preprocess_crop_y.setValue(int(crop.get("y", 0) or 0))
+        self.preprocess_crop_width.setValue(int(crop.get("width", 0) or 0))
+        self.preprocess_crop_height.setValue(int(crop.get("height", 0) or 0))
+        self.preprocess_resize_enabled.setChecked(bool(resize.get("enabled", False)))
+        self.preprocess_resize_width.setValue(int(resize.get("width", 224) or 0))
+        self.preprocess_resize_height.setValue(int(resize.get("height", 224) or 0))
+
+    def apply_preprocess_to_yaml(self) -> None:
+        stream = self._selected_preprocess_stream()
+        if stream is None:
+            self.preprocess_status.setText("preprocess: no image stream selected")
+            return
+        crop = {
+            "enabled": self.preprocess_crop_enabled.isChecked(),
+            "x": int(self.preprocess_crop_x.value()),
+            "y": int(self.preprocess_crop_y.value()),
+            "width": int(self.preprocess_crop_width.value()),
+            "height": int(self.preprocess_crop_height.value()),
+        }
+        resize = {
+            "enabled": self.preprocess_resize_enabled.isChecked(),
+            "width": int(self.preprocess_resize_width.value()),
+            "height": int(self.preprocess_resize_height.value()),
+        }
+        preview = stream.setdefault("preview", {})
+        preview["crop"] = dict(crop)
+        preview["resize"] = dict(resize)
+        stream_name = str(stream.get("name") or stream.get("calvin_key") or stream.get("topic") or "")
+        for camera in self.ctx.state.collection_config.get("cameras", []):
+            if str(camera.get("name") or "") == stream_name:
+                camera["crop"] = dict(crop)
+                camera["resize"] = dict(resize)
+        self.ctx.config_manager.sync_core_schema(self.ctx.state.collection_config)
+        self.preprocess_status.setText(f"preprocess: applied to {stream_name}; save YAML to persist in library")
 
     def update_recording_mode_ui(self) -> None:
         stop_mode = str(self.stop_mode.currentData() or "duration_sec")
@@ -2809,12 +2925,14 @@ class RecordingPage(QWidget):
                 self._clear_layout(layout)
         self._monitor_slots = []
         for stream in image_streams:
-            slot = self._make_monitor_slot(str(stream.get("name", "image")), str(stream.get("topic", "")))
+            slot = self._make_monitor_slot(stream)
             self._monitor_slots.append(slot)
             self.monitor_grid.addWidget(slot.widget)
         self.monitor_grid.addStretch(1)
 
-    def _make_monitor_slot(self, stream_name: str, topic: str) -> CaptureMonitorSlot:
+    def _make_monitor_slot(self, stream: dict) -> CaptureMonitorSlot:
+        stream_name = str(stream.get("name", "image"))
+        topic = str(stream.get("topic", ""))
         wrapper = QWidget()
         layout = QVBoxLayout(wrapper)
         title = QLabel(f"{stream_name}\n{topic}")
@@ -2830,6 +2948,7 @@ class RecordingPage(QWidget):
         slot = CaptureMonitorSlot(
             stream_name=stream_name,
             topic=topic,
+            stream_config=stream,
             widget=wrapper,
             preview=preview,
             status=status,
@@ -2937,16 +3056,62 @@ class RecordingPage(QWidget):
         if frame is None:
             slot.status.setText(f"unsupported image encoding: {meta.get('encoding')}")
             return
+        frame = self.apply_preview_preprocess(slot, frame)
         slot.preview.set_frame(frame)
         slot.displayed_sequence = received
         slot.frames += 1
-        slot.meta.setText(f"image: {meta.get('width')}x{meta.get('height')} {meta.get('encoding')} frame={received}")
+        brightness = self.frame_brightness(frame)
+        hint = self.brightness_hint(brightness)
+        slot.meta.setText(
+            f"image: {meta.get('width')}x{meta.get('height')} -> {frame.shape[1]}x{frame.shape[0]} "
+            f"{meta.get('encoding')} frame={received} mean={brightness:.1f}{hint}"
+        )
+        if str(self.preprocess_stream.currentData() or "") == slot.stream_name:
+            self.preprocess_status.setText(f"preprocess: {slot.stream_name} preview mean brightness {brightness:.1f}{hint}")
         now = time.time()
         if now - slot.last_fps_at >= 1.0:
             fps = slot.frames / (now - slot.last_fps_at)
             slot.fps.setText(f"preview fps: {fps:.1f}")
             slot.frames = 0
             slot.last_fps_at = now
+
+    def apply_preview_preprocess(self, slot: CaptureMonitorSlot, frame: np.ndarray) -> np.ndarray:
+        preview = slot.stream_config.get("preview", {}) if isinstance(slot.stream_config, dict) else {}
+        crop = preview.get("crop", {}) if isinstance(preview, dict) else {}
+        if crop.get("enabled"):
+            h, w = frame.shape[:2]
+            x = max(0, min(int(crop.get("x", 0) or 0), w))
+            y = max(0, min(int(crop.get("y", 0) or 0), h))
+            crop_w = int(crop.get("width", 0) or 0)
+            crop_h = int(crop.get("height", 0) or 0)
+            x2 = min(w, x + crop_w) if crop_w > 0 else w
+            y2 = min(h, y + crop_h) if crop_h > 0 else h
+            if x2 > x and y2 > y:
+                frame = frame[y:y2, x:x2]
+        resize = preview.get("resize", {}) if isinstance(preview, dict) else {}
+        if resize.get("enabled"):
+            width = int(resize.get("width", 0) or 0)
+            height = int(resize.get("height", 0) or 0)
+            if width > 0 and height > 0:
+                frame = np.ascontiguousarray(frame)
+                qimage = QImage(frame.data, frame.shape[1], frame.shape[0], frame.strides[0], QImage.Format_RGB888).copy()
+                scaled = qimage.scaled(width, height, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+                ptr = scaled.bits()
+                arr = np.frombuffer(ptr, dtype=np.uint8).reshape((scaled.height(), scaled.bytesPerLine()))
+                frame = arr[:, : scaled.width() * 3].reshape((scaled.height(), scaled.width(), 3)).copy()
+        return frame
+
+    def frame_brightness(self, frame: np.ndarray) -> float:
+        rgb = frame.astype(np.float32)
+        luminance = 0.2126 * rgb[:, :, 0] + 0.7152 * rgb[:, :, 1] + 0.0722 * rgb[:, :, 2]
+        return float(luminance.mean())
+
+    def brightness_hint(self, brightness: float) -> str:
+        if brightness < 35:
+            return " low; consider camera exposure/light"
+        if brightness > 220:
+            return " high; consider reducing exposure"
+        return ""
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
         self.stop_all_capture_monitors()

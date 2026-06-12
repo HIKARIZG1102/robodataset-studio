@@ -180,6 +180,7 @@
 - 针对 Start Recording 仍会关闭 app 的复测结果继续收口：录制已经在子进程中执行，因此开始录制前不再停止 GUI 进程内的 capture monitor，避免 monitor rclpy 线程销毁触发段错误；新增测试锁定 Start Recording 不调用 `stop_all_capture_monitors()`；当前 smoke tests 为 80 passed。
 - 根据复测日志 `QObject: shared QObject was deleted directly` 继续修复 Start Recording 闪退：UI 不再通过 `QThread + QObject worker` 间接管理录制子进程，改用 Qt 原生 `QProcess` 启动 `robodataset_studio.ros.record_episode_cli`，避免 QObject 跨线程删除顺序导致闪退；Stop Recording 改为 terminate/kill 录制进程；当前 smoke tests 为 81 passed。
 - Manual 模式 Stop Recording 已从强制 terminate 改为软停止：UI 写入 session 下的 `.stop_recording` 文件，录制子进程检测到 stop 文件后自行退出采集循环并正常写出 episode；10 秒未退出才 force kill。这样 Manual 停止不会再因 SIGTERM 退出码 15 丢掉已采集数据；当前 smoke tests 为 81 passed。
+- Recording 页已增加图像前处理预览槽位：可在采集页选择 image stream，设置 crop/resize 并写回当前 YAML，对应 capture monitor 会实时显示裁切/缩放后的画面尺寸和平均亮度提示；曝光/滤波暂作为扩展槽位提示用户调整相机 node 参数，尚不直接控制设备。当前 smoke tests 为 83 passed。
 
 ## 遇到的问题
 
