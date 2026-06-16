@@ -5,6 +5,7 @@ import socket
 import subprocess
 import sys
 import time
+import tempfile
 from pathlib import Path
 
 from robodataset_studio_v3.frontend.api_client import ApiClient
@@ -17,6 +18,7 @@ class BackendProcess:
         self.process: subprocess.Popen[str] | None = None
         self.host = "127.0.0.1"
         self.port = self._port_from_url(api.base_url) or 8765
+        self.log_path: Path | None = None
 
     def ensure_running(self, timeout_sec: float = 8.0) -> None:
         if self.is_healthy():
@@ -28,8 +30,10 @@ class BackendProcess:
         while time.time() < deadline:
             if self.is_healthy():
                 return
+            if self.process is not None and self.process.poll() is not None:
+                break
             time.sleep(0.15)
-        raise RuntimeError("FastAPI backend did not become healthy before timeout")
+        raise RuntimeError(self._startup_error())
 
     def is_healthy(self) -> bool:
         try:
@@ -46,14 +50,24 @@ class BackendProcess:
         env["PYTHONPATH"] = f"{src}:{env.get('PYTHONPATH', '')}" if env.get("PYTHONPATH") else src
         env["ROBODATASET_V3_BACKEND_HOST"] = self.host
         env["ROBODATASET_V3_BACKEND_PORT"] = str(self.port)
+        log_dir = Path(tempfile.gettempdir())
+        self.log_path = log_dir / f"robodataset_studio_v3_backend_{self.port}.log"
+        log_file = self.log_path.open("w", encoding="utf-8")
+        python = self._python_executable()
         self.process = subprocess.Popen(
-            [sys.executable, "-m", "robodataset_studio_v3.backend.main"],
+            [python, "-m", "robodataset_studio_v3.backend.main"],
             cwd=str(self.root_dir),
             env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
             text=True,
         )
+
+    def _python_executable(self) -> str:
+        venv_python = self.root_dir / ".venv" / "bin" / "python"
+        if venv_python.exists():
+            return str(venv_python)
+        return sys.executable
 
     def _find_available_port(self, preferred: int) -> int:
         for port in [preferred, *range(8766, 8790)]:
@@ -68,6 +82,23 @@ class BackendProcess:
             return int(url.rstrip("/").rsplit(":", 1)[1])
         except Exception:
             return None
+
+    def _startup_error(self) -> str:
+        parts = ["FastAPI backend did not become healthy before timeout."]
+        if self.process is not None:
+            code = self.process.poll()
+            if code is not None:
+                parts.append(f"Backend process exited with code {code}.")
+        if self.log_path is not None:
+            parts.append(f"Log: {self.log_path}")
+            try:
+                lines = self.log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+                tail = "\n".join(lines[-40:])
+                if tail:
+                    parts.append("Backend log tail:\n" + tail)
+            except Exception as exc:
+                parts.append(f"Could not read backend log: {exc}")
+        return "\n".join(parts)
 
     def stop(self) -> None:
         if self.process is None or self.process.poll() is not None:

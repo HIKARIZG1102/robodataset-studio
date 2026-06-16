@@ -71,6 +71,17 @@ PYTHONPATH=src .venv/bin/python -m robodataset_studio_v3.backend.main
 PYTHONPATH=src .venv/bin/python -m robodataset_studio_v3.frontend.main
 ```
 
+Backend health check:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m robodataset_studio_v3.backend.main
+curl http://127.0.0.1:8765/api/health
+```
+
+If the frontend reports that the backend did not become healthy, check the log
+path shown in the error dialog. Backend auto-start logs are written under
+`/tmp/robodataset_studio_v3_backend_<port>.log`.
+
 AI calls use OpenAI-compatible endpoints. The API key is read from:
 
 ```bash
