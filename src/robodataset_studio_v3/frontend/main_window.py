@@ -15,7 +15,15 @@ from PySide6.QtWidgets import (
 
 from robodataset_studio_v3.frontend.api_client import ApiClient, ProjectSummary
 from robodataset_studio_v3.frontend.backend_process import BackendProcess
-from robodataset_studio_v3.frontend.widgets.action_page import ActionPage
+from robodataset_studio_v3.frontend.pages.ai_page import AiPage
+from robodataset_studio_v3.frontend.pages.collect_page import CollectPage
+from robodataset_studio_v3.frontend.pages.convert_page import ConvertPage
+from robodataset_studio_v3.frontend.pages.logs_page import LogsPage
+from robodataset_studio_v3.frontend.pages.review_page import ReviewPage
+from robodataset_studio_v3.frontend.pages.ros_page import RosPage
+from robodataset_studio_v3.frontend.pages.settings_page import SettingsPage
+from robodataset_studio_v3.frontend.pages.tutorial_page import TutorialPage
+from robodataset_studio_v3.frontend.pages.upload_page import UploadPage
 from robodataset_studio_v3.frontend.widgets.inspector import InspectorDock
 from robodataset_studio_v3.frontend.widgets.project_config_page import ProjectConfigPage
 from robodataset_studio_v3.frontend.widgets.project_browser import ProjectBrowserDialog
@@ -170,95 +178,22 @@ class MainWindow(QMainWindow):
     def _make_action_page(self, tab_id: str) -> QWidget:
         project = self.current_project
         if tab_id == "collect":
-            return ActionPage(
-                "Collect",
-                self.api,
-                project,
-                fields={"mode": "manual"},
-                actions={
-                    "Preflight": lambda values: self.api.post("/api/recording/preflight", {"project_key": values["project_key"]}),
-                    "Start Recording": lambda values: self.api.post("/api/recording/start", {"project_key": values["project_key"], "mode": values["mode"]}),
-                    "Stop Recording": lambda values: self.api.post("/api/recording/stop", {"project_key": values["project_key"]}),
-                },
-            )
+            return CollectPage(self.api, project)
         if tab_id == "ros":
-            return ActionPage(
-                "ROS Discovery / Topic Inspector",
-                self.api,
-                project,
-                fields={"topic": ""},
-                actions={
-                    "Graph": lambda values: self.api.get("/api/ros/graph", timeout=10.0),
-                    "Topic Info": lambda values: self.api.post("/api/ros/topic-info", {"topic": values["topic"]}),
-                    "Echo Once": lambda values: self.api.post("/api/ros/topic-echo-once", {"topic": values["topic"]}, timeout=12.0),
-                    "Hz Check": lambda values: self.api.post("/api/ros/topic-hz", {"topic": values["topic"]}, timeout=12.0),
-                },
-            )
+            return RosPage(self.api, project)
         if tab_id == "review":
-            return ActionPage(
-                "Review",
-                self.api,
-                project,
-                fields={"session_dir": "", "hdf5_path": "", "folder": ""},
-                actions={
-                    "Scan Session": lambda values: self.api.post("/api/review/session/scan", {"session_dir": values["session_dir"]}),
-                    "Check Session": lambda values: self.api.post("/api/review/session/check", {"session_dir": values["session_dir"]}),
-                    "Check HDF5": lambda values: self.api.post("/api/review/hdf5/check", {"hdf5_path": values["hdf5_path"]}),
-                    "Check Layout": lambda values: self.api.post("/api/review/layout/check", {"folder": values["folder"]}),
-                },
-            )
+            return ReviewPage(self.api, project)
         if tab_id == "convert":
-            return ActionPage(
-                "Convert",
-                self.api,
-                project,
-                fields={"root": "", "sessions": "", "output_dir": ""},
-                actions={
-                    "Scan Sessions": lambda values: self.api.post("/api/convert/scan", {"root": values["root"]}),
-                    "Merge": lambda values: self.api.post("/api/convert/merge", {"sessions": self._split_csv(values["sessions"]), "output_dir": values["output_dir"]}),
-                    "HDF5": lambda values: self.api.post("/api/convert/hdf5", {"sessions": self._split_csv(values["sessions"]), "output_dir": values["output_dir"]}),
-                },
-            )
+            return ConvertPage(self.api, project)
         if tab_id == "upload":
-            return ActionPage(
-                "Upload",
-                self.api,
-                project,
-                fields={"local_path": "", "remote_path": "", "host": "", "username": ""},
-                actions={
-                    "Dependencies": lambda values: self.api.get("/api/upload/dependencies"),
-                    "Connect": lambda values: self.api.post("/api/upload/connect", {"host": values["host"], "username": values["username"]}),
-                    "Upload": lambda values: self.api.post("/api/upload/start", values),
-                    "Repair / Resume": lambda values: self.api.post("/api/upload/repair", values),
-                    "Verify": lambda values: self.api.post("/api/upload/verify", values),
-                },
-            )
+            return UploadPage(self.api, project)
         if tab_id == "ai":
-            return ActionPage(
-                "AI Assist",
-                self.api,
-                project,
-                fields={"prompt": "", "base_url": ""},
-                actions={
-                    "Models": lambda values: self.api.post("/api/ai/models", {"base_url": values["base_url"]}),
-                    "Send": lambda values: self.api.post("/api/ai/send", {"prompt": values["prompt"], "kind": "ai"}),
-                    "Config Prompt": lambda values: self.api.post("/api/ai/config-prompt", {}),
-                    "Review Prompt": lambda values: self.api.post("/api/ai/review-prompt", {}),
-                },
-            )
+            return AiPage(self.api, project)
         if tab_id == "settings":
-            return ActionPage(
-                "Settings",
-                self.api,
-                project,
-                actions={"Load Settings": lambda values: self.api.get("/api/settings")},
-            )
+            return SettingsPage(self.api, project)
         if tab_id == "tutorial":
-            page = QWidget()
-            layout = QVBoxLayout(page)
-            layout.addWidget(QLabel("Tutorial page placeholder. Full workflow documentation will be linked here."))
-            return page
-        return ActionPage("Logs", self.api, project, actions={"Refresh Tasks": lambda values: self.api.list_tasks()})
+            return TutorialPage()
+        return LogsPage(self.api, project)
 
     def _tab_title(self, tab_id: str) -> str:
         return {
@@ -272,9 +207,6 @@ class MainWindow(QMainWindow):
             "tutorial": "Tutorial",
             "logs": "Logs",
         }.get(tab_id, tab_id.title())
-
-    def _split_csv(self, value: str) -> list[str]:
-        return [item.strip() for item in value.split(",") if item.strip()]
 
     def _ensure_workspace(self, *, allow_empty: bool = False) -> None:
         if self.current_project is None and allow_empty and self.centralWidget() is self.empty:
