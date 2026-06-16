@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import json
 import os
-import threading
+import shlex
 import time
 from typing import Any
-from uuid import uuid4
 
 import numpy as np
-from PySide6.QtCore import QProcess, QThread, QTimer, Qt, QThreadPool, Signal, Slot, QObject
-from PySide6.QtGui import QImage, QPainter
+from PySide6.QtCore import QProcess, QProcessEnvironment, Qt, QThreadPool, Signal
+from PySide6.QtGui import QImage, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -25,7 +24,6 @@ from PySide6.QtWidgets import (
 
 from robodataset_studio_v3.frontend.api_client import ApiClient
 from robodataset_studio_v3.frontend.worker import ApiWorker
-from robodataset_studio_v3.ros.image_conversion import image_bytes_to_rgb
 
 
 class ImagePreviewWidget(QWidget):
@@ -81,92 +79,6 @@ class ImagePreviewWidget(QWidget):
             self.sampled.emit(px, py, r, g, b)
 
 
-class RosImagePreviewWorker(QObject):
-    status_changed = Signal(str)
-    finished = Signal()
-
-    def __init__(self, topic: str) -> None:
-        super().__init__()
-        self.topic = topic
-        self._running = True
-        self._lock = threading.Lock()
-        self._received = 0
-        self._last_status_at = 0.0
-        self.latest_data: bytes | None = None
-        self.latest_meta: dict[str, Any] = {}
-
-    @Slot()
-    def run(self) -> None:
-        context = None
-        executor = None
-        node = None
-        try:
-            import rclpy
-            from rclpy.executors import SingleThreadedExecutor
-            from rclpy.qos import qos_profile_sensor_data
-            from sensor_msgs.msg import Image
-
-            context = rclpy.Context()
-            rclpy.init(context=context)
-            node = rclpy.create_node(f"robodataset_v3_preview_{uuid4().hex[:8]}", context=context)
-            executor = SingleThreadedExecutor(context=context)
-            executor.add_node(node)
-
-            def on_image(msg: Image) -> None:
-                with self._lock:
-                    self._received += 1
-                    self.latest_data = bytes(msg.data)
-                    self.latest_meta = {
-                        "encoding": str(msg.encoding),
-                        "width": int(msg.width),
-                        "height": int(msg.height),
-                        "step": int(msg.step),
-                        "received": self._received,
-                    }
-                now = time.time()
-                if now - self._last_status_at >= 1.0:
-                    self._last_status_at = now
-                    self.status_changed.emit(f"receiving frames={self.frames_received()} {msg.encoding} {msg.width}x{msg.height}")
-
-            node.create_subscription(Image, self.topic, on_image, qos_profile_sensor_data)
-            self.status_changed.emit(f"subscribed: {self.topic}")
-            while self._running and context.ok():
-                executor.spin_once(timeout_sec=0.1)
-        except Exception as exc:
-            self.status_changed.emit(f"preview error: {exc}")
-        finally:
-            if executor is not None and node is not None:
-                try:
-                    executor.remove_node(node)
-                except Exception:
-                    pass
-            if node is not None:
-                try:
-                    node.destroy_node()
-                except Exception:
-                    pass
-            if context is not None:
-                try:
-                    context.try_shutdown()
-                except Exception:
-                    pass
-            self.finished.emit()
-
-    def stop(self) -> None:
-        self._running = False
-        with self._lock:
-            self.latest_data = None
-            self.latest_meta = {}
-
-    def snapshot(self) -> tuple[bytes | None, dict[str, Any]]:
-        with self._lock:
-            return self.latest_data, dict(self.latest_meta)
-
-    def frames_received(self) -> int:
-        with self._lock:
-            return self._received
-
-
 class InspectorDock(QWidget):
     def __init__(self, api: ApiClient) -> None:
         super().__init__()
@@ -201,8 +113,8 @@ class InspectorDock(QWidget):
         self._workers: list[ApiWorker] = []
         self._processes: dict[str, QProcess] = {}
         self._closing = False
-        self._preview_thread: QThread | None = None
-        self._preview_worker: RosImagePreviewWorker | None = None
+        self._preview_process: QProcess | None = None
+        self._preview_buffer = ""
         self._latest_frame: np.ndarray | None = None
         self._latest_meta: dict[str, Any] = {}
         self._latest_sequence = 0
@@ -220,10 +132,6 @@ class InspectorDock(QWidget):
         layout.addWidget(self.tabs)
         self.tabs.addTab(self._topic_page(), "Topic Inspector")
         self.tabs.addTab(self._image_page(), "Image Monitor")
-        self.display_timer = QTimer(self)
-        self.display_timer.setTimerType(Qt.PreciseTimer)
-        self.display_timer.timeout.connect(self.display_latest_frame)
-        self._update_display_timer()
         self.refresh_graph()
 
     def _toolbar(self) -> QWidget:
@@ -357,17 +265,34 @@ class InspectorDock(QWidget):
     def start_process(self, role: str, command: list[str], output: QPlainTextEdit) -> None:
         self.stop_process(role)
         process = QProcess(self)
-        process.setProgram(command[0])
-        process.setArguments(command[1:])
+        program, arguments = self._ros_shell_command(command)
+        process.setProgram(program)
+        process.setArguments(arguments)
         process.setProcessChannelMode(QProcess.MergedChannels)
-        env = process.processEnvironment()
-        env.insert("RMW_IMPLEMENTATION", os.environ.get("RMW_IMPLEMENTATION", os.environ.get("ROBODATASET_RMW_IMPLEMENTATION", "rmw_cyclonedds_cpp")))
-        process.setProcessEnvironment(env)
+        process.setProcessEnvironment(self._process_environment())
         process.readyReadStandardOutput.connect(lambda proc=process, pane=output: self._drain_process(proc, pane))
         process.finished.connect(lambda code, status, pane=output, item=role: self._process_finished(item, pane, code, status))
         self._processes[role] = process
         output.setPlainText("$ " + " ".join(command))
         process.start()
+
+    def _ros_shell_command(self, command: list[str]) -> tuple[str, list[str]]:
+        ros_setup = os.environ.get("ROS_SETUP", "/opt/ros/humble/setup.bash")
+        quoted = " ".join(shlex.quote(item) for item in command)
+        source = f"source {shlex.quote(ros_setup)} >/dev/null 2>&1 || true"
+        return "/bin/bash", ["-lc", f"{source}; exec {quoted}"]
+
+    def _process_environment(self) -> QProcessEnvironment:
+        env = QProcessEnvironment.systemEnvironment()
+        for key, value in os.environ.items():
+            env.insert(key, value)
+        env.insert("RMW_IMPLEMENTATION", os.environ.get("RMW_IMPLEMENTATION", os.environ.get("ROBODATASET_RMW_IMPLEMENTATION", "rmw_cyclonedds_cpp")))
+        root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+        src_dir = os.path.join(root_dir, "src")
+        current_pythonpath = env.value("PYTHONPATH", "")
+        if src_dir not in current_pythonpath.split(os.pathsep):
+            env.insert("PYTHONPATH", f"{src_dir}{os.pathsep}{current_pythonpath}" if current_pythonpath else src_dir)
+        return env
 
     def stop_process(self, role: str) -> None:
         process = self._processes.pop(role, None)
@@ -405,61 +330,102 @@ class InspectorDock(QWidget):
         self._last_source_fps_at = time.time()
         self._last_source_received = 0
         self._paused = False
-        self._preview_thread = QThread(self)
-        self._preview_worker = RosImagePreviewWorker(topic)
-        self._preview_worker.moveToThread(self._preview_thread)
-        self._preview_thread.started.connect(self._preview_worker.run)
-        self._preview_worker.status_changed.connect(self.handle_preview_status, Qt.QueuedConnection)
-        self._preview_worker.finished.connect(self._preview_thread.quit)
-        self._preview_worker.finished.connect(self._preview_worker.deleteLater)
-        self._preview_thread.finished.connect(self._preview_thread.deleteLater)
-        self._preview_thread.finished.connect(self._preview_finished)
-        self._preview_thread.start()
-        self.display_timer.start()
+        process = QProcess(self)
+        command = [
+            "/usr/bin/python3",
+            "-m",
+            "robodataset_studio_v3.ros.image_preview_cli",
+            "--topic",
+            topic,
+            "--max-fps",
+            str(self.playback_fps.value()),
+        ]
+        program, arguments = self._ros_shell_command(command)
+        process.setProgram(program)
+        process.setArguments(arguments)
+        process.setProcessChannelMode(QProcess.SeparateChannels)
+        process.setProcessEnvironment(self._process_environment())
+        process.readyReadStandardOutput.connect(self._read_preview_stdout)
+        process.readyReadStandardError.connect(self._read_preview_stderr)
+        process.finished.connect(self._preview_process_finished)
+        self._preview_process = process
+        self._preview_buffer = ""
+        process.start()
         self._append(self.preview_log, f"$ image-monitor subscribe {topic}")
 
     def stop_image_preview(self, clear_display: bool = True) -> None:
-        if self._preview_worker is not None:
-            self._preview_worker.stop()
-            try:
-                self._preview_worker.status_changed.disconnect()
-            except Exception:
-                pass
-        if self._preview_thread is not None:
-            self._preview_thread.quit()
-            if not self._preview_thread.wait(3000):
-                self._append(self.preview_log, "[warning] image preview thread did not stop; killing thread is avoided")
-        self._preview_worker = None
-        self._preview_thread = None
-        self.display_timer.stop()
+        process = self._preview_process
+        self._preview_process = None
+        if process is not None:
+            process.terminate()
+            if not process.waitForFinished(1500):
+                process.kill()
+                process.waitForFinished(1500)
+            process.deleteLater()
         if clear_display:
             self.preview.clear_frame()
             self.image_meta.setText("image: -")
         self.preview_status.setText("preview: stopped")
 
-    def _preview_finished(self) -> None:
-        self._preview_worker = None
-        self._preview_thread = None
-
-    @Slot(str)
-    def handle_preview_status(self, text: str) -> None:
-        self.preview_status.setText(text)
-        self._append(self.preview_log, text)
-
-    def display_latest_frame(self) -> None:
-        if self._paused or self._preview_worker is None:
+    def _read_preview_stdout(self) -> None:
+        process = self._preview_process
+        if process is None:
             return
-        data, meta = self._preview_worker.snapshot()
-        if data is None:
+        self._preview_buffer += bytes(process.readAllStandardOutput()).decode(errors="replace")
+        while "\n" in self._preview_buffer:
+            line, self._preview_buffer = self._preview_buffer.split("\n", 1)
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except Exception:
+                self._append(self.preview_log, line)
+                continue
+            self._handle_preview_payload(payload)
+
+    def _read_preview_stderr(self) -> None:
+        process = self._preview_process
+        if process is None:
             return
+        text = bytes(process.readAllStandardError()).decode(errors="replace").strip()
+        if text:
+            self._append(self.preview_log, text)
+
+    def _preview_process_finished(self, code: int, status) -> None:
+        if self._preview_process is not None:
+            self._append(self.preview_log, f"[preview exited] code={code} status={status}")
+            self._preview_process = None
+        self.preview_status.setText("preview: stopped")
+
+    def _handle_preview_payload(self, payload: dict[str, Any]) -> None:
+        kind = str(payload.get("type") or "")
+        if kind == "status":
+            text = str(payload.get("text") or "")
+            self.preview_status.setText(text)
+            self._append(self.preview_log, text)
+            return
+        if kind == "error":
+            text = str(payload.get("error") or "preview error")
+            self.preview_status.setText(f"preview error: {text}")
+            self._append(self.preview_log, text)
+            return
+        if kind != "frame" or self._paused:
+            return
+        meta = payload.get("meta", {}) if isinstance(payload.get("meta"), dict) else {}
         received = int(meta.get("received", 0) or 0)
         if received <= self._displayed_sequence:
             return
-        frame = image_bytes_to_rgb(data, meta)
-        if frame is None:
-            self._append(self.preview_log, f"unsupported image encoding: {meta.get('encoding')}")
-            self._displayed_sequence = received
+        pixmap = QPixmap()
+        pixmap.loadFromData(__import__("base64").b64decode(str(payload.get("ppm_base64") or "")), "PPM")
+        if pixmap.isNull():
+            self._append(self.preview_log, "preview frame decode failed")
             return
+        image = pixmap.toImage().convertToFormat(QImage.Format_RGB888)
+        width = image.width()
+        height = image.height()
+        ptr = image.constBits()
+        frame = np.frombuffer(ptr, dtype=np.uint8).reshape((height, image.bytesPerLine()))[:, : width * 3].reshape((height, width, 3)).copy()
         self._latest_frame = frame
         self._latest_meta = meta
         self._latest_sequence = received
@@ -474,8 +440,8 @@ class InspectorDock(QWidget):
             self.preview_fps.setText(f"preview fps: {self._displayed_frames / max(now - self._last_display_fps_at, 0.001):.1f}")
             self._displayed_frames = 0
             self._last_display_fps_at = now
-        if self._preview_worker is not None and now - self._last_source_fps_at >= 1.0:
-            received = self._preview_worker.frames_received()
+        if now - self._last_source_fps_at >= 1.0:
+            received = self._latest_sequence
             fps = (received - self._last_source_received) / max(now - self._last_source_fps_at, 0.001)
             self.camera_fps.setText(f"source fps: {fps:.1f}")
             self._last_source_received = received
@@ -513,7 +479,12 @@ class InspectorDock(QWidget):
         self.sample.setText(f"sample: x={x} y={y} rgb=({r}, {g}, {b})")
 
     def _update_display_timer(self) -> None:
-        self.display_timer.setInterval(max(1, int(1000 / max(self.playback_fps.value(), 1)))) if hasattr(self, "display_timer") else None
+        process = self._preview_process
+        if process is not None:
+            topic = self._selected_image_topic_name()
+            self.stop_image_preview(clear_display=False)
+            if topic:
+                self.start_image_preview()
 
     def _start_worker(self, fn, callback, *args, **kwargs) -> None:
         worker = ApiWorker(fn, *args, **kwargs)
