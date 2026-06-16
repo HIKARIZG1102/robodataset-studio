@@ -8,6 +8,7 @@ class ProjectCreateRequest(BaseModel):
     version: str = Field(default="v1")
     operator: str = Field(default="")
     notes: str = Field(default="")
+    root_path: str = Field(default="")
 
 
 class ProjectSummary(BaseModel):
@@ -15,3 +16,7 @@ class ProjectSummary(BaseModel):
     name: str
     version: str
     path: str
+
+
+class ProjectOpenPathRequest(BaseModel):
+    path: str = Field(default="")

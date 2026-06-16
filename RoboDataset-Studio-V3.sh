@@ -4,11 +4,28 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${ROOT_DIR}"
 
-if [[ -z "${PYTHON_BIN:-}" && -x "${ROOT_DIR}/.venv/bin/python" ]]; then
-  PYTHON_BIN="${ROOT_DIR}/.venv/bin/python"
-else
-  PYTHON_BIN="${PYTHON_BIN:-python3}"
-fi
-export PYTHONPATH="${ROOT_DIR}/src:${PYTHONPATH:-}"
+ENV_FILE="${ROOT_DIR}/.robodataset_env"
+NEEDS_BOOTSTRAP=0
 
-exec "${PYTHON_BIN}" -m robodataset_studio_v3.frontend.main
+if [[ ! -f "${ENV_FILE}" ]]; then
+  NEEDS_BOOTSTRAP=1
+else
+  # shellcheck disable=SC1090
+  source "${ENV_FILE}"
+  if [[ -z "${ENV_COMMAND:-}" || ! -x "${ENV_COMMAND}" ]]; then
+    NEEDS_BOOTSTRAP=1
+  elif ! "${ENV_PYTHON:-${ROOT_DIR}/.venv/bin/python}" - <<'PY' >/dev/null 2>&1
+import importlib
+for name in ["PySide6", "fastapi", "uvicorn", "numpy", "h5py", "yaml", "httpx"]:
+    importlib.import_module(name)
+PY
+  then
+    NEEDS_BOOTSTRAP=1
+  fi
+fi
+
+if [[ "${NEEDS_BOOTSTRAP}" == "1" ]]; then
+  "${ROOT_DIR}/scripts/bootstrap.sh"
+fi
+
+exec "${ROOT_DIR}/scripts/run_app.sh" "$@"

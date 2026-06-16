@@ -52,8 +52,14 @@ class ApiClient:
             return []
         return [ProjectSummary(**item) for item in data if isinstance(item, dict)]
 
-    def create_project(self, *, name: str, version: str, operator: str = "", notes: str = "") -> ProjectSummary:
-        payload = {"name": name, "version": version, "operator": operator, "notes": notes}
+    def open_project_path(self, path: str) -> ProjectSummary:
+        data = self.post("/api/projects/open-path", {"path": path})
+        if not isinstance(data, dict):
+            raise RuntimeError("backend returned invalid project response")
+        return ProjectSummary(**data)
+
+    def create_project(self, *, name: str, version: str, operator: str = "", notes: str = "", root_path: str = "") -> ProjectSummary:
+        payload = {"name": name, "version": version, "operator": operator, "notes": notes, "root_path": root_path}
         with httpx.Client(timeout=5.0) as client:
             response = client.post(f"{self.base_url}/api/projects", json=payload)
             response.raise_for_status()

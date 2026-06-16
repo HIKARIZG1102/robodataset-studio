@@ -20,51 +20,78 @@ rsync upload, remote verification, and OpenAI-compatible AI calls.
 Some UI surfaces are still intentionally simple and will be refined after the
 backend migration is fully validated on the robot.
 
-## Install
+## Install And Start
 
-From this directory:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-```
-
-For ROS recording, run in an environment where ROS2 and the robot/camera
-workspaces are already sourced, for example:
-
-```bash
-source /opt/ros/humble/setup.bash
-# source your robot workspace install/setup.bash if needed
-```
-
-Optional system tools:
-
-```bash
-sudo apt install rsync openssh-client
-```
-
-## Run
-
-Install dependencies in a project-local environment, then run:
+The recommended path is the project launcher. It uses the same environment
+selection style as V2:
 
 ```bash
 ./RoboDataset-Studio-V3.sh
 ```
 
+On first run, or when required Python packages are missing, the launcher calls:
+
+```bash
+scripts/bootstrap.sh
+```
+
+Bootstrap creates a project-local Python environment and installs V3 in editable
+mode. By default it tries `.venv` first and falls back to `.conda-env` if venv
+creation is not available.
+
+```bash
+ENV_BACKEND=auto ./scripts/bootstrap.sh   # default: try venv, then conda
+ENV_BACKEND=venv ./scripts/bootstrap.sh   # force .venv
+ENV_BACKEND=conda ./scripts/bootstrap.sh  # force .conda-env
+PYTHON_BIN=/usr/bin/python3.10 ./scripts/bootstrap.sh
+```
+
+The selected environment is recorded in:
+
+```text
+.robodataset_env
+```
+
+That file is local machine state and should not be committed. It stores only
+the selected environment command and ROS setup path, not project data.
+
+After bootstrap, start the app with either command:
+
+```bash
+./RoboDataset-Studio-V3.sh
+./scripts/run_app.sh
+```
+
+`run_app.sh` sources `/opt/ros/humble/setup.bash` when available and exports
+`RMW_IMPLEMENTATION=rmw_cyclonedds_cpp` by default. Override these when needed:
+
+```bash
+ROS_SETUP=/path/to/install/setup.bash ./RoboDataset-Studio-V3.sh
+ROBODATASET_RMW_IMPLEMENTATION=rmw_fastrtps_cpp ./RoboDataset-Studio-V3.sh
+```
+
+For ROS recording, launch the app from an environment where the robot/camera
+workspaces are available, or set `ROS_SETUP` to the correct setup script.
+
+Optional system tools for upload:
+
+```bash
+sudo apt install rsync openssh-client
+```
+
+## Backend Startup
+
 The PySide frontend checks `http://127.0.0.1:8765/api/health` on startup. If
 the backend is not running, it starts a local FastAPI process automatically. If
 port `8765` is occupied, the frontend tries the next local ports.
 
-Or run backend/frontend separately:
+Backend auto-start logs are written under:
 
-```bash
-python -m robodataset_studio_v3.backend.main
-python -m robodataset_studio_v3.frontend.main
+```text
+/tmp/robodataset_studio_v3_backend_<port>.log
 ```
 
-If using the project-local virtual environment directly:
+For debugging, run backend/frontend separately:
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m robodataset_studio_v3.backend.main
@@ -79,8 +106,7 @@ curl http://127.0.0.1:8765/api/health
 ```
 
 If the frontend reports that the backend did not become healthy, check the log
-path shown in the error dialog. Backend auto-start logs are written under
-`/tmp/robodataset_studio_v3_backend_<port>.log`.
+path shown in the error dialog.
 
 AI calls use OpenAI-compatible endpoints. The API key is read from:
 
@@ -121,6 +147,10 @@ robodataset/
 
 Absolute paths may still be supported later when operators intentionally choose
 an external disk or shared dataset mount.
+
+When creating a project, the project root defaults to the relative path
+`robodataset/projects`. Operators can Browse to an external disk when they want
+the project data outside the repository.
 
 ## UI Direction
 

@@ -9,13 +9,13 @@ import yaml
 
 from robodataset_studio_v3.ros.episode_recorder import RosEpisodeRecorder
 from robodataset_studio_v3.services.config_service import ConfigService
-from robodataset_studio_v3.services.project_service import ProjectService
+from robodataset_studio_v3.services.project_service import project_service
 from robodataset_studio_v3.services.task_service import task_service
 
 
 class RecordingService:
     def __init__(self) -> None:
-        self.projects = ProjectService()
+        self.projects = project_service
         self.configs = ConfigService()
         self.active: dict[str, dict[str, Any]] = {}
         self.recorder = RosEpisodeRecorder()

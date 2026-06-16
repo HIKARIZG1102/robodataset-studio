@@ -82,6 +82,11 @@ class MainWindow(QMainWindow):
         tools_menu.addSeparator()
         tools_menu.addAction("Toggle Inspector", self.toggle_inspector)
 
+        inspector_menu = self.menuBar().addMenu("Inspector")
+        inspector_menu.addAction("Show / Hide Inspector", self.toggle_inspector)
+        inspector_menu.addAction("Topic Inspector", self.show_topic_inspector)
+        inspector_menu.addAction("Image Monitor", self.show_image_monitor)
+
         settings_menu = self.menuBar().addMenu("Settings")
         settings_menu.addAction("Settings", lambda: self.open_action_tab("settings"))
 
@@ -105,6 +110,7 @@ class MainWindow(QMainWindow):
                 name=dialog.name.text().strip(),
                 version=dialog.version.text().strip(),
                 operator=dialog.operator.text().strip(),
+                root_path=dialog.root_path.text().strip(),
             )
         except Exception as exc:
             QMessageBox.warning(self, "New Project", f"Cannot create project:\n{exc}")
@@ -128,6 +134,12 @@ class MainWindow(QMainWindow):
         if selected is None:
             QMessageBox.information(self, "Open Project", "Select a project first.")
             return
+        if dialog.browsed_project is not None:
+            try:
+                selected = self.api.open_project_path(dialog.browsed_project.path)
+            except Exception as exc:
+                QMessageBox.warning(self, "Open Project", f"Cannot open project folder:\n{exc}")
+                return
         self.current_project = selected
         self._load_project_workspace()
 
@@ -218,6 +230,14 @@ class MainWindow(QMainWindow):
 
     def toggle_inspector(self) -> None:
         self.inspector_dock.setVisible(not self.inspector_dock.isVisible())
+
+    def show_topic_inspector(self) -> None:
+        self.inspector.show_topic()
+        self.inspector_dock.show()
+
+    def show_image_monitor(self) -> None:
+        self.inspector.show_image()
+        self.inspector_dock.show()
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
         self.backend.stop()

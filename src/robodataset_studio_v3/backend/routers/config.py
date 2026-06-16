@@ -11,11 +11,11 @@ from robodataset_studio_v3.models.config import (
     ProjectConfigDraft,
 )
 from robodataset_studio_v3.services.config_service import ConfigService
-from robodataset_studio_v3.services.project_service import ProjectService
+from robodataset_studio_v3.services.project_service import project_service
 
 router = APIRouter()
 service = ConfigService()
-projects = ProjectService()
+projects = project_service
 
 
 @router.post("/preview", response_model=ConfigPreview)

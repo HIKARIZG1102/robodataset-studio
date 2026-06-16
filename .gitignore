@@ -1,5 +1,6 @@
 .venv/
 .conda-env/
+.robodataset_env
 __pycache__/
 *.py[cod]
 .pytest_cache/
