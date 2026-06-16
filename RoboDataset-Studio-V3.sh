@@ -12,12 +12,20 @@ if [[ ! -f "${ENV_FILE}" ]]; then
 else
   # shellcheck disable=SC1090
   source "${ENV_FILE}"
-  if [[ -z "${ENV_COMMAND:-}" || ! -x "${ENV_COMMAND}" ]]; then
+  if [[ -z "${ENV_PYTHON:-}" || ! -x "${ENV_PYTHON}" ]]; then
     NEEDS_BOOTSTRAP=1
   elif ! "${ENV_PYTHON:-${ROOT_DIR}/.venv/bin/python}" - <<'PY' >/dev/null 2>&1
+import sys
+raise SystemExit(0 if sys.version_info[:2] == (3, 10) else 1)
+PY
+  then
+    echo "Existing RoboDataset Studio V3 environment is not Python 3.10; rebuilding."
+    NEEDS_BOOTSTRAP=1
+  elif ! PYTHONPATH="${ROOT_DIR}/src:${PYTHONPATH:-}" "${ENV_PYTHON:-${ROOT_DIR}/.venv/bin/python}" - <<'PY' >/dev/null 2>&1
 import importlib
 for name in ["PySide6", "fastapi", "uvicorn", "numpy", "h5py", "yaml", "httpx"]:
     importlib.import_module(name)
+importlib.import_module("robodataset_studio_v3.frontend.main")
 PY
   then
     NEEDS_BOOTSTRAP=1

@@ -35,9 +35,14 @@ On first run, or when required Python packages are missing, the launcher calls:
 scripts/bootstrap.sh
 ```
 
-Bootstrap creates a project-local Python environment and installs V3 in editable
-mode. By default it tries `.venv` first and falls back to `.conda-env` if venv
-creation is not available.
+Bootstrap creates a project-local Python 3.10 environment and installs V3 in
+editable mode. Python 3.10 is required because ROS Humble Python packages such
+as `rclpy` and `sensor_msgs` are installed for the system Python 3.10 ABI. Do
+not run the app from a conda/base Python 3.13 environment.
+
+By default bootstrap tries `.venv` first and falls back to `.conda-env` if venv
+creation is not available. If an existing V3 environment is not Python 3.10, the
+launcher marks it invalid and bootstrap rebuilds it.
 
 ```bash
 ENV_BACKEND=auto ./scripts/bootstrap.sh   # default: try venv, then conda

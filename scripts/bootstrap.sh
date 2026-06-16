@@ -14,14 +14,18 @@ python_version() {
   "$1" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")'
 }
 
+check_pip() {
+  "$1" -c 'import pip' >/dev/null 2>&1
+}
+
 check_python() {
   local python_path="$1"
   local version
   version="$(python_version "${python_path}")"
   case "${version}" in
-    3.10|3.11|3.12|3.13) return 0 ;;
+    3.10) return 0 ;;
     *)
-      echo "Python >=3.10 is required; got ${version} from ${python_path}." >&2
+      echo "Python 3.10 is required for ROS Humble compatibility; got ${version} from ${python_path}." >&2
       return 1
       ;;
   esac
@@ -59,17 +63,29 @@ create_venv() {
     return 1
   fi
   check_python "${PYTHON_BIN}" || return 1
+  if [[ -x "${VENV_DIR}/bin/python" ]] && ! check_python "${VENV_DIR}/bin/python"; then
+    echo "Existing venv is not Python 3.10; rebuilding ${VENV_DIR}." >&2
+    rm -rf "${VENV_DIR}"
+  fi
   if [[ ! -d "${VENV_DIR}" ]]; then
-    "${PYTHON_BIN}" -m venv "${VENV_DIR}" || {
+    "${PYTHON_BIN}" -m venv --system-site-packages "${VENV_DIR}" || "${PYTHON_BIN}" -m venv --system-site-packages --without-pip "${VENV_DIR}" || {
       echo "Failed to create venv with ${PYTHON_BIN}." >&2
       if command -v sudo >/dev/null 2>&1 && install_python_venv_package; then
-        "${PYTHON_BIN}" -m venv "${VENV_DIR}" || return 1
+        "${PYTHON_BIN}" -m venv --system-site-packages "${VENV_DIR}" || return 1
       else
+        rm -rf "${VENV_DIR}"
+        echo "Install python3.10-venv, then rerun: ENV_BACKEND=venv PYTHON_BIN=/usr/bin/python3.10 ./scripts/bootstrap.sh" >&2
         return 1
       fi
     }
   fi
   ENV_PYTHON="${VENV_DIR}/bin/python"
+  if ! check_pip "${ENV_PYTHON}"; then
+    echo "Python 3.10 venv exists but pip is unavailable: ${VENV_DIR}" >&2
+    rm -rf "${VENV_DIR}"
+    echo "Install python3.10-venv for venv mode, or use ENV_BACKEND=conda." >&2
+    return 1
+  fi
   ENV_COMMAND="${VENV_DIR}/bin/robodataset-studio-v3"
   ENV_KIND="venv"
 }
@@ -85,6 +101,11 @@ create_conda_env() {
   ENV_PYTHON="${CONDA_ENV_DIR}/bin/python"
   ENV_COMMAND="${CONDA_ENV_DIR}/bin/robodataset-studio-v3"
   ENV_KIND="conda"
+  if ! check_python "${ENV_PYTHON}"; then
+    echo "Existing conda env is not Python 3.10; rebuilding ${CONDA_ENV_DIR}." >&2
+    rm -rf "${CONDA_ENV_DIR}"
+    "${CONDA_EXE}" create -y -p "${CONDA_ENV_DIR}" python=3.10 pip
+  fi
   check_python "${ENV_PYTHON}" || return 1
 }
 
@@ -107,7 +128,7 @@ case "${ENV_BACKEND}" in
     ;;
 esac
 
-"${ENV_PYTHON}" -m pip install --upgrade pip setuptools wheel || true
+"${ENV_PYTHON}" -m pip install setuptools wheel || true
 if ! "${ENV_PYTHON}" -m pip install -e "${ROOT_DIR}[dev,upload]"; then
   echo "Editable install failed, retrying without build isolation." >&2
   "${ENV_PYTHON}" -m pip install --no-build-isolation -e "${ROOT_DIR}[dev,upload]"
