@@ -14,6 +14,10 @@ class TopicRequest(BaseModel):
     topic: str
 
 
+class NodeRequest(BaseModel):
+    node: str
+
+
 @router.get("/graph", response_model=dict[str, Any])
 def graph() -> dict[str, Any]:
     return ros_service.graph()
@@ -32,6 +36,21 @@ def topic_echo_once(request: TopicRequest) -> dict[str, Any]:
 @router.post("/topic-hz", response_model=dict[str, Any])
 def topic_hz(request: TopicRequest) -> dict[str, Any]:
     return ros_service.topic_hz(request.topic)
+
+
+@router.post("/image-snapshot", response_model=dict[str, Any])
+def image_snapshot(request: TopicRequest) -> dict[str, Any]:
+    return ros_service.image_snapshot(request.topic)
+
+
+@router.post("/node-info", response_model=dict[str, Any])
+def node_info(request: NodeRequest) -> dict[str, Any]:
+    return ros_service.node_info(request.node)
+
+
+@router.post("/node-details", response_model=dict[str, Any])
+def node_details(request: NodeRequest) -> dict[str, Any]:
+    return ros_service.node_details(request.node)
 
 
 @router.post("/check", response_model=dict[str, Any])

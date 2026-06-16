@@ -41,7 +41,7 @@ class MainWindow(QMainWindow):
         self.workspace = QTabWidget()
         self.empty = self._empty_workspace()
         self.setCentralWidget(self.empty)
-        self.inspector = InspectorDock()
+        self.inspector = InspectorDock(self.api)
         self.inspector_dock = QDockWidget("Inspector", self)
         self.inspector_dock.setWidget(self.inspector)
         self.addDockWidget(Qt.RightDockWidgetArea, self.inspector_dock)
@@ -147,6 +147,8 @@ class MainWindow(QMainWindow):
         if self.current_project is None:
             return
         self.workspace = QTabWidget()
+        self.workspace.setTabsClosable(True)
+        self.workspace.tabCloseRequested.connect(self.close_workspace_tab)
         self.open_tabs = {}
         for tab_id in ["collect", "review", "convert", "upload", "logs"]:
             self._add_action_tab(tab_id, switch=False)
@@ -223,6 +225,8 @@ class MainWindow(QMainWindow):
     def _ensure_workspace(self, *, allow_empty: bool = False) -> None:
         if self.current_project is None and allow_empty and self.centralWidget() is self.empty:
             self.workspace = QTabWidget()
+            self.workspace.setTabsClosable(True)
+            self.workspace.tabCloseRequested.connect(self.close_workspace_tab)
             self.open_tabs = {}
             self.setCentralWidget(self.workspace)
         if self.centralWidget() is not self.workspace:
@@ -238,6 +242,15 @@ class MainWindow(QMainWindow):
     def show_image_monitor(self) -> None:
         self.inspector.show_image()
         self.inspector_dock.show()
+
+    def close_workspace_tab(self, index: int) -> None:
+        widget = self.workspace.widget(index)
+        for tab_id, tab_widget in list(self.open_tabs.items()):
+            if tab_widget is widget:
+                self.open_tabs.pop(tab_id, None)
+                break
+        self.workspace.removeTab(index)
+        widget.deleteLater()
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
         self.backend.stop()
