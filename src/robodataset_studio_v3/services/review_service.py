@@ -5,10 +5,14 @@ from typing import Any
 
 import yaml
 
+from robodataset_studio_v3.dataset.validator import DatasetValidator
 from robodataset_studio_v3.services.task_service import task_service
 
 
 class ReviewService:
+    def __init__(self) -> None:
+        self.validator = DatasetValidator()
+
     def scan_session(self, session_dir: str) -> dict[str, Any]:
         root = Path(session_dir).expanduser()
         training = root / "training"
@@ -24,20 +28,16 @@ class ReviewService:
         return {"task_id": task.task_id, "result": result}
 
     def check_session(self, session_dir: str) -> dict[str, Any]:
-        scan = self.scan_session(session_dir)["result"]
-        issues = []
-        valid = 0
-        for episode in scan["episodes"]:
-            episode_path = Path(episode)
-            episode_issues = self._check_npz(episode_path)
-            if episode_issues:
-                issues.append({"episode": str(episode_path), "issues": episode_issues})
-            else:
-                valid += 1
+        root = Path(session_dir).expanduser()
+        config = self._load_session_config(root)
+        rows = self.validator.scan_npz(root / "training", config)
+        report = self.validator.quality_report(rows, self._load_marks(root))
+        issues = [row for row in rows if row.get("status") != "ok"]
         result = {
-            "total": scan["episode_count"],
-            "valid": valid,
-            "invalid": len(issues),
+            "total": report["total"],
+            "valid": report["by_status"]["ok"],
+            "invalid": report["by_status"]["warning"] + report["by_status"]["error"],
+            "summary": report,
             "issues": issues,
         }
         task = task_service.run_instant("review_check", f"checked session {session_dir}", result)
@@ -56,30 +56,15 @@ class ReviewService:
 
     def check_hdf5(self, hdf5_path: str) -> dict[str, Any]:
         path = Path(hdf5_path).expanduser()
-        if not path.exists():
-            result = {"path": str(path), "ok": False, "error": "file not found"}
-        else:
-            try:
-                import h5py
-
-                with h5py.File(path, "r") as handle:
-                    keys = list(handle.keys())
-                result = {"path": str(path), "ok": True, "keys": keys, "total": len(keys), "valid": len(keys), "invalid": 0}
-            except Exception as exc:
-                result = {"path": str(path), "ok": False, "error": str(exc)}
+        rows = self.validator.check_hdf5(path)
+        result = {"path": str(path), "rows": rows, "summary_text": self.validator.hdf5_check_summary(path, rows)}
         task = task_service.run_instant("hdf5_check", f"checked HDF5 {path}", result)
         return {"task_id": task.task_id, "result": result}
 
     def check_layout(self, folder: str) -> dict[str, Any]:
         root = Path(folder).expanduser()
-        result = {
-            "folder": str(root),
-            "exists": root.exists(),
-            "has_training": (root / "training").exists(),
-            "has_dataset_config": (root / "dataset_config.yaml").exists() or (root / "collection_config.yaml").exists(),
-            "episode_count": len(list((root / "training").glob("episode_*.npz"))) if (root / "training").exists() else 0,
-        }
-        result["ok"] = result["exists"] and result["has_training"] and result["episode_count"] > 0
+        rows = self.validator.check_calvin_layout(root)
+        result = {"folder": str(root), "rows": rows, "ok": all(str(row.get("status")) != "error" for row in rows)}
         task = task_service.run_instant("layout_check", f"checked layout {root}", result)
         return {"task_id": task.task_id, "result": result}
 
@@ -100,6 +85,21 @@ class ReviewService:
         except Exception as exc:
             issues.append(f"cannot read npz: {exc}")
         return issues
+
+    def _load_session_config(self, root: Path) -> dict[str, Any]:
+        for name in ("dataset_config.yaml", "collection_config.yaml"):
+            path = root / name
+            if path.exists():
+                data = yaml.safe_load(path.read_text(encoding="utf-8"))
+                return data if isinstance(data, dict) else {}
+        return {}
+
+    def _load_marks(self, root: Path) -> dict[str, str]:
+        path = root / "review" / "review_marks.yaml"
+        if not path.exists():
+            return {}
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        return {str(key): str(value) for key, value in data.items()} if isinstance(data, dict) else {}
 
 
 review_service = ReviewService()

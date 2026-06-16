@@ -10,9 +10,11 @@ class AiPage(BasePage):
     def __init__(self, api: ApiClient, project: ProjectSummary | None = None) -> None:
         super().__init__("AI Assist", api, project)
         self.base_url = QLineEdit()
+        self.model = QLineEdit()
         self.prompt = QLineEdit()
         form = QFormLayout()
         form.addRow("Base URL", self.base_url)
+        form.addRow("Model", self.model)
         form.addRow("Prompt", self.prompt)
         buttons = QHBoxLayout()
         for label, handler in [
@@ -44,7 +46,16 @@ class AiPage(BasePage):
         self._post("/api/ai/review-prompt", {"review_summary": {}}, "Review prompt generated")
 
     def send(self) -> None:
-        self._post("/api/ai/send", {"prompt": self.prompt.text().strip(), "kind": "ai"}, "AI request prepared")
+        self._post(
+            "/api/ai/send",
+            {
+                "prompt": self.prompt.text().strip(),
+                "kind": "ai",
+                "base_url": self.base_url.text().strip(),
+                "model": self.model.text().strip(),
+            },
+            "AI request complete",
+        )
 
     def _post(self, path: str, payload: dict, status: str) -> None:
         try:

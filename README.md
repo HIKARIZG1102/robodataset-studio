@@ -11,10 +11,39 @@ RoboDataset Studio V3 is a fresh project for the next architecture:
 
 ## Current Scope
 
-This repository is currently a skeleton. It defines the intended package
-layout, API boundaries, UI shell, project storage layout, and configuration
-schema direction. Real ROS2 recording, review, conversion, upload, and AI
-features should be migrated incrementally from the legacy project.
+V3 now has a runnable PySide frontend, local FastAPI backend, project/config
+storage, ROS inspection, recording, review, conversion, upload, AI, settings,
+and task APIs. The backend has started migrating the validated V2 production
+logic for CALVIN review, NPZ merge, HDF5 conversion, ROS listener recording,
+rsync upload, remote verification, and OpenAI-compatible AI calls.
+
+Some UI surfaces are still intentionally simple and will be refined after the
+backend migration is fully validated on the robot.
+
+## Install
+
+From this directory:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+For ROS recording, run in an environment where ROS2 and the robot/camera
+workspaces are already sourced, for example:
+
+```bash
+source /opt/ros/humble/setup.bash
+# source your robot workspace install/setup.bash if needed
+```
+
+Optional system tools:
+
+```bash
+sudo apt install rsync openssh-client
+```
 
 ## Run
 
@@ -34,6 +63,21 @@ Or run backend/frontend separately:
 python -m robodataset_studio_v3.backend.main
 python -m robodataset_studio_v3.frontend.main
 ```
+
+If using the project-local virtual environment directly:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m robodataset_studio_v3.backend.main
+PYTHONPATH=src .venv/bin/python -m robodataset_studio_v3.frontend.main
+```
+
+AI calls use OpenAI-compatible endpoints. The API key is read from:
+
+```bash
+export ROBOT_DATA_AI_API_KEY=...
+```
+
+The key is not written to project_config.yaml or dataset_config.yaml.
 
 ## Architecture
 
@@ -57,11 +101,11 @@ robodataset/
   projects/
     catch_the_satellite_v1/
       project.yaml
-      collection_config.yaml
+      project_config.yaml
+      dataset_config.yaml
       raw_sessions/
       review/
       exports/
-  app_state/
 ```
 
 Absolute paths may still be supported later when operators intentionally choose

@@ -26,6 +26,8 @@ class ModelsRequest(BaseModel):
 class SendRequest(BaseModel):
     prompt: str
     kind: str = "ai"
+    base_url: str = ""
+    model: str = ""
 
 
 @router.post("/config-prompt", response_model=dict[str, Any])
@@ -45,4 +47,4 @@ def models(request: ModelsRequest) -> dict[str, Any]:
 
 @router.post("/send", response_model=dict[str, Any])
 def send(request: SendRequest) -> dict[str, Any]:
-    return ai_service.send(request.prompt, request.kind)
+    return ai_service.send(request.prompt, request.kind, request.base_url, request.model)
