@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from robodataset_studio_v3.models.project import ProjectCreateRequest, ProjectSummary
 from robodataset_studio_v3.services.project_service import ProjectService
@@ -16,4 +16,7 @@ def list_projects() -> list[ProjectSummary]:
 
 @router.post("", response_model=ProjectSummary)
 def create_project(request: ProjectCreateRequest) -> ProjectSummary:
-    return service.create_project(request)
+    try:
+        return service.create_project(request)
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

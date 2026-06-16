@@ -7,6 +7,7 @@ class ProjectCreateRequest(BaseModel):
     name: str = Field(default="")
     version: str = Field(default="v1")
     operator: str = Field(default="")
+    notes: str = Field(default="")
 
 
 class ProjectSummary(BaseModel):

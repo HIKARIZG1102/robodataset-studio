@@ -25,6 +25,24 @@ class ApiClient:
             data = response.json()
         return data if isinstance(data, dict) else {}
 
+    def get(self, path: str, *, timeout: float = 10.0) -> Any:
+        with httpx.Client(timeout=timeout) as client:
+            response = client.get(f"{self.base_url}{path}")
+            response.raise_for_status()
+            return response.json()
+
+    def post(self, path: str, payload: dict[str, Any] | None = None, *, timeout: float = 20.0) -> Any:
+        with httpx.Client(timeout=timeout) as client:
+            response = client.post(f"{self.base_url}{path}", json=payload or {})
+            response.raise_for_status()
+            return response.json()
+
+    def put(self, path: str, payload: dict[str, Any], *, timeout: float = 20.0) -> Any:
+        with httpx.Client(timeout=timeout) as client:
+            response = client.put(f"{self.base_url}{path}", json=payload)
+            response.raise_for_status()
+            return response.json()
+
     def list_projects(self) -> list[ProjectSummary]:
         with httpx.Client(timeout=5.0) as client:
             response = client.get(f"{self.base_url}/api/projects")
@@ -34,8 +52,8 @@ class ApiClient:
             return []
         return [ProjectSummary(**item) for item in data if isinstance(item, dict)]
 
-    def create_project(self, *, name: str, version: str, operator: str = "") -> ProjectSummary:
-        payload = {"name": name, "version": version, "operator": operator}
+    def create_project(self, *, name: str, version: str, operator: str = "", notes: str = "") -> ProjectSummary:
+        payload = {"name": name, "version": version, "operator": operator, "notes": notes}
         with httpx.Client(timeout=5.0) as client:
             response = client.post(f"{self.base_url}/api/projects", json=payload)
             response.raise_for_status()
@@ -43,3 +61,21 @@ class ApiClient:
         if not isinstance(data, dict):
             raise RuntimeError("backend returned invalid project response")
         return ProjectSummary(**data)
+
+    def get_project_config(self, project_key: str) -> dict[str, Any]:
+        with httpx.Client(timeout=5.0) as client:
+            response = client.get(f"{self.base_url}/api/config/project/{project_key}")
+            response.raise_for_status()
+            data = response.json()
+        return data if isinstance(data, dict) else {}
+
+    def get_dataset_config(self, project_key: str) -> dict[str, Any]:
+        with httpx.Client(timeout=5.0) as client:
+            response = client.get(f"{self.base_url}/api/config/dataset/{project_key}")
+            response.raise_for_status()
+            data = response.json()
+        return data if isinstance(data, dict) else {}
+
+    def list_tasks(self) -> list[dict[str, Any]]:
+        data = self.get("/api/tasks")
+        return data if isinstance(data, list) else []

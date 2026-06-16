@@ -1,0 +1,57 @@
+from __future__ import annotations
+
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from robodataset_studio_v3.services.config_service import ConfigService
+from robodataset_studio_v3.services.project_service import ProjectService
+from robodataset_studio_v3.services.task_service import task_service
+
+
+class RecordingService:
+    def __init__(self) -> None:
+        self.projects = ProjectService()
+        self.configs = ConfigService()
+        self.active: dict[str, dict[str, Any]] = {}
+
+    def preflight(self, project_key: str) -> dict[str, Any]:
+        dataset_config = self.configs.read_dataset_config(self.projects.project_dir(project_key))
+        streams = dataset_config.get("streams", [])
+        state_keys = dataset_config.get("state", {}).get("keys", [])
+        warnings = []
+        if not streams:
+            warnings.append("no streams configured")
+        if not state_keys:
+            warnings.append("no state keys configured")
+        result = {"project_key": project_key, "streams": len(streams), "state_keys": len(state_keys), "warnings": warnings}
+        task = task_service.run_instant("recording_preflight", f"preflight for {project_key}", result)
+        return {"task_id": task.task_id, "result": result}
+
+    def start(self, project_key: str, mode: str = "manual") -> dict[str, Any]:
+        project_dir = self.projects.project_dir(project_key)
+        dataset_config = self.configs.read_dataset_config(project_dir)
+        session_name = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        session_dir = project_dir / "raw_sessions" / session_name
+        training_dir = session_dir / "training"
+        training_dir.mkdir(parents=True, exist_ok=True)
+        payload = yaml.safe_dump(dataset_config, sort_keys=False, allow_unicode=True)
+        (session_dir / "dataset_config.yaml").write_text(payload, encoding="utf-8")
+        (session_dir / "collection_config.yaml").write_text(payload, encoding="utf-8")
+        task = task_service.create_task("recording", f"recording started for {project_key}")
+        self.active[project_key] = {"task_id": task.task_id, "session_dir": str(session_dir), "mode": mode}
+        task_service.add_log(task.task_id, f"session: {session_dir}")
+        return {"task_id": task.task_id, "session_dir": str(session_dir), "mode": mode}
+
+    def stop(self, project_key: str) -> dict[str, Any]:
+        state = self.active.pop(project_key, None)
+        if state is None:
+            task = task_service.run_instant("recording_stop", f"no active recording for {project_key}", {"active": False})
+            return {"task_id": task.task_id, "active": False}
+        task = task_service.complete_task(state["task_id"], message="recording stopped", result=state)
+        return {"task_id": task.task_id, "active": False, "session_dir": state["session_dir"]}
+
+
+recording_service = RecordingService()
