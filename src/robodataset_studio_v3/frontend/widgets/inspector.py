@@ -43,6 +43,7 @@ class InspectorDock(QWidget):
         self.image_label.setMinimumHeight(220)
         self.image_label.setStyleSheet("border: 1px solid #999;")
         self._topic_types: dict[str, str] = {}
+        self._workers: list[ApiWorker] = []
         self._build()
 
     def _build(self) -> None:
@@ -106,9 +107,7 @@ class InspectorDock(QWidget):
 
     def refresh_graph(self) -> None:
         self.topic_log.appendPlainText("refreshing ROS graph...")
-        worker = ApiWorker(self.api.get, "/api/ros/graph", timeout=12.0)
-        worker.signals.finished.connect(self._finish_graph)
-        self.pool.start(worker)
+        self._start_worker(self.api.get, self._finish_graph, "/api/ros/graph", timeout=12.0)
 
     def _finish_graph(self, result: object, error: object) -> None:
         if error is not None:
@@ -144,9 +143,13 @@ class InspectorDock(QWidget):
             self.node_log.appendPlainText("choose a node first")
             return
         self.node_log.appendPlainText(f"$ node-details {node}")
-        worker = ApiWorker(self.api.post, "/api/ros/node-details", {"node": node}, timeout=14.0)
-        worker.signals.finished.connect(lambda result, error: self._finish_text(self.node_log, result, error))
-        self.pool.start(worker)
+        self._start_worker(
+            self.api.post,
+            lambda result, error: self._finish_text(self.node_log, result, error),
+            "/api/ros/node-details",
+            {"node": node},
+            timeout=14.0,
+        )
 
     def topic_action(self, path: str) -> None:
         topic = self.topic.currentText().strip()
@@ -154,9 +157,13 @@ class InspectorDock(QWidget):
             self.topic_log.appendPlainText("choose a topic first")
             return
         self.topic_log.appendPlainText(f"$ {path.rsplit('/', 1)[-1]} {topic}")
-        worker = ApiWorker(self.api.post, path, {"topic": topic}, timeout=14.0)
-        worker.signals.finished.connect(lambda result, error: self._finish_text(self.topic_log, result, error))
-        self.pool.start(worker)
+        self._start_worker(
+            self.api.post,
+            lambda result, error: self._finish_text(self.topic_log, result, error),
+            path,
+            {"topic": topic},
+            timeout=14.0,
+        )
 
     def image_snapshot(self) -> None:
         topic = self.image_topic.currentText().strip()
@@ -164,8 +171,20 @@ class InspectorDock(QWidget):
             self.image_meta.setText("image: choose an image topic first")
             return
         self.image_meta.setText(f"image: waiting for {topic}")
-        worker = ApiWorker(self.api.post, "/api/ros/image-snapshot", {"topic": topic}, timeout=8.0)
-        worker.signals.finished.connect(self._finish_image_snapshot)
+        self._start_worker(self.api.post, self._finish_image_snapshot, "/api/ros/image-snapshot", {"topic": topic}, timeout=8.0)
+
+    def _start_worker(self, fn, callback, *args, **kwargs) -> None:
+        worker = ApiWorker(fn, *args, **kwargs)
+        self._workers.append(worker)
+
+        def finish(result: object, error: object, item: ApiWorker = worker) -> None:
+            try:
+                callback(result, error)
+            finally:
+                if item in self._workers:
+                    self._workers.remove(item)
+
+        worker.signals.finished.connect(finish, Qt.QueuedConnection)
         self.pool.start(worker)
 
     def _finish_text(self, output: QPlainTextEdit, result: object, error: object) -> None:
@@ -194,3 +213,6 @@ class InspectorDock(QWidget):
 
     def show_image(self) -> None:
         self.tabs.setCurrentIndex(1)
+
+    def stop_workers(self) -> None:
+        self._workers.clear()

@@ -36,6 +36,7 @@ class RosPage(BasePage):
         self.topic_table.setWordWrap(False)
         self.topic_table.itemChanged.connect(self._selected_topics_changed)
         self.selection_status = QLabel("selected topics: 0")
+        self._workers: list[ApiWorker] = []
         self._build_page()
 
     def _build_page(self) -> None:
@@ -67,9 +68,7 @@ class RosPage(BasePage):
 
     def graph(self) -> None:
         self.status.setText("Refreshing ROS graph...")
-        worker = ApiWorker(self.api.get, "/api/ros/graph", timeout=12.0)
-        worker.signals.finished.connect(self._finish_graph)
-        self.pool.start(worker)
+        self._start_worker(self.api.get, self._finish_graph, "/api/ros/graph", timeout=12.0)
 
     def _finish_graph(self, result: object, error: object) -> None:
         if error is not None:
@@ -226,15 +225,33 @@ class RosPage(BasePage):
             QMessageBox.information(self, "Node Details", "Choose or type a node name first.")
             return
         self.status.setText("Loading node details...")
-        worker = ApiWorker(self.api.post, "/api/ros/node-details", {"node": node}, timeout=14.0)
-        worker.signals.finished.connect(lambda result, error: self._finish_probe(result, error, "Node details loaded"))
-        self.pool.start(worker)
+        self._start_worker(
+            self.api.post,
+            lambda result, error: self._finish_probe(result, error, "Node details loaded"),
+            "/api/ros/node-details",
+            {"node": node},
+            timeout=14.0,
+        )
 
     def _finish_probe(self, result: object, error: object, status: str) -> None:
         if error is not None:
             self.show_error(error if isinstance(error, Exception) else Exception(str(error)))
             return
         self.show_result(result, status)
+
+    def _start_worker(self, fn, callback, *args, **kwargs) -> None:
+        worker = ApiWorker(fn, *args, **kwargs)
+        self._workers.append(worker)
+
+        def finish(result: object, error: object, item: ApiWorker = worker) -> None:
+            try:
+                callback(result, error)
+            finally:
+                if item in self._workers:
+                    self._workers.remove(item)
+
+        worker.signals.finished.connect(finish, Qt.QueuedConnection)
+        self.pool.start(worker)
 
     def _readonly_item(self, text: str) -> QTableWidgetItem:
         item = QTableWidgetItem(text)

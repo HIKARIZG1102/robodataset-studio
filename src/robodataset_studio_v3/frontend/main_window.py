@@ -41,11 +41,8 @@ class MainWindow(QMainWindow):
         self.workspace = QTabWidget()
         self.empty = self._empty_workspace()
         self.setCentralWidget(self.empty)
-        self.inspector = InspectorDock(self.api)
-        self.inspector_dock = QDockWidget("Inspector", self)
-        self.inspector_dock.setWidget(self.inspector)
-        self.addDockWidget(Qt.RightDockWidgetArea, self.inspector_dock)
-        self.inspector_dock.hide()
+        self.inspector: InspectorDock | None = None
+        self.inspector_dock: QDockWidget | None = None
         self._build_menu()
         self._ensure_backend()
 
@@ -153,7 +150,6 @@ class MainWindow(QMainWindow):
         for tab_id in ["collect", "review", "convert", "upload", "logs"]:
             self._add_action_tab(tab_id, switch=False)
         self.setCentralWidget(self.workspace)
-        self.inspector_dock.show()
 
     def open_project_config_tab(self) -> None:
         if self.current_project is None:
@@ -233,15 +229,36 @@ class MainWindow(QMainWindow):
             self._load_project_workspace()
 
     def toggle_inspector(self) -> None:
-        self.inspector_dock.setVisible(not self.inspector_dock.isVisible())
+        dock = self._ensure_inspector()
+        dock.setVisible(not dock.isVisible())
 
     def show_topic_inspector(self) -> None:
-        self.inspector.show_topic()
-        self.inspector_dock.show()
+        dock = self._ensure_inspector()
+        if self.inspector is not None:
+            self.inspector.show_topic()
+        dock.show()
 
     def show_image_monitor(self) -> None:
-        self.inspector.show_image()
-        self.inspector_dock.show()
+        dock = self._ensure_inspector()
+        if self.inspector is not None:
+            self.inspector.show_image()
+        dock.show()
+
+    def _ensure_inspector(self) -> QDockWidget:
+        if self.inspector_dock is not None:
+            return self.inspector_dock
+        self.inspector_dock = QDockWidget("Inspector", self)
+        self.inspector_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        try:
+            self.inspector = InspectorDock(self.api)
+            self.inspector_dock.setWidget(self.inspector)
+        except Exception as exc:
+            fallback = QLabel(f"Inspector failed to initialize:\n{exc}")
+            fallback.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+            self.inspector_dock.setWidget(fallback)
+            self.inspector = None
+        self.addDockWidget(Qt.RightDockWidgetArea, self.inspector_dock)
+        return self.inspector_dock
 
     def close_workspace_tab(self, index: int) -> None:
         widget = self.workspace.widget(index)
@@ -253,5 +270,7 @@ class MainWindow(QMainWindow):
         widget.deleteLater()
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if self.inspector is not None:
+            self.inspector.stop_workers()
         self.backend.stop()
         super().closeEvent(event)

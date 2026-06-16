@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from PySide6.QtCore import Qt, QThreadPool
 from PySide6.QtWidgets import QLabel, QPlainTextEdit, QVBoxLayout, QWidget
 
 from robodataset_studio_v3.frontend.api_client import ApiClient, ProjectSummary
+from robodataset_studio_v3.frontend.worker import ApiWorker
 
 
 class BasePage(QWidget):
@@ -13,6 +15,8 @@ class BasePage(QWidget):
         super().__init__()
         self.api = api
         self.project = project
+        self.pool = QThreadPool.globalInstance()
+        self._workers: list[ApiWorker] = []
         self.layout = QVBoxLayout(self)
         self.title = QLabel(title)
         self.output = QPlainTextEdit()
@@ -33,3 +37,23 @@ class BasePage(QWidget):
 
     def project_key(self) -> str:
         return self.project.key if self.project is not None else ""
+
+    def run_async(self, fn, callback, *args, **kwargs) -> None:
+        worker = ApiWorker(fn, *args, **kwargs)
+        self._workers.append(worker)
+
+        def finish(result: object, error: object, item: ApiWorker = worker) -> None:
+            try:
+                callback(result, error)
+            finally:
+                if item in self._workers:
+                    self._workers.remove(item)
+
+        worker.signals.finished.connect(finish, Qt.QueuedConnection)
+        self.pool.start(worker)
+
+    def finish_async_result(self, result: object, error: object, status: str) -> None:
+        if error is not None:
+            self.show_error(error if isinstance(error, Exception) else Exception(str(error)))
+            return
+        self.show_result(result, status)

@@ -12,6 +12,7 @@ class WorkerSignals(QObject):
 class ApiWorker(QRunnable):
     def __init__(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
         super().__init__()
+        self.setAutoDelete(False)
         self.fn = fn
         self.args = args
         self.kwargs = kwargs
