@@ -16,6 +16,8 @@ class ProjectRequest(BaseModel):
 
 class RecordingStartRequest(ProjectRequest):
     mode: str = "manual"
+    duration_sec: float | None = None
+    target_samples: int | None = None
 
 
 @router.post("/preflight", response_model=dict[str, Any])
@@ -25,7 +27,12 @@ def preflight(request: ProjectRequest) -> dict[str, Any]:
 
 @router.post("/start", response_model=dict[str, Any])
 def start(request: RecordingStartRequest) -> dict[str, Any]:
-    return recording_service.start(request.project_key, mode=request.mode)
+    return recording_service.start(
+        request.project_key,
+        mode=request.mode,
+        duration_sec=request.duration_sec,
+        target_samples=request.target_samples,
+    )
 
 
 @router.post("/stop", response_model=dict[str, Any])

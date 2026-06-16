@@ -23,6 +23,12 @@ class ApiWorker(QRunnable):
         try:
             result = self.fn(*self.args, **self.kwargs)
         except Exception as exc:  # pragma: no cover - delivered to UI
-            self.signals.finished.emit(None, exc)
+            try:
+                self.signals.finished.emit(None, exc)
+            except RuntimeError:
+                pass
             return
-        self.signals.finished.emit(result, None)
+        try:
+            self.signals.finished.emit(result, None)
+        except RuntimeError:
+            pass

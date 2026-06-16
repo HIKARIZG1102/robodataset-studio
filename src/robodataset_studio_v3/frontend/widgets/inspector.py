@@ -1,17 +1,23 @@
 from __future__ import annotations
 
-import base64
 import json
+import os
+import threading
+import time
 from typing import Any
+from uuid import uuid4
 
-from PySide6.QtCore import Qt, QThreadPool
-from PySide6.QtGui import QPixmap
+import numpy as np
+from PySide6.QtCore import QProcess, QThread, QTimer, Qt, QThreadPool, Signal, Slot, QObject
+from PySide6.QtGui import QImage, QPainter
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
     QLabel,
     QPlainTextEdit,
     QPushButton,
+    QSizePolicy,
+    QSpinBox,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -19,6 +25,146 @@ from PySide6.QtWidgets import (
 
 from robodataset_studio_v3.frontend.api_client import ApiClient
 from robodataset_studio_v3.frontend.worker import ApiWorker
+from robodataset_studio_v3.ros.image_conversion import image_bytes_to_rgb
+
+
+class ImagePreviewWidget(QWidget):
+    sampled = Signal(int, int, int, int, int)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setMouseTracking(True)
+        self.setMinimumHeight(280)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._frame: np.ndarray | None = None
+        self._image: QImage | None = None
+        self._target_rect: tuple[int, int, int, int] | None = None
+
+    def set_frame(self, frame: np.ndarray) -> None:
+        if frame.ndim != 3 or frame.shape[2] != 3:
+            return
+        contiguous = np.ascontiguousarray(frame)
+        h, w, _ = contiguous.shape
+        image = QImage(contiguous.data, w, h, contiguous.strides[0], QImage.Format_RGB888)
+        self._frame = contiguous.copy()
+        self._image = image.copy()
+        self.update()
+
+    def clear_frame(self) -> None:
+        self._frame = None
+        self._image = None
+        self._target_rect = None
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt API
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), Qt.black)
+        if self._image is None or self._image.isNull():
+            painter.end()
+            return
+        scaled = self._image.scaled(self.size(), Qt.KeepAspectRatio, Qt.FastTransformation)
+        x = int((self.width() - scaled.width()) / 2)
+        y = int((self.height() - scaled.height()) / 2)
+        self._target_rect = (x, y, scaled.width(), scaled.height())
+        painter.drawImage(x, y, scaled)
+        painter.end()
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if self._frame is None or self._target_rect is None:
+            return
+        frame_h, frame_w, _ = self._frame.shape
+        x0, y0, pix_w, pix_h = self._target_rect
+        px = int((event.position().x() - x0) * frame_w / max(pix_w, 1))
+        py = int((event.position().y() - y0) * frame_h / max(pix_h, 1))
+        if 0 <= px < frame_w and 0 <= py < frame_h:
+            r, g, b = [int(v) for v in self._frame[py, px]]
+            self.sampled.emit(px, py, r, g, b)
+
+
+class RosImagePreviewWorker(QObject):
+    status_changed = Signal(str)
+    finished = Signal()
+
+    def __init__(self, topic: str) -> None:
+        super().__init__()
+        self.topic = topic
+        self._running = True
+        self._lock = threading.Lock()
+        self._received = 0
+        self._last_status_at = 0.0
+        self.latest_data: bytes | None = None
+        self.latest_meta: dict[str, Any] = {}
+
+    @Slot()
+    def run(self) -> None:
+        context = None
+        executor = None
+        node = None
+        try:
+            import rclpy
+            from rclpy.executors import SingleThreadedExecutor
+            from rclpy.qos import qos_profile_sensor_data
+            from sensor_msgs.msg import Image
+
+            context = rclpy.Context()
+            rclpy.init(context=context)
+            node = rclpy.create_node(f"robodataset_v3_preview_{uuid4().hex[:8]}", context=context)
+            executor = SingleThreadedExecutor(context=context)
+            executor.add_node(node)
+
+            def on_image(msg: Image) -> None:
+                with self._lock:
+                    self._received += 1
+                    self.latest_data = bytes(msg.data)
+                    self.latest_meta = {
+                        "encoding": str(msg.encoding),
+                        "width": int(msg.width),
+                        "height": int(msg.height),
+                        "step": int(msg.step),
+                        "received": self._received,
+                    }
+                now = time.time()
+                if now - self._last_status_at >= 1.0:
+                    self._last_status_at = now
+                    self.status_changed.emit(f"receiving frames={self.frames_received()} {msg.encoding} {msg.width}x{msg.height}")
+
+            node.create_subscription(Image, self.topic, on_image, qos_profile_sensor_data)
+            self.status_changed.emit(f"subscribed: {self.topic}")
+            while self._running and context.ok():
+                executor.spin_once(timeout_sec=0.1)
+        except Exception as exc:
+            self.status_changed.emit(f"preview error: {exc}")
+        finally:
+            if executor is not None and node is not None:
+                try:
+                    executor.remove_node(node)
+                except Exception:
+                    pass
+            if node is not None:
+                try:
+                    node.destroy_node()
+                except Exception:
+                    pass
+            if context is not None:
+                try:
+                    context.try_shutdown()
+                except Exception:
+                    pass
+            self.finished.emit()
+
+    def stop(self) -> None:
+        self._running = False
+        with self._lock:
+            self.latest_data = None
+            self.latest_meta = {}
+
+    def snapshot(self) -> tuple[bytes | None, dict[str, Any]]:
+        with self._lock:
+            return self.latest_data, dict(self.latest_meta)
+
+    def frames_received(self) -> int:
+        with self._lock:
+            return self._received
 
 
 class InspectorDock(QWidget):
@@ -33,17 +179,39 @@ class InspectorDock(QWidget):
         self.topic.setEditable(True)
         self.image_topic = QComboBox()
         self.image_topic.setEditable(True)
-        self.topic_log = QPlainTextEdit()
-        self.topic_log.setReadOnly(True)
-        self.node_log = QPlainTextEdit()
-        self.node_log.setReadOnly(True)
+        self.type_label = QLabel("type: -")
+        self.image_type_label = QLabel("image type: -")
+        self.node_log = self._terminal()
+        self.echo_log = self._terminal()
+        self.hz_log = self._terminal()
+        self.preview_log = self._terminal()
+        self.frame_stats = self._terminal()
+        self.preview = ImagePreviewWidget()
+        self.preview.sampled.connect(self.update_sample)
+        self.preview_status = QLabel("preview: stopped")
         self.image_meta = QLabel("image: -")
-        self.image_label = QLabel("No image")
-        self.image_label.setAlignment(Qt.AlignCenter)
-        self.image_label.setMinimumHeight(220)
-        self.image_label.setStyleSheet("border: 1px solid #999;")
+        self.preview_fps = QLabel("preview fps: 0.0")
+        self.camera_fps = QLabel("source fps: 0.0")
+        self.sample = QLabel("sample: x=- y=- rgb=(-, -, -)")
+        self.playback_fps = QSpinBox()
+        self.playback_fps.setRange(1, 120)
+        self.playback_fps.setValue(15)
+        self.playback_fps.setSuffix(" fps")
         self._topic_types: dict[str, str] = {}
         self._workers: list[ApiWorker] = []
+        self._processes: dict[str, QProcess] = {}
+        self._closing = False
+        self._preview_thread: QThread | None = None
+        self._preview_worker: RosImagePreviewWorker | None = None
+        self._latest_frame: np.ndarray | None = None
+        self._latest_meta: dict[str, Any] = {}
+        self._latest_sequence = 0
+        self._displayed_sequence = -1
+        self._displayed_frames = 0
+        self._last_display_fps_at = time.time()
+        self._last_source_fps_at = time.time()
+        self._last_source_received = 0
+        self._paused = False
         self._build()
 
     def _build(self) -> None:
@@ -52,12 +220,17 @@ class InspectorDock(QWidget):
         layout.addWidget(self.tabs)
         self.tabs.addTab(self._topic_page(), "Topic Inspector")
         self.tabs.addTab(self._image_page(), "Image Monitor")
+        self.display_timer = QTimer(self)
+        self.display_timer.setTimerType(Qt.PreciseTimer)
+        self.display_timer.timeout.connect(self.display_latest_frame)
+        self._update_display_timer()
+        self.refresh_graph()
 
     def _toolbar(self) -> QWidget:
         widget = QWidget()
         layout = QHBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)
-        refresh = QPushButton("Refresh")
+        refresh = QPushButton("Refresh Graph")
         refresh.clicked.connect(self.refresh_graph)
         layout.addWidget(refresh)
         layout.addStretch(1)
@@ -69,60 +242,293 @@ class InspectorDock(QWidget):
         node_row = QHBoxLayout()
         node_row.addWidget(QLabel("Node"))
         node_row.addWidget(self.node, 1)
-        node_button = QPushButton("Node Details")
-        node_button.clicked.connect(self.node_details)
-        node_row.addWidget(node_button)
+        start_node = QPushButton("Start node info")
+        stop_node = QPushButton("Stop node info")
+        start_node.clicked.connect(self.start_node_info)
+        stop_node.clicked.connect(lambda: self.stop_process("node_info"))
+        node_row.addWidget(start_node)
+        node_row.addWidget(stop_node)
 
         topic_row = QHBoxLayout()
-        topic_row.addWidget(QLabel("Topic"))
+        topic_row.addWidget(QLabel("Generic topic"))
         topic_row.addWidget(self.topic, 1)
-        for label, path in [
-            ("Info", "/api/ros/topic-info"),
-            ("Echo Once", "/api/ros/topic-echo-once"),
-            ("Hz", "/api/ros/topic-hz"),
-        ]:
-            button = QPushButton(label)
-            button.clicked.connect(lambda _checked=False, api_path=path: self.topic_action(api_path))
-            topic_row.addWidget(button)
+        topic_row.addWidget(self.type_label)
+        self.topic.currentTextChanged.connect(self.update_topic_type)
 
+        echo_row = QHBoxLayout()
+        start_echo = QPushButton("Start topic echo")
+        stop_echo = QPushButton("Stop topic echo")
+        start_echo.clicked.connect(lambda: self.start_topic_process("echo"))
+        stop_echo.clicked.connect(lambda: self.stop_process("echo"))
+        echo_row.addWidget(start_echo)
+        echo_row.addWidget(stop_echo)
+
+        hz_row = QHBoxLayout()
+        start_hz = QPushButton("Start topic hz")
+        stop_hz = QPushButton("Stop topic hz")
+        start_hz.clicked.connect(lambda: self.start_topic_process("hz"))
+        stop_hz.clicked.connect(lambda: self.stop_process("hz"))
+        hz_row.addWidget(start_hz)
+        hz_row.addWidget(stop_hz)
+
+        terminals = QTabWidget()
+        terminals.addTab(self.node_log, "Node Info")
+        terminals.addTab(self.echo_log, "Topic Echo")
+        terminals.addTab(self.hz_log, "Topic Hz")
         layout.addLayout(node_row)
         layout.addLayout(topic_row)
-        layout.addWidget(self.node_log)
-        layout.addWidget(self.topic_log)
+        layout.addLayout(echo_row)
+        layout.addLayout(hz_row)
+        layout.addWidget(terminals)
         return page
 
     def _image_page(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Image topic"))
-        row.addWidget(self.image_topic, 1)
-        snapshot = QPushButton("Snapshot")
-        snapshot.clicked.connect(self.image_snapshot)
-        row.addWidget(snapshot)
-        layout.addLayout(row)
-        layout.addWidget(self.image_label)
-        layout.addWidget(self.image_meta)
+        topic_row = QHBoxLayout()
+        topic_row.addWidget(QLabel("Image monitor topic"))
+        topic_row.addWidget(self.image_topic, 1)
+        topic_row.addWidget(self.image_type_label)
+        self.image_topic.currentTextChanged.connect(self.update_image_topic_type)
+        controls = QHBoxLayout()
+        start = QPushButton("Start image monitor")
+        stop = QPushButton("Stop image monitor")
+        pause = QPushButton("Pause / Resume")
+        stats = QPushButton("Frame stats")
+        start.clicked.connect(self.start_image_preview)
+        stop.clicked.connect(self.stop_image_preview)
+        pause.clicked.connect(self.toggle_pause)
+        stats.clicked.connect(self.show_frame_stats)
+        self.playback_fps.valueChanged.connect(self._update_display_timer)
+        controls.addWidget(start)
+        controls.addWidget(stop)
+        controls.addWidget(pause)
+        controls.addWidget(stats)
+        controls.addWidget(self.playback_fps)
+        preview_row = QHBoxLayout()
+        preview_row.addWidget(self.preview, 3)
+        info = QVBoxLayout()
+        for label in [self.preview_status, self.image_meta, self.preview_fps, self.camera_fps, self.sample]:
+            label.setWordWrap(True)
+            info.addWidget(label)
+        info.addStretch(1)
+        preview_row.addLayout(info, 1)
+        logs = QTabWidget()
+        logs.addTab(self.preview_log, "Preview Log")
+        logs.addTab(self.frame_stats, "Frame Stats")
+        layout.addLayout(topic_row)
+        layout.addLayout(controls)
+        layout.addLayout(preview_row)
+        layout.addWidget(logs)
         return page
 
     def refresh_graph(self) -> None:
-        self.topic_log.appendPlainText("refreshing ROS graph...")
+        self._append(self.echo_log, "refreshing ROS graph...")
         self._start_worker(self.api.get, self._finish_graph, "/api/ros/graph", timeout=12.0)
 
     def _finish_graph(self, result: object, error: object) -> None:
         if error is not None:
-            self.topic_log.appendPlainText(f"graph error: {error}")
+            self._append(self.echo_log, f"graph error: {error}")
             return
         graph = result if isinstance(result, dict) else {}
         nodes = [str(item.get("name", "")) for item in graph.get("nodes", []) if isinstance(item, dict)]
         topics = [item for item in graph.get("topics", []) if isinstance(item, dict)]
         self._topic_types = {str(item.get("name") or item.get("topic") or ""): str(item.get("type") or item.get("message_type") or "") for item in topics}
-        self._fill_combo(self.node, nodes)
         topic_names = [str(item.get("name") or item.get("topic") or "") for item in topics]
+        self._fill_combo(self.node, nodes)
         self._fill_combo(self.topic, topic_names)
-        image_names = [name for name in topic_names if self._topic_types.get(name) == "sensor_msgs/msg/Image"]
-        self._fill_combo(self.image_topic, image_names)
-        self.topic_log.appendPlainText(f"graph refreshed: {len(topic_names)} topics, {len(nodes)} nodes")
+        self._fill_combo(self.image_topic, [name for name in topic_names if self._topic_types.get(name) == "sensor_msgs/msg/Image"])
+        self._append(self.echo_log, f"graph refreshed: {len(topic_names)} topics, {len(nodes)} nodes")
+        self.update_topic_type(self.topic.currentText())
+        self.update_image_topic_type(self.image_topic.currentText())
+
+    def start_node_info(self) -> None:
+        node = self.node.currentText().strip()
+        if not node:
+            return
+        self.start_process("node_info", ["ros2", "node", "info", node], self.node_log)
+
+    def start_topic_process(self, mode: str) -> None:
+        topic = self._selected_topic_name()
+        if not topic:
+            return
+        self.start_process(mode, ["ros2", "topic", mode, topic], self.echo_log if mode == "echo" else self.hz_log)
+
+    def start_process(self, role: str, command: list[str], output: QPlainTextEdit) -> None:
+        self.stop_process(role)
+        process = QProcess(self)
+        process.setProgram(command[0])
+        process.setArguments(command[1:])
+        process.setProcessChannelMode(QProcess.MergedChannels)
+        env = process.processEnvironment()
+        env.insert("RMW_IMPLEMENTATION", os.environ.get("RMW_IMPLEMENTATION", os.environ.get("ROBODATASET_RMW_IMPLEMENTATION", "rmw_cyclonedds_cpp")))
+        process.setProcessEnvironment(env)
+        process.readyReadStandardOutput.connect(lambda proc=process, pane=output: self._drain_process(proc, pane))
+        process.finished.connect(lambda code, status, pane=output, item=role: self._process_finished(item, pane, code, status))
+        self._processes[role] = process
+        output.setPlainText("$ " + " ".join(command))
+        process.start()
+
+    def stop_process(self, role: str) -> None:
+        process = self._processes.pop(role, None)
+        if process is None:
+            return
+        process.terminate()
+        if not process.waitForFinished(1000):
+            process.kill()
+            process.waitForFinished(1000)
+
+    def _drain_process(self, process: QProcess, output: QPlainTextEdit) -> None:
+        data = bytes(process.readAllStandardOutput()).decode(errors="replace")
+        if data:
+            output.appendPlainText(data.rstrip())
+
+    def _process_finished(self, role: str, output: QPlainTextEdit, code: int, status) -> None:
+        self._processes.pop(role, None)
+        output.appendPlainText(f"[process exited] code={code} status={status}")
+
+    def start_image_preview(self) -> None:
+        topic = self._selected_image_topic_name()
+        if not topic:
+            return
+        topic_type = self._topic_types.get(topic, "")
+        if topic_type and topic_type != "sensor_msgs/msg/Image":
+            self.preview_status.setText(f"preview error: expected sensor_msgs/msg/Image, got {topic_type}")
+            return
+        self.stop_image_preview(clear_display=False)
+        self._latest_frame = None
+        self._latest_meta = {}
+        self._latest_sequence = 0
+        self._displayed_sequence = -1
+        self._displayed_frames = 0
+        self._last_display_fps_at = time.time()
+        self._last_source_fps_at = time.time()
+        self._last_source_received = 0
+        self._paused = False
+        self._preview_thread = QThread(self)
+        self._preview_worker = RosImagePreviewWorker(topic)
+        self._preview_worker.moveToThread(self._preview_thread)
+        self._preview_thread.started.connect(self._preview_worker.run)
+        self._preview_worker.status_changed.connect(self.handle_preview_status, Qt.QueuedConnection)
+        self._preview_worker.finished.connect(self._preview_thread.quit)
+        self._preview_worker.finished.connect(self._preview_worker.deleteLater)
+        self._preview_thread.finished.connect(self._preview_thread.deleteLater)
+        self._preview_thread.finished.connect(self._preview_finished)
+        self._preview_thread.start()
+        self.display_timer.start()
+        self._append(self.preview_log, f"$ image-monitor subscribe {topic}")
+
+    def stop_image_preview(self, clear_display: bool = True) -> None:
+        if self._preview_worker is not None:
+            self._preview_worker.stop()
+            try:
+                self._preview_worker.status_changed.disconnect()
+            except Exception:
+                pass
+        if self._preview_thread is not None:
+            self._preview_thread.quit()
+            if not self._preview_thread.wait(3000):
+                self._append(self.preview_log, "[warning] image preview thread did not stop; killing thread is avoided")
+        self._preview_worker = None
+        self._preview_thread = None
+        self.display_timer.stop()
+        if clear_display:
+            self.preview.clear_frame()
+            self.image_meta.setText("image: -")
+        self.preview_status.setText("preview: stopped")
+
+    def _preview_finished(self) -> None:
+        self._preview_worker = None
+        self._preview_thread = None
+
+    @Slot(str)
+    def handle_preview_status(self, text: str) -> None:
+        self.preview_status.setText(text)
+        self._append(self.preview_log, text)
+
+    def display_latest_frame(self) -> None:
+        if self._paused or self._preview_worker is None:
+            return
+        data, meta = self._preview_worker.snapshot()
+        if data is None:
+            return
+        received = int(meta.get("received", 0) or 0)
+        if received <= self._displayed_sequence:
+            return
+        frame = image_bytes_to_rgb(data, meta)
+        if frame is None:
+            self._append(self.preview_log, f"unsupported image encoding: {meta.get('encoding')}")
+            self._displayed_sequence = received
+            return
+        self._latest_frame = frame
+        self._latest_meta = meta
+        self._latest_sequence = received
+        self.preview.set_frame(frame)
+        self._displayed_sequence = received
+        self._displayed_frames += 1
+        self._update_fps_labels()
+
+    def _update_fps_labels(self) -> None:
+        now = time.time()
+        if now - self._last_display_fps_at >= 1.0:
+            self.preview_fps.setText(f"preview fps: {self._displayed_frames / max(now - self._last_display_fps_at, 0.001):.1f}")
+            self._displayed_frames = 0
+            self._last_display_fps_at = now
+        if self._preview_worker is not None and now - self._last_source_fps_at >= 1.0:
+            received = self._preview_worker.frames_received()
+            fps = (received - self._last_source_received) / max(now - self._last_source_fps_at, 0.001)
+            self.camera_fps.setText(f"source fps: {fps:.1f}")
+            self._last_source_received = received
+            self._last_source_fps_at = now
+        if self._latest_meta:
+            self.image_meta.setText(
+                f"image: {self._latest_meta.get('width')}x{self._latest_meta.get('height')} {self._latest_meta.get('encoding')}"
+            )
+
+    def toggle_pause(self) -> None:
+        self._paused = not self._paused
+        self.preview_status.setText("preview: paused" if self._paused else "preview: playing")
+        if self._paused:
+            self.show_frame_stats()
+
+    def show_frame_stats(self) -> None:
+        if self._latest_frame is None:
+            self.frame_stats.setPlainText("No frame available.")
+            return
+        frame = self._latest_frame.astype(np.float32)
+        luminance = 0.2126 * frame[:, :, 0] + 0.7152 * frame[:, :, 1] + 0.0722 * frame[:, :, 2]
+        means = frame.mean(axis=(0, 1))
+        stds = frame.std(axis=(0, 1))
+        text = (
+            f"shape: {self._latest_frame.shape[0]}x{self._latest_frame.shape[1]} rgb\n"
+            f"luminance mean/std/min/max: {luminance.mean():.2f} / {luminance.std():.2f} / {luminance.min():.0f} / {luminance.max():.0f}\n"
+            f"underexposed <=5: {(luminance <= 5).mean() * 100:.2f}%\n"
+            f"overexposed >=250: {(luminance >= 250).mean() * 100:.2f}%\n"
+            f"rgb mean: R={means[0]:.2f} G={means[1]:.2f} B={means[2]:.2f}\n"
+            f"rgb std: R={stds[0]:.2f} G={stds[1]:.2f} B={stds[2]:.2f}"
+        )
+        self.frame_stats.setPlainText(text)
+
+    def update_sample(self, x: int, y: int, r: int, g: int, b: int) -> None:
+        self.sample.setText(f"sample: x={x} y={y} rgb=({r}, {g}, {b})")
+
+    def _update_display_timer(self) -> None:
+        self.display_timer.setInterval(max(1, int(1000 / max(self.playback_fps.value(), 1)))) if hasattr(self, "display_timer") else None
+
+    def _start_worker(self, fn, callback, *args, **kwargs) -> None:
+        worker = ApiWorker(fn, *args, **kwargs)
+        self._workers.append(worker)
+
+        def finish(result: object, error: object, item: ApiWorker = worker) -> None:
+            try:
+                if not self._closing:
+                    callback(result, error)
+            finally:
+                if item in self._workers:
+                    self._workers.remove(item)
+
+        worker.signals.finished.connect(finish, Qt.QueuedConnection)
+        self.pool.start(worker)
 
     def _fill_combo(self, combo: QComboBox, items: list[str]) -> None:
         current = combo.currentText().strip()
@@ -137,76 +543,28 @@ class InspectorDock(QWidget):
                 combo.setEditText(current)
         combo.blockSignals(False)
 
-    def node_details(self) -> None:
-        node = self.node.currentText().strip()
-        if not node:
-            self.node_log.appendPlainText("choose a node first")
-            return
-        self.node_log.appendPlainText(f"$ node-details {node}")
-        self._start_worker(
-            self.api.post,
-            lambda result, error: self._finish_text(self.node_log, result, error),
-            "/api/ros/node-details",
-            {"node": node},
-            timeout=14.0,
-        )
+    def _selected_topic_name(self) -> str:
+        return self.topic.currentText().split(" [", 1)[0].strip()
 
-    def topic_action(self, path: str) -> None:
-        topic = self.topic.currentText().strip()
-        if not topic:
-            self.topic_log.appendPlainText("choose a topic first")
-            return
-        self.topic_log.appendPlainText(f"$ {path.rsplit('/', 1)[-1]} {topic}")
-        self._start_worker(
-            self.api.post,
-            lambda result, error: self._finish_text(self.topic_log, result, error),
-            path,
-            {"topic": topic},
-            timeout=14.0,
-        )
+    def _selected_image_topic_name(self) -> str:
+        return self.image_topic.currentText().split(" [", 1)[0].strip()
 
-    def image_snapshot(self) -> None:
-        topic = self.image_topic.currentText().strip()
-        if not topic:
-            self.image_meta.setText("image: choose an image topic first")
-            return
-        self.image_meta.setText(f"image: waiting for {topic}")
-        self._start_worker(self.api.post, self._finish_image_snapshot, "/api/ros/image-snapshot", {"topic": topic}, timeout=8.0)
+    def update_topic_type(self, _text: str) -> None:
+        topic = self._selected_topic_name()
+        self.type_label.setText(f"type: {self._topic_types.get(topic, '-') or '-'}")
 
-    def _start_worker(self, fn, callback, *args, **kwargs) -> None:
-        worker = ApiWorker(fn, *args, **kwargs)
-        self._workers.append(worker)
+    def update_image_topic_type(self, _text: str) -> None:
+        topic = self._selected_image_topic_name()
+        self.image_type_label.setText(f"image type: {self._topic_types.get(topic, '-') or '-'}")
 
-        def finish(result: object, error: object, item: ApiWorker = worker) -> None:
-            try:
-                callback(result, error)
-            finally:
-                if item in self._workers:
-                    self._workers.remove(item)
+    def _append(self, output: QPlainTextEdit, text: str) -> None:
+        output.appendPlainText(text)
 
-        worker.signals.finished.connect(finish, Qt.QueuedConnection)
-        self.pool.start(worker)
-
-    def _finish_text(self, output: QPlainTextEdit, result: object, error: object) -> None:
-        if error is not None:
-            output.appendPlainText(f"error: {error}")
-            return
-        output.appendPlainText(json.dumps(result, indent=2, ensure_ascii=False, default=str))
-
-    def _finish_image_snapshot(self, result: object, error: object) -> None:
-        if error is not None:
-            self.image_meta.setText(f"image error: {error}")
-            return
-        data = result if isinstance(result, dict) else {}
-        if not data.get("ok"):
-            self.image_meta.setText(f"image error: {data.get('error', 'unknown')}")
-            return
-        raw = base64.b64decode(str(data.get("image_ppm_base64") or ""))
-        pixmap = QPixmap()
-        pixmap.loadFromData(raw, "PPM")
-        self.image_label.setPixmap(pixmap.scaled(self.image_label.size(), Qt.KeepAspectRatio, Qt.FastTransformation))
-        meta = data.get("meta", {})
-        self.image_meta.setText(json.dumps(meta, ensure_ascii=False, default=str))
+    def _terminal(self) -> QPlainTextEdit:
+        terminal = QPlainTextEdit()
+        terminal.setReadOnly(True)
+        terminal.setMaximumBlockCount(2000)
+        return terminal
 
     def show_topic(self) -> None:
         self.tabs.setCurrentIndex(0)
@@ -215,4 +573,8 @@ class InspectorDock(QWidget):
         self.tabs.setCurrentIndex(1)
 
     def stop_workers(self) -> None:
+        self._closing = True
+        for role in list(self._processes):
+            self.stop_process(role)
+        self.stop_image_preview()
         self._workers.clear()

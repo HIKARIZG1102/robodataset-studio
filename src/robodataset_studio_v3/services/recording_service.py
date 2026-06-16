@@ -33,9 +33,21 @@ class RecordingService:
         task = task_service.run_instant("recording_preflight", f"preflight for {project_key}", result)
         return {"task_id": task.task_id, "result": result}
 
-    def start(self, project_key: str, mode: str = "manual") -> dict[str, Any]:
+    def start(
+        self,
+        project_key: str,
+        mode: str = "manual",
+        duration_sec: float | None = None,
+        target_samples: int | None = None,
+    ) -> dict[str, Any]:
         project_dir = self.projects.project_dir(project_key)
         dataset_config = self.configs.read_dataset_config(project_dir)
+        recording = dataset_config.setdefault("recording", {})
+        recording["stop_mode"] = mode
+        if duration_sec is not None:
+            recording["episode_duration_sec"] = float(duration_sec)
+        if target_samples is not None:
+            recording["target_samples"] = int(target_samples)
         session_name = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         session_dir = project_dir / "raw_sessions" / session_name
         training_dir = session_dir / "training"
@@ -49,7 +61,7 @@ class RecordingService:
         task_service.add_log(task.task_id, f"session: {session_dir}")
         Thread(
             target=self._record_worker,
-            args=(project_key, task.task_id, dataset_config, training_dir, cancel_event),
+            args=(project_key, task.task_id, dataset_config, training_dir, cancel_event, duration_sec, target_samples),
             daemon=True,
         ).start()
         return {"task_id": task.task_id, "session_dir": str(session_dir), "mode": mode}
@@ -72,9 +84,18 @@ class RecordingService:
         dataset_config: dict[str, Any],
         training_dir: Path,
         cancel_event: Event,
+        duration_sec: float | None,
+        target_samples: int | None,
     ) -> None:
         try:
-            result = self.recorder.record_episode(dataset_config, training_dir, 0, cancel_event=cancel_event)
+            result = self.recorder.record_episode(
+                dataset_config,
+                training_dir,
+                0,
+                duration_sec=duration_sec,
+                target_samples=target_samples,
+                cancel_event=cancel_event,
+            )
             payload = {
                 "path": str(result.path),
                 "steps": result.steps,
