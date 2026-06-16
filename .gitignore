@@ -1,0 +1,12 @@
+.venv/
+.conda-env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+robodataset/*
+!robodataset/.gitkeep
+build/
+dist/
+*.egg-info/
