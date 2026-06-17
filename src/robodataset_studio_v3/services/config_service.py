@@ -222,7 +222,8 @@ class ConfigService:
     def duplicate_library_config(self, config_id: str, name: str = "") -> dict[str, Any]:
         source = self.read_library_config(config_id)
         source_name = str(source.get("config_meta", {}).get("name") or config_id) if isinstance(source.get("config_meta"), dict) else config_id
-        return self.create_library_config(name.strip() or f"{source_name}_copy", config_id)
+        copy_name = name.strip() or f"{source_name}_copy"
+        return self.create_library_config(copy_name, config_id)
 
     def rename_library_config(self, config_id: str, new_name: str) -> dict[str, Any]:
         old_id = self._safe_id(config_id)

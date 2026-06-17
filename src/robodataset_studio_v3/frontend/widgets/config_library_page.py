@@ -132,16 +132,18 @@ class ConfigLibraryPage(QWidget):
         layout = QVBoxLayout(self)
         top = QHBoxLayout()
         refresh = QPushButton("Refresh")
+        new = QPushButton("New")
         load = QPushButton("Load")
         save = QPushButton("Save")
-        duplicate = QPushButton("Duplicate")
+        copy = QPushButton("Copy")
         rename = QPushButton("Rename")
         delete = QPushButton("Delete")
         apply_project = QPushButton("Load into current project")
         refresh.clicked.connect(self.refresh_list)
+        new.clicked.connect(self.start_new_config)
         load.clicked.connect(self.load_selected)
         save.clicked.connect(self.save_selected)
-        duplicate.clicked.connect(self.duplicate_selected)
+        copy.clicked.connect(self.copy_selected)
         rename.clicked.connect(self.rename_selected)
         delete.clicked.connect(self.delete_selected)
         apply_project.clicked.connect(self.apply_to_project)
@@ -150,9 +152,10 @@ class ConfigLibraryPage(QWidget):
         top.addWidget(QLabel("Existing"))
         top.addWidget(self.config_select, 2)
         top.addWidget(refresh)
+        top.addWidget(new)
         top.addWidget(load)
         top.addWidget(save)
-        top.addWidget(duplicate)
+        top.addWidget(copy)
         top.addWidget(rename)
         top.addWidget(delete)
         top.addWidget(apply_project)
@@ -348,7 +351,7 @@ class ConfigLibraryPage(QWidget):
         config = self.default_total_config()
         self.set_config(config)
         self.config_name.setFocus()
-        self.status.setText("Enter a new config name, edit fields, then click Save.")
+        self.status.setText("New blank config draft. Enter a new Config name, edit fields, then click Save to create it.")
 
     def selected_config_id(self) -> str:
         return str(self.config_select.currentData() or "")
@@ -371,6 +374,8 @@ class ConfigLibraryPage(QWidget):
         if not name:
             QMessageBox.warning(self, "Save Config", "Enter a config name first.")
             return
+        selected_before = self.selected_config_id()
+        existing_ids = {str(config.get("id") or "") for config in self.configs}
         try:
             config = self.current_config()
             self.apply_form_values(config)
@@ -379,29 +384,48 @@ class ConfigLibraryPage(QWidget):
         except Exception as exc:
             QMessageBox.warning(self, "Save Config", f"Cannot save config:\n{exc}")
             return
-        self.status.setText(f"Saved config: {saved.get('id', name)}")
+        saved_id = str(saved.get("id") or name)
+        action = "Updated" if saved_id in existing_ids and saved_id == selected_before else "Created" if saved_id not in existing_ids else "Saved"
+        self.status.setText(f"{action} config: {saved_id}")
         self.refresh_list()
+        idx = self.config_select.findData(saved_id)
+        if idx >= 0:
+            self.config_select.setCurrentIndex(idx)
+            self.load_selected()
 
-    def duplicate_selected(self) -> None:
+    def copy_selected(self) -> None:
         config_id = self.selected_config_id()
         if not config_id:
-            QMessageBox.information(self, "Duplicate Config", "Select an existing config first.")
+            QMessageBox.information(self, "Copy Config", "Select an existing config first.")
             return
-        name = self.config_name.text().strip()
         try:
-            saved = self.api.duplicate_config(config_id, name)
+            config = self.current_config(default=True)
+            self.apply_form_values(config)
+            copy_name = self.unique_copy_name(config_id)
+            config = self.ordered_total_config(config, copy_name)
+            saved = self.api.save_config(copy_name, config)
         except Exception as exc:
-            QMessageBox.warning(self, "Duplicate Config", f"Cannot duplicate config:\n{exc}")
+            QMessageBox.warning(self, "Copy Config", f"Cannot copy config:\n{exc}")
             return
         new_id = str(saved.get("id") or "")
         self.config_name.setText(new_id)
-        self.status.setText(f"Duplicated config: {new_id or saved}")
+        self.status.setText(f"Copied config: {config_id} -> {new_id or saved}. Edit it, then click Save for further changes.")
         self.refresh_list()
         if new_id:
             idx = self.config_select.findData(new_id)
             if idx >= 0:
                 self.config_select.setCurrentIndex(idx)
                 self.load_selected()
+
+    def unique_copy_name(self, config_id: str) -> str:
+        existing = {str(config.get("id") or "") for config in self.configs}
+        base = f"{config_id}_copy"
+        candidate = base
+        suffix = 2
+        while candidate in existing:
+            candidate = f"{base}_{suffix}"
+            suffix += 1
+        return candidate
 
     def rename_selected(self) -> None:
         config_id = self.selected_config_id()
