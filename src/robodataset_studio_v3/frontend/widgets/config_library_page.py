@@ -746,6 +746,14 @@ class ConfigLibraryPage(QWidget):
         self.apply_form_values(config)
         dataset = config.get("dataset_config", {}) if isinstance(config.get("dataset_config"), dict) else {}
         selected_topics = self.selected_topic_rows()
+        if not selected_topics:
+            QMessageBox.information(self, "AI Match Config", "Select one or more ROS topics before generating the default AI prompt.")
+            self.status.setText("AI prompt was not generated: no ROS topics selected.")
+            return
+        self.refresh_config_from_topics()
+        config = self.current_config(default=True)
+        dataset = config.get("dataset_config", {}) if isinstance(config.get("dataset_config"), dict) else dataset
+        selected_topics = self.selected_topic_rows()
         self.status.setText("Generating AI prompt from selected ROS topics in background...")
         self.run_async(self.build_prompt_with_ros_probes, self.finish_prompt, dataset, selected_topics, timeout=90.0)
 
@@ -772,8 +780,7 @@ class ConfigLibraryPage(QWidget):
         ros_context = {
             "selected_topics": selected_topics,
             "selected_topic_probes": topic_probes,
-            "graph_topics": self.graph_data.get("topics", []),
-            "graph_nodes": self.graph_data.get("nodes", []),
+            "selection_policy": "Use only selected_topics and selected_topic_probes. Do not infer dataset streams from unselected graph topics.",
             "required_output": "dataset_config YAML only; do not include upload, config_meta, paths, collection, review, convert, AI API settings, project name, or project version",
         }
         return self.api.post("/api/ai/config-prompt", {"dataset_config": dataset, "ros_context": ros_context}, timeout=30.0)
@@ -835,10 +842,16 @@ class ConfigLibraryPage(QWidget):
         except Exception as exc:
             QMessageBox.warning(self, "AI Preview", f"Cannot parse AI config:\n{exc}")
             return
+        if "total_config" in config and isinstance(config.get("total_config"), dict):
+            config = config["total_config"]
         dataset_config = config.get("dataset_config", config)
         if not isinstance(dataset_config, dict):
             QMessageBox.warning(self, "AI Preview", "AI response did not contain a dataset_config mapping.")
             return
+        forbidden = {"upload", "config_meta", "paths", "collection", "review", "convert", "ui", "ai", "project"}
+        for key in list(dataset_config):
+            if key in forbidden:
+                dataset_config.pop(key, None)
         current = self.current_config(default=True)
         current["dataset_config"] = dataset_config
         self.set_config(current)

@@ -4,27 +4,39 @@ import os
 from typing import Any
 
 import httpx
+import yaml
 
 from robodataset_studio_v3.services.task_service import task_service
 
 
 class AiService:
     def config_prompt(self, dataset_config: dict[str, Any], ros_context: dict[str, Any] | None = None) -> dict[str, Any]:
+        context = ros_context or {}
+        selected_topics = context.get("selected_topics", []) if isinstance(context.get("selected_topics"), list) else []
+        selected_topic_probes = context.get("selected_topic_probes", []) if isinstance(context.get("selected_topic_probes"), list) else []
+        prompt_context = {
+            "selected_topics": selected_topics,
+            "selected_topic_probes": selected_topic_probes,
+            "selection_policy": context.get("selection_policy", "Use only selected topics."),
+        }
         prompt = "\n".join(
             [
                 "You are helping generate the dataset_config section for RoboDataset Studio.",
-                "Return valid YAML only unless asked for explanation.",
-                "Return only the dataset_config mapping. Do not wrap it under total_config unless explicitly asked.",
+                "Return valid YAML only.",
+                "Return only the dataset_config mapping. Do not wrap it under total_config.",
                 "Do not include project name or project version: those belong to the project, not the reusable config.",
-                "Use selected ROS topics, topic info, echo samples, and hz checks to fill streams/state/action.",
+                "Use only selected ROS topics, topic info, echo samples, and hz checks to fill cameras/streams/state/action.",
+                "Do not use unselected ROS graph topics. If a topic is not listed in selected_topics, ignore it.",
+                "If selected_topics is empty, return the current config unchanged and add no streams.",
                 "Keep listener-only runtime behavior and do not enable robot command publishing unless explicitly requested.",
                 "Do not include upload settings, AI API keys, passwords, config_meta, paths, collection, review, convert, or UI state.",
+                "Preserve environment, instruction, recording, and dataset values unless selected topic evidence requires a dataset mapping change.",
                 "",
-                "Current config:",
-                str(dataset_config),
+                "Current dataset_config YAML:",
+                yaml.safe_dump(dataset_config, sort_keys=False, allow_unicode=True),
                 "",
-                "ROS context:",
-                str(ros_context or {}),
+                "Selected ROS context YAML:",
+                yaml.safe_dump(prompt_context, sort_keys=False, allow_unicode=True),
             ]
         )
         result = {"prompt": prompt}
