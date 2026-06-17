@@ -40,6 +40,7 @@ class ConfigLibraryPage(QWidget):
         self._workers: list[ApiWorker] = []
         self.configs: list[dict[str, Any]] = []
         self.graph_data: dict[str, Any] = {"topics": [], "nodes": [], "services": []}
+        self.loaded_config_id = ""
         self._updating = False
 
         self.config_name = QLineEdit()
@@ -325,7 +326,7 @@ class ConfigLibraryPage(QWidget):
         return widget
 
     def refresh_list(self) -> None:
-        current = self.selected_config_id() or self.config_name.text().strip()
+        current = self.loaded_config_id or self.selected_config_id() or self.config_name.text().strip()
         try:
             self.configs = self.api.list_configs()
         except Exception as exc:
@@ -347,6 +348,7 @@ class ConfigLibraryPage(QWidget):
             self.load_selected()
 
     def start_new_config(self) -> None:
+        self.loaded_config_id = ""
         self.config_name.setText("")
         config = self.default_total_config()
         self.set_config(config)
@@ -366,6 +368,7 @@ class ConfigLibraryPage(QWidget):
             self.status.setText(f"Cannot load config: {exc}")
             return
         self.config_name.setText(config_id)
+        self.loaded_config_id = config_id
         self.set_config(config)
         self.status.setText(f"Loaded config: {config_id}")
 
@@ -374,19 +377,31 @@ class ConfigLibraryPage(QWidget):
         if not name:
             QMessageBox.warning(self, "Save Config", "Enter a config name first.")
             return
-        selected_before = self.selected_config_id()
         existing_ids = {str(config.get("id") or "") for config in self.configs}
         try:
             config = self.current_config()
             self.apply_form_values(config)
-            config = self.ordered_total_config(config, name)
-            saved = self.api.save_config(name, config)
+            target_id = name
+            action = "Created"
+            if self.loaded_config_id:
+                action = "Updated"
+                if name != self.loaded_config_id:
+                    renamed = self.api.rename_config(self.loaded_config_id, name)
+                    target_id = str(renamed.get("id") or name)
+                    action = "Renamed and updated"
+                else:
+                    target_id = self.loaded_config_id
+            elif name in existing_ids:
+                QMessageBox.warning(self, "Save Config", f"Config '{name}' already exists. Load it first, or choose a different name for New.")
+                return
+            config = self.ordered_total_config(config, target_id)
+            saved = self.api.save_config(target_id, config)
         except Exception as exc:
             QMessageBox.warning(self, "Save Config", f"Cannot save config:\n{exc}")
             return
         saved_id = str(saved.get("id") or name)
-        action = "Updated" if saved_id in existing_ids and saved_id == selected_before else "Created" if saved_id not in existing_ids else "Saved"
         self.status.setText(f"{action} config: {saved_id}")
+        self.loaded_config_id = saved_id
         self.refresh_list()
         idx = self.config_select.findData(saved_id)
         if idx >= 0:
@@ -409,6 +424,7 @@ class ConfigLibraryPage(QWidget):
             return
         new_id = str(saved.get("id") or "")
         self.config_name.setText(new_id)
+        self.loaded_config_id = new_id
         self.status.setText(f"Copied config: {config_id} -> {new_id or saved}. Edit it, then click Save for further changes.")
         self.refresh_list()
         if new_id:
@@ -443,6 +459,7 @@ class ConfigLibraryPage(QWidget):
             return
         new_id = str(saved.get("id") or name)
         self.config_name.setText(new_id)
+        self.loaded_config_id = new_id
         self.status.setText(f"Renamed config: {config_id} -> {new_id}")
         self.refresh_list()
         idx = self.config_select.findData(new_id)
@@ -470,6 +487,7 @@ class ConfigLibraryPage(QWidget):
             QMessageBox.warning(self, "Delete Config", f"Cannot delete config:\n{exc}")
             return
         self.config_name.clear()
+        self.loaded_config_id = ""
         self.editor.clear()
         self.preview.clear()
         self.status.setText(f"Deleted config: {config_id}")
