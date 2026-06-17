@@ -134,23 +134,21 @@ class ConfigLibraryPage(QWidget):
         top = QHBoxLayout(top_box)
         refresh = QPushButton("Refresh")
         new = QPushButton("New")
-        load = QPushButton("Load")
         save = QPushButton("Save")
         copy = QPushButton("Copy")
         delete = QPushButton("Delete")
         refresh.clicked.connect(self.refresh_list)
         new.clicked.connect(self.start_new_config)
-        load.clicked.connect(self.load_selected)
         save.clicked.connect(self.save_selected)
         copy.clicked.connect(self.copy_selected)
         delete.clicked.connect(self.delete_selected)
+        self.config_select.currentIndexChanged.connect(lambda _index: self.load_selected())
         top.addWidget(QLabel("Config name"))
         top.addWidget(self.config_name, 2)
         top.addWidget(QLabel("Library"))
         top.addWidget(self.config_select, 2)
         top.addWidget(refresh)
         top.addWidget(new)
-        top.addWidget(load)
         top.addWidget(save)
         top.addWidget(copy)
         top.addWidget(delete)
@@ -357,13 +355,6 @@ class ConfigLibraryPage(QWidget):
         config_id = self.selected_config_id()
         if not config_id:
             return
-        if self.project is not None and self.project.has_recorded_data and config_id != self.project.config_id:
-            QMessageBox.warning(
-                self,
-                "Load Config",
-                "This project already has recorded data. Create a new project version before loading another config.",
-            )
-            return
         try:
             config = self.api.get_config(config_id)
         except Exception as exc:
@@ -372,15 +363,7 @@ class ConfigLibraryPage(QWidget):
         self.config_name.setText(config_id)
         self.loaded_config_id = config_id
         self.set_config(config)
-        if self.project is not None and config_id != self.project.config_id:
-            try:
-                self.project = self.api.bind_project_config(self.project.key, config_id)
-            except Exception as exc:
-                self.status.setText(f"Loaded config locally, but cannot bind project: {exc}")
-                return
-            self.status.setText(f"Loaded current config and bound project {self.project.key}: {config_id}")
-            return
-        self.status.setText(f"Loaded current config: {config_id}")
+        self.status.setText(f"Opened config for editing: {config_id}")
 
     def save_selected(self) -> None:
         name = self.config_name.text().strip()
