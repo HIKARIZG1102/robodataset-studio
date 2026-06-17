@@ -173,15 +173,15 @@ class UploadService:
                 result["error"] = str(exc)
         return result
 
-    def verify(self, local_path: str, remote_path: str, host: str = "", port: int = 22) -> dict[str, Any]:
+    def verify(self, local_path: str, remote_path: str, host: str = "", username: str = "", port: int = 22) -> dict[str, Any]:
         task = task_service.create_task("upload_verify", "remote verification started")
-        Thread(target=self._verify_worker, args=(task.task_id, local_path, remote_path, host, port), daemon=True).start()
-        return {"task_id": task.task_id, "local_path": local_path, "remote_path": remote_path, "host": host, "port": port}
+        Thread(target=self._verify_worker, args=(task.task_id, local_path, remote_path, host, username, port), daemon=True).start()
+        return {"task_id": task.task_id, "local_path": local_path, "remote_path": remote_path, "host": host, "username": username, "port": port}
 
-    def _verify_worker(self, task_id: str, local_path: str, remote_path: str, host: str, port: int) -> None:
+    def _verify_worker(self, task_id: str, local_path: str, remote_path: str, host: str, username: str, port: int) -> None:
         local = Path(local_path).expanduser()
         try:
-            result = self._remote_verify(local, self._target(host, "", remote_path), port)
+            result = self._remote_verify(local, self._target(host, username, remote_path), port)
             task_service.complete_task(task_id, message="remote verification finished", result=result)
         except Exception as exc:
             result = {"ok": False, "error": str(exc), "local_path": str(local), "remote_path": remote_path, "host": host}

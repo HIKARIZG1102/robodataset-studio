@@ -288,6 +288,7 @@ class MainWindow(QMainWindow):
             self.workspace.tabCloseRequested.connect(self.close_workspace_tab)
             self.open_tabs = {}
             self.setCentralWidget(self.workspace)
+            return
         if self.centralWidget() is not self.workspace:
             self._load_project_workspace()
 

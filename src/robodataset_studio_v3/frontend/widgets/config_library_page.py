@@ -45,7 +45,6 @@ class ConfigLibraryPage(QWidget):
 
         self.config_name = QLineEdit()
         self.config_select = QComboBox()
-        self.config_select.currentIndexChanged.connect(self.load_selected)
         self.status = QLabel("")
         self.editor = QPlainTextEdit()
         self.preview = QPlainTextEdit()
@@ -131,35 +130,30 @@ class ConfigLibraryPage(QWidget):
 
     def _build(self) -> None:
         layout = QVBoxLayout(self)
-        top = QHBoxLayout()
+        top_box = QGroupBox("Current config")
+        top = QHBoxLayout(top_box)
         refresh = QPushButton("Refresh")
         new = QPushButton("New")
         load = QPushButton("Load")
         save = QPushButton("Save")
         copy = QPushButton("Copy")
-        rename = QPushButton("Rename")
         delete = QPushButton("Delete")
-        apply_project = QPushButton("Load into current project")
         refresh.clicked.connect(self.refresh_list)
         new.clicked.connect(self.start_new_config)
         load.clicked.connect(self.load_selected)
         save.clicked.connect(self.save_selected)
         copy.clicked.connect(self.copy_selected)
-        rename.clicked.connect(self.rename_selected)
         delete.clicked.connect(self.delete_selected)
-        apply_project.clicked.connect(self.apply_to_project)
         top.addWidget(QLabel("Config name"))
         top.addWidget(self.config_name, 2)
-        top.addWidget(QLabel("Existing"))
+        top.addWidget(QLabel("Library"))
         top.addWidget(self.config_select, 2)
         top.addWidget(refresh)
         top.addWidget(new)
         top.addWidget(load)
         top.addWidget(save)
         top.addWidget(copy)
-        top.addWidget(rename)
         top.addWidget(delete)
-        top.addWidget(apply_project)
 
         actions = QHBoxLayout()
         refresh_from_topics = QPushButton("Refresh config from selected topics")
@@ -202,7 +196,7 @@ class ConfigLibraryPage(QWidget):
         splitter.addWidget(lower)
         splitter.setSizes([520, 420])
 
-        layout.addLayout(top)
+        layout.addWidget(top_box)
         layout.addWidget(splitter, 1)
         layout.addWidget(self.status)
 
@@ -326,7 +320,8 @@ class ConfigLibraryPage(QWidget):
         return widget
 
     def refresh_list(self) -> None:
-        current = self.loaded_config_id or self.selected_config_id() or self.config_name.text().strip()
+        project_config_id = self.project.config_id if self.project is not None else ""
+        current = self.loaded_config_id or project_config_id or self.selected_config_id() or self.config_name.text().strip()
         try:
             self.configs = self.api.list_configs()
         except Exception as exc:
@@ -344,7 +339,7 @@ class ConfigLibraryPage(QWidget):
             if idx >= 0:
                 self.config_select.setCurrentIndex(idx)
         self.config_select.blockSignals(False)
-        if not self.editor.toPlainText().strip() and self.config_select.count():
+        if not self.editor.toPlainText().strip() and current and self.config_select.count():
             self.load_selected()
 
     def start_new_config(self) -> None:
@@ -362,6 +357,13 @@ class ConfigLibraryPage(QWidget):
         config_id = self.selected_config_id()
         if not config_id:
             return
+        if self.project is not None and self.project.has_recorded_data and config_id != self.project.config_id:
+            QMessageBox.warning(
+                self,
+                "Load Config",
+                "This project already has recorded data. Create a new project version before loading another config.",
+            )
+            return
         try:
             config = self.api.get_config(config_id)
         except Exception as exc:
@@ -370,7 +372,15 @@ class ConfigLibraryPage(QWidget):
         self.config_name.setText(config_id)
         self.loaded_config_id = config_id
         self.set_config(config)
-        self.status.setText(f"Loaded config: {config_id}")
+        if self.project is not None and config_id != self.project.config_id:
+            try:
+                self.project = self.api.bind_project_config(self.project.key, config_id)
+            except Exception as exc:
+                self.status.setText(f"Loaded config locally, but cannot bind project: {exc}")
+                return
+            self.status.setText(f"Loaded current config and bound project {self.project.key}: {config_id}")
+            return
+        self.status.setText(f"Loaded current config: {config_id}")
 
     def save_selected(self) -> None:
         name = self.config_name.text().strip()
@@ -443,30 +453,6 @@ class ConfigLibraryPage(QWidget):
             suffix += 1
         return candidate
 
-    def rename_selected(self) -> None:
-        config_id = self.selected_config_id()
-        name = self.config_name.text().strip()
-        if not config_id:
-            QMessageBox.information(self, "Rename Config", "Select an existing config first.")
-            return
-        if not name:
-            QMessageBox.warning(self, "Rename Config", "Enter the new config name in Config name first.")
-            return
-        try:
-            saved = self.api.rename_config(config_id, name)
-        except Exception as exc:
-            QMessageBox.warning(self, "Rename Config", f"Cannot rename config:\n{exc}")
-            return
-        new_id = str(saved.get("id") or name)
-        self.config_name.setText(new_id)
-        self.loaded_config_id = new_id
-        self.status.setText(f"Renamed config: {config_id} -> {new_id}")
-        self.refresh_list()
-        idx = self.config_select.findData(new_id)
-        if idx >= 0:
-            self.config_select.setCurrentIndex(idx)
-            self.load_selected()
-
     def delete_selected(self) -> None:
         config_id = self.selected_config_id()
         if not config_id:
@@ -492,23 +478,6 @@ class ConfigLibraryPage(QWidget):
         self.preview.clear()
         self.status.setText(f"Deleted config: {config_id}")
         self.refresh_list()
-
-    def apply_to_project(self) -> None:
-        if self.project is None:
-            QMessageBox.information(self, "Load Config", "Open or create a project first.")
-            return
-        if self.project.has_recorded_data:
-            QMessageBox.warning(self, "Load Config", "This project already has recorded data. Create a new project version before loading another config.")
-            return
-        config_id = self.config_name.text().strip() or self.selected_config_id()
-        if not config_id:
-            return
-        try:
-            self.project = self.api.bind_project_config(self.project.key, config_id)
-        except Exception as exc:
-            QMessageBox.warning(self, "Load Config", f"Cannot load config into project:\n{exc}")
-            return
-        self.status.setText(f"Project {self.project.key} now uses config: {config_id}")
 
     def set_graph_data(self, graph: dict[str, Any]) -> None:
         self.graph_data = graph if isinstance(graph, dict) else {"topics": [], "nodes": [], "services": []}

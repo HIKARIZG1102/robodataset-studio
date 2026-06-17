@@ -81,4 +81,4 @@ def repair(request: UploadRequest) -> dict[str, Any]:
 
 @router.post("/verify", response_model=dict[str, Any])
 def verify(request: UploadRequest) -> dict[str, Any]:
-    return upload_service.verify(request.local_path, request.remote_path, request.host, port=request.port)
+    return upload_service.verify(request.local_path, request.remote_path, request.host, request.username, port=request.port)
