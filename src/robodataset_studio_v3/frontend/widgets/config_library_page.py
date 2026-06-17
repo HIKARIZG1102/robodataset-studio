@@ -5,7 +5,8 @@ import re
 from typing import Any
 
 import yaml
-from PySide6.QtCore import Qt, QThreadPool
+from PySide6.QtCore import Qt, QThreadPool, QTimer
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -42,6 +43,10 @@ class ConfigLibraryPage(QWidget):
         self.graph_data: dict[str, Any] = {"topics": [], "nodes": [], "services": []}
         self.loaded_config_id = ""
         self._updating = False
+        self._sync_timer = QTimer(self)
+        self._sync_timer.setSingleShot(True)
+        self._sync_timer.setInterval(250)
+        self._sync_timer.timeout.connect(self.sync_form_to_yaml)
 
         self.config_name = QLineEdit()
         self.config_select = QComboBox()
@@ -126,6 +131,7 @@ class ConfigLibraryPage(QWidget):
         self.selected_topics.setMaximumHeight(90)
 
         self._build()
+        self._connect_auto_sync()
         self.refresh_list()
 
     def _build(self) -> None:
@@ -198,6 +204,10 @@ class ConfigLibraryPage(QWidget):
         layout.addWidget(splitter, 1)
         layout.addWidget(self.status)
 
+        apply_shortcut = QShortcut(QKeySequence.Save, self.editor)
+        apply_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        apply_shortcut.activated.connect(self.apply_yaml_editor_to_form)
+
     def editable_combo(self, values: list[str]) -> QComboBox:
         combo = QComboBox()
         combo.setEditable(True)
@@ -205,6 +215,61 @@ class ConfigLibraryPage(QWidget):
         combo.setCurrentText("")
         combo.setInsertPolicy(QComboBox.NoInsert)
         return combo
+
+    def _connect_auto_sync(self) -> None:
+        for widget in [
+            self.config_name,
+            self.env_workspace,
+            self.env_objects,
+            self.robot_description,
+            self.robot_joint_order,
+            self.robot_base_frame,
+            self.robot_ee_frame,
+            self.instruction_text,
+            self.upload_lan_host,
+            self.upload_wan_host,
+            self.upload_username,
+            self.upload_key_path,
+            self.upload_remote_root,
+        ]:
+            widget.textChanged.connect(self.schedule_form_sync)
+        for combo in [
+            self.env_type,
+            self.env_lighting,
+            self.robot_name,
+            self.robot_model,
+            self.instruction_language,
+            self.task_family,
+            self.success_condition,
+            self.upload_profile,
+        ]:
+            combo.currentTextChanged.connect(lambda _text: self.schedule_form_sync())
+        self.stop_mode.currentIndexChanged.connect(lambda _index: self.schedule_form_sync())
+        for text_edit in [self.env_desc, self.env_notes]:
+            text_edit.textChanged.connect(self.schedule_form_sync)
+        for spin in [
+            self.robot_joint_count,
+            self.sample_rate,
+            self.target_samples,
+            self.crop_x,
+            self.crop_y,
+            self.crop_w,
+            self.crop_h,
+            self.resize_w,
+            self.resize_h,
+            self.upload_port,
+        ]:
+            spin.valueChanged.connect(lambda _value: self.schedule_form_sync())
+        self.episode_duration.valueChanged.connect(lambda _value: self.schedule_form_sync())
+        for checkbox in [
+            self.crop_enabled,
+            self.resize_enabled,
+            self.upload_enabled,
+            self.upload_rsync,
+            self.upload_repair,
+            self.upload_verify,
+        ]:
+            checkbox.toggled.connect(lambda _checked: self.schedule_form_sync())
 
     def add_combo_choices(self, combo: QComboBox, values: list[str]) -> None:
         current = combo.currentText()
@@ -502,7 +567,7 @@ class ConfigLibraryPage(QWidget):
 
     def selected_topic_rows(self) -> list[dict[str, str]]:
         selected = self.topic_tree.selected_topics()
-        if selected:
+        if selected or self.topic_tree.topLevelItemCount() > 0:
             return selected
         try:
             config = self.current_config(default=False)
@@ -537,9 +602,16 @@ class ConfigLibraryPage(QWidget):
     def update_selected_topics_preview(self) -> None:
         rows = self.selected_topic_rows()
         self.selected_topics.setPlainText("\n".join(f"{row['topic']} [{row['type']}]" for row in rows) or "(none)")
+        self.schedule_form_sync()
 
     def refresh_config_from_topics(self) -> None:
         config = self.current_config(default=True)
+        self.merge_selected_topics_into_config(config)
+        self.apply_form_values(config)
+        self.set_config(config)
+        self.status.setText(f"Config refreshed from {len(self.selected_topic_rows())} selected topic(s).")
+
+    def merge_selected_topics_into_config(self, config: dict[str, Any]) -> None:
         dataset = config.setdefault("dataset_config", {})
         selected = self.selected_topic_rows()
         dataset.setdefault("ros", {})
@@ -550,8 +622,10 @@ class ConfigLibraryPage(QWidget):
         state_keys = []
         joint_topic = ""
         for topic in selected:
-            name = topic["topic"]
-            msg_type = topic["type"]
+            name = str(topic.get("topic") or topic.get("name") or "")
+            msg_type = str(topic.get("type") or topic.get("message_type") or "")
+            if not name:
+                continue
             if msg_type == "sensor_msgs/msg/Image":
                 stream_name = self.stream_name_from_topic(name, len(streams))
                 crop, resize = self.image_preprocess()
@@ -568,9 +642,6 @@ class ConfigLibraryPage(QWidget):
         dataset["action"]["source_topic"] = joint_topic
         dataset["action"]["source"] = "derived_from_robot_obs" if joint_topic else ""
         dataset["action"]["dim"] = int(self.robot_joint_count.value()) if joint_topic else 0
-        self.apply_form_values(config)
-        self.set_config(config)
-        self.status.setText(f"Config refreshed from {len(selected)} selected topic(s).")
 
     def current_config(self, default: bool = False) -> dict[str, Any]:
         text = self.editor.toPlainText().strip()
@@ -586,8 +657,45 @@ class ConfigLibraryPage(QWidget):
         self._updating = True
         self.editor.setPlainText(yaml.safe_dump(config, sort_keys=False, allow_unicode=True))
         self.reload_form_from_yaml()
+        self.populate_topics()
         self._updating = False
         self.refresh_preview(config)
+
+    def sync_form_to_yaml(self) -> None:
+        if self._updating:
+            return
+        try:
+            config = self.current_config(default=True)
+            self.merge_selected_topics_into_config(config)
+            self.apply_form_values(config)
+            config = self.ordered_total_config(config, self.config_name.text().strip())
+        except Exception as exc:
+            self.status.setText(f"Cannot sync form to YAML: {exc}")
+            return
+        self._updating = True
+        cursor_position = self.editor.textCursor().position()
+        self.editor.setPlainText(yaml.safe_dump(config, sort_keys=False, allow_unicode=True))
+        cursor = self.editor.textCursor()
+        cursor.setPosition(min(cursor_position, len(self.editor.toPlainText())))
+        self.editor.setTextCursor(cursor)
+        self._updating = False
+        self.refresh_preview(config)
+
+    def schedule_form_sync(self) -> None:
+        if self._updating:
+            return
+        self._sync_timer.start()
+
+    def apply_yaml_editor_to_form(self) -> None:
+        if self._updating:
+            return
+        try:
+            config = self.current_config(default=True)
+        except Exception as exc:
+            QMessageBox.warning(self, "Apply YAML", f"Cannot parse total_config.yaml:\n{exc}")
+            return
+        self.set_config(config)
+        self.status.setText("Applied total_config.yaml to form with Ctrl+S.")
 
     def reload_form_from_yaml(self) -> None:
         try:
@@ -648,6 +756,7 @@ class ConfigLibraryPage(QWidget):
     def apply_form_to_yaml(self) -> None:
         try:
             config = self.current_config(default=True)
+            self.merge_selected_topics_into_config(config)
             self.apply_form_values(config)
             self.set_config(self.ordered_total_config(config, self.config_name.text().strip()))
             self.status.setText("Applied form values to YAML.")
@@ -743,21 +852,21 @@ class ConfigLibraryPage(QWidget):
 
     def build_default_ai_prompt(self) -> None:
         config = self.current_config(default=True)
+        self.merge_selected_topics_into_config(config)
         self.apply_form_values(config)
-        dataset = config.get("dataset_config", {}) if isinstance(config.get("dataset_config"), dict) else {}
         selected_topics = self.selected_topic_rows()
         if not selected_topics:
             QMessageBox.information(self, "AI Match Config", "Select one or more ROS topics before generating the default AI prompt.")
             self.status.setText("AI prompt was not generated: no ROS topics selected.")
             return
-        self.refresh_config_from_topics()
+        self.set_config(config)
         config = self.current_config(default=True)
-        dataset = config.get("dataset_config", {}) if isinstance(config.get("dataset_config"), dict) else dataset
         selected_topics = self.selected_topic_rows()
         self.status.setText("Generating AI prompt from selected ROS topics in background...")
-        self.run_async(self.build_prompt_with_ros_probes, self.finish_prompt, dataset, selected_topics, timeout=90.0)
+        self.run_async(self.build_prompt_with_ros_probes, self.finish_prompt, config, selected_topics, timeout=90.0)
 
-    def build_prompt_with_ros_probes(self, dataset: dict[str, Any], selected_topics: list[dict[str, str]], timeout: float = 90.0) -> object:
+    def build_prompt_with_ros_probes(self, total_config: dict[str, Any], selected_topics: list[dict[str, str]], timeout: float = 90.0) -> object:
+        dataset = total_config.get("dataset_config", {}) if isinstance(total_config.get("dataset_config"), dict) else {}
         topic_probes = []
         per_call_timeout = max(min(timeout / max(len(selected_topics) * 3, 1), 8.0), 2.0)
         for topic in selected_topics:
@@ -780,10 +889,18 @@ class ConfigLibraryPage(QWidget):
         ros_context = {
             "selected_topics": selected_topics,
             "selected_topic_probes": topic_probes,
+            "current_total_config": self.ai_safe_total_config(total_config),
             "selection_policy": "Use only selected_topics and selected_topic_probes. Do not infer dataset streams from unselected graph topics.",
             "required_output": "dataset_config YAML only; do not include upload, config_meta, paths, collection, review, convert, AI API settings, project name, or project version",
         }
         return self.api.post("/api/ai/config-prompt", {"dataset_config": dataset, "ros_context": ros_context}, timeout=30.0)
+
+    def ai_safe_total_config(self, config: dict[str, Any]) -> dict[str, Any]:
+        safe = json.loads(json.dumps(config, ensure_ascii=False, default=str))
+        if isinstance(safe, dict):
+            safe.pop("config_meta", None)
+            safe.pop("upload", None)
+        return safe if isinstance(safe, dict) else {}
 
     def finish_prompt(self, result: object, error: object) -> None:
         if error is not None:

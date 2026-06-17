@@ -14,6 +14,7 @@ class AiService:
         context = ros_context or {}
         selected_topics = context.get("selected_topics", []) if isinstance(context.get("selected_topics"), list) else []
         selected_topic_probes = context.get("selected_topic_probes", []) if isinstance(context.get("selected_topic_probes"), list) else []
+        current_total_config = self._safe_total_config(context.get("current_total_config", {}) if isinstance(context.get("current_total_config"), dict) else {})
         prompt_context = {
             "selected_topics": selected_topics,
             "selected_topic_probes": selected_topic_probes,
@@ -31,6 +32,11 @@ class AiService:
                 "Keep listener-only runtime behavior and do not enable robot command publishing unless explicitly requested.",
                 "Do not include upload settings, AI API keys, passwords, config_meta, paths, collection, review, convert, or UI state.",
                 "Preserve environment, instruction, recording, and dataset values unless selected topic evidence requires a dataset mapping change.",
+                "You may infer robot fields from selected topic names and message samples, e.g. /wx250s/... implies a wx250s/WidowX style robot, but do not invent command publishing.",
+                "If current_total_config contains useful form values, fold only its dataset_config-relevant values into the returned dataset_config.",
+                "",
+                "Current safe total_config YAML:",
+                yaml.safe_dump(current_total_config, sort_keys=False, allow_unicode=True),
                 "",
                 "Current dataset_config YAML:",
                 yaml.safe_dump(dataset_config, sort_keys=False, allow_unicode=True),
@@ -42,6 +48,12 @@ class AiService:
         result = {"prompt": prompt}
         task = task_service.run_instant("ai_config_prompt", "generated AI config prompt", result)
         return {"task_id": task.task_id, "result": result}
+
+    def _safe_total_config(self, config: dict[str, Any]) -> dict[str, Any]:
+        safe = dict(config)
+        for key in ["upload", "config_meta", "paths", "collection", "review", "convert", "ui", "ai"]:
+            safe.pop(key, None)
+        return safe
 
     def review_prompt(self, review_summary: dict[str, Any]) -> dict[str, Any]:
         prompt = "\n".join(
