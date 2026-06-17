@@ -35,6 +35,10 @@ class UploadPage(BasePage):
         self.port.setRange(1, 65535)
         self.port.setValue(22)
         self.username = QLineEdit()
+        self.password = QLineEdit()
+        self.password.setEchoMode(QLineEdit.Password)
+        self.key_path = QLineEdit()
+        self.auth_hint = QLabel("auth: agent_or_default_key")
         self.new_folder = QLineEdit()
         self.manifest_summary = QLabel("manifest: not built")
         self.remote_summary = QLabel("remote: not listed")
@@ -56,6 +60,8 @@ class UploadPage(BasePage):
         if project is not None:
             self.local_path.setText(f"{project.path}/exports")
             self.load_upload_defaults(project.key)
+        self.password.textChanged.connect(self.update_auth_hint)
+        self.key_path.textChanged.connect(self.update_auth_hint)
         self._build()
 
     def _build(self) -> None:
@@ -79,6 +85,9 @@ class UploadPage(BasePage):
         remote_layout.addRow("Host / IP", self.host)
         remote_layout.addRow("Port", self.port)
         remote_layout.addRow("Username", self.username)
+        remote_layout.addRow("Password", self.password)
+        remote_layout.addRow("Private key path", self._key_path_row())
+        remote_layout.addRow("Authentication", self.auth_hint)
         remote_layout.addRow("Remote directory", self.remote_path)
         remote_actions = QHBoxLayout()
         for label, handler in [
@@ -141,6 +150,7 @@ class UploadPage(BasePage):
         self.remote_path.setText(str(upload.get("remote_root", "")))
         self.host.setText(str(upload.get("host") or upload.get("lan_host") or upload.get("wan_host") or ""))
         self.username.setText(str(upload.get("username", "")))
+        self.key_path.setText(str(upload.get("key_path", "")))
         self.port.setValue(int(upload.get("port") or 22))
 
     def payload(self) -> dict[str, Any]:
@@ -150,6 +160,8 @@ class UploadPage(BasePage):
             "host": self.host.text().strip(),
             "port": int(self.port.value()),
             "username": self.username.text().strip(),
+            "password": self.password.text(),
+            "key_path": self.key_path.text().strip(),
         }
 
     def dependencies(self) -> None:
@@ -160,7 +172,7 @@ class UploadPage(BasePage):
         data = self.payload()
         self._post(
             "/api/upload/connect",
-            {"host": data["host"], "username": data["username"], "port": data["port"]},
+            {"host": data["host"], "username": data["username"], "port": data["port"], "password": data["password"], "key_path": data["key_path"]},
             "Connection profile checked",
             poll=False,
             callback=lambda result, error, status, poll: self._finish_connect(result, error),
@@ -346,6 +358,20 @@ class UploadPage(BasePage):
         if path:
             self.local_path.setText(path)
 
+    def browse_key_file(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Select private key", self.key_path.text().strip())
+        if path:
+            self.key_path.setText(path)
+
+    def update_auth_hint(self) -> None:
+        if self.key_path.text().strip():
+            mode = "key"
+        elif self.password.text():
+            mode = "password"
+        else:
+            mode = "agent_or_default_key"
+        self.auth_hint.setText(f"auth: {mode}")
+
     def _local_path_row(self) -> QWidget:
         widget = QWidget()
         row = QHBoxLayout(widget)
@@ -357,6 +383,16 @@ class UploadPage(BasePage):
         row.addWidget(self.local_path)
         row.addWidget(file_button)
         row.addWidget(folder_button)
+        return widget
+
+    def _key_path_row(self) -> QWidget:
+        widget = QWidget()
+        row = QHBoxLayout(widget)
+        row.setContentsMargins(0, 0, 0, 0)
+        browse = QPushButton("Browse")
+        browse.clicked.connect(self.browse_key_file)
+        row.addWidget(self.key_path)
+        row.addWidget(browse)
         return widget
 
     def _result_payload(self, result: object) -> dict[str, Any]:
