@@ -10,6 +10,7 @@ import yaml
 from robodataset_studio_v3.ros.episode_recorder import RosEpisodeRecorder
 from robodataset_studio_v3.services.config_service import ConfigService
 from robodataset_studio_v3.services.project_service import project_service
+from robodataset_studio_v3.services.ros_service import ros_service
 from robodataset_studio_v3.services.task_service import task_service
 
 
@@ -29,7 +30,40 @@ class RecordingService:
             warnings.append("no streams configured")
         if not state_keys:
             warnings.append("no state keys configured")
-        result = {"project_key": project_key, "streams": len(streams), "state_keys": len(state_keys), "warnings": warnings}
+        topic_checks = []
+        topics: list[str] = []
+        for stream in streams if isinstance(streams, list) else []:
+            if isinstance(stream, dict) and stream.get("topic"):
+                topics.append(str(stream.get("topic")))
+        for key in state_keys if isinstance(state_keys, list) else []:
+            if isinstance(key, dict) and key.get("source_topic"):
+                topics.append(str(key.get("source_topic")))
+        for topic in sorted(set(topics)):
+            info = ros_service.topic_info(topic)
+            echo = ros_service.echo_once(topic)
+            topic_checks.append(
+                {
+                    "topic": topic,
+                    "info_ok": bool(info.get("ok")),
+                    "echo_ok": bool(echo.get("ok")),
+                    "info_error": "" if info.get("ok") else str(info.get("stderr") or info.get("error") or ""),
+                    "echo_error": "" if echo.get("ok") else str(echo.get("stderr") or echo.get("error") or ""),
+                }
+            )
+        missing = [row["topic"] for row in topic_checks if not row["info_ok"]]
+        silent = [row["topic"] for row in topic_checks if row["info_ok"] and not row["echo_ok"]]
+        if missing:
+            warnings.append("topic info failed: " + ", ".join(missing))
+        if silent:
+            warnings.append("topic echo once failed or timed out: " + ", ".join(silent))
+        result = {
+            "project_key": project_key,
+            "streams": len(streams) if isinstance(streams, list) else 0,
+            "state_keys": len(state_keys) if isinstance(state_keys, list) else 0,
+            "topic_checks": topic_checks,
+            "warnings": warnings,
+            "ok": not warnings,
+        }
         task = task_service.run_instant("recording_preflight", f"preflight for {project_key}", result)
         return {"task_id": task.task_id, "result": result}
 

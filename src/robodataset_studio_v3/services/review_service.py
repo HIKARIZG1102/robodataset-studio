@@ -14,26 +14,37 @@ class ReviewService:
         self.validator = DatasetValidator()
 
     def scan_session(self, session_dir: str) -> dict[str, Any]:
-        root = Path(session_dir).expanduser()
+        root = self._resolve_session_dir(Path(session_dir).expanduser())
         training = root / "training"
         episodes = sorted(training.glob("episode_*.npz")) if training.exists() else []
+        marks = self._load_marks(root)
         result = {
             "session_dir": str(root),
             "training_dir": str(training),
             "episode_count": len(episodes),
-            "episodes": [str(path) for path in episodes],
+            "episodes": [
+                {
+                    "name": path.name,
+                    "path": str(path),
+                    "size_bytes": path.stat().st_size,
+                    "mark": marks.get(path.name, ""),
+                }
+                for path in episodes
+            ],
             "has_dataset_config": (root / "dataset_config.yaml").exists() or (root / "collection_config.yaml").exists(),
+            "marks": marks,
         }
         task = task_service.run_instant("review_scan", f"scanned session {root}", result)
         return {"task_id": task.task_id, "result": result}
 
     def check_session(self, session_dir: str) -> dict[str, Any]:
-        root = Path(session_dir).expanduser()
+        root = self._resolve_session_dir(Path(session_dir).expanduser())
         config = self._load_session_config(root)
         rows = self.validator.scan_npz(root / "training", config)
         report = self.validator.quality_report(rows, self._load_marks(root))
         issues = [row for row in rows if row.get("status") != "ok"]
         result = {
+            "session_dir": str(root),
             "total": report["total"],
             "valid": report["by_status"]["ok"],
             "invalid": report["by_status"]["warning"] + report["by_status"]["error"],
@@ -44,7 +55,8 @@ class ReviewService:
         return {"task_id": task.task_id, "result": result}
 
     def mark(self, session_dir: str, episode: str, status: str) -> dict[str, Any]:
-        review_dir = Path(session_dir).expanduser() / "review"
+        root = self._resolve_session_dir(Path(session_dir).expanduser())
+        review_dir = root / "review"
         review_dir.mkdir(exist_ok=True)
         marks_path = review_dir / "review_marks.yaml"
         marks = yaml.safe_load(marks_path.read_text(encoding="utf-8")) if marks_path.exists() else {}
@@ -52,7 +64,7 @@ class ReviewService:
             marks = {}
         marks[episode] = status
         marks_path.write_text(yaml.safe_dump(marks, sort_keys=False, allow_unicode=True), encoding="utf-8")
-        return {"marks_file": str(marks_path), "episode": episode, "status": status}
+        return {"marks_file": str(marks_path), "session_dir": str(root), "episode": episode, "status": status}
 
     def check_hdf5(self, hdf5_path: str) -> dict[str, Any]:
         path = Path(hdf5_path).expanduser()
@@ -93,6 +105,14 @@ class ReviewService:
                 data = yaml.safe_load(path.read_text(encoding="utf-8"))
                 return data if isinstance(data, dict) else {}
         return {}
+
+    def _resolve_session_dir(self, path: Path) -> Path:
+        if path.name.startswith("session_"):
+            return path
+        candidates = sorted([item for item in path.glob("session_*") if item.is_dir()])
+        if candidates:
+            return candidates[-1]
+        return path
 
     def _load_marks(self, root: Path) -> dict[str, str]:
         path = root / "review" / "review_marks.yaml"

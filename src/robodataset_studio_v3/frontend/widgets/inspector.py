@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 from PySide6.QtCore import QProcess, QProcessEnvironment, Qt, QThreadPool, Signal
-from PySide6.QtGui import QImage, QPainter, QPixmap
+from PySide6.QtGui import QImage, QPainter, QPixmap, QTextCursor
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -24,6 +24,56 @@ from PySide6.QtWidgets import (
 
 from robodataset_studio_v3.frontend.api_client import ApiClient
 from robodataset_studio_v3.frontend.worker import ApiWorker
+
+
+class InspectorTerminal(QPlainTextEdit):
+    def __init__(self, max_blocks: int = 1500, max_append_chars: int = 20000) -> None:
+        super().__init__()
+        self.setReadOnly(True)
+        self.setMaximumBlockCount(max_blocks)
+        self._max_append_chars = max_append_chars
+        self._auto_scroll = True
+        self.verticalScrollBar().valueChanged.connect(self._track_scroll_position)
+
+    def reset_text(self, text: str) -> None:
+        self._auto_scroll = True
+        self.setPlainText(self._trim_append(text))
+        self.scroll_to_latest()
+
+    def append_output(self, text: str) -> None:
+        text = self._trim_append(text)
+        if not text:
+            return
+        bar = self.verticalScrollBar()
+        previous_value = bar.value()
+        follow_latest = self._auto_scroll or self._is_at_bottom()
+        self.appendPlainText(text)
+        if follow_latest:
+            self.scroll_to_latest()
+        else:
+            bar.setValue(min(previous_value, bar.maximum()))
+
+    def scroll_to_latest(self) -> None:
+        self._auto_scroll = True
+        self.moveCursor(QTextCursor.End)
+        self.ensureCursorVisible()
+        self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
+
+    def _track_scroll_position(self, value: int) -> None:
+        self._auto_scroll = value >= self.verticalScrollBar().maximum() - 4
+
+    def _is_at_bottom(self) -> bool:
+        return self.verticalScrollBar().value() >= self.verticalScrollBar().maximum() - 4
+
+    def _trim_append(self, text: str) -> str:
+        if len(text) <= self._max_append_chars:
+            return text
+        keep = max(int((self._max_append_chars - 120) / 2), 1)
+        return (
+            text[:keep]
+            + f"\n...[inspector truncated {len(text) - keep * 2} overflow chars from one update]...\n"
+            + text[-keep:]
+        )
 
 
 class ImagePreviewWidget(QWidget):
@@ -80,6 +130,8 @@ class ImagePreviewWidget(QWidget):
 
 
 class InspectorDock(QWidget):
+    graphUpdated = Signal(dict)
+
     def __init__(self, api: ApiClient) -> None:
         super().__init__()
         self.api = api
@@ -97,7 +149,7 @@ class InspectorDock(QWidget):
         self.echo_log = self._terminal()
         self.hz_log = self._terminal()
         self.preview_log = self._terminal()
-        self.frame_stats = self._terminal()
+        self.frame_stats = self._terminal(max_blocks=300)
         self.preview = ImagePreviewWidget()
         self.preview.sampled.connect(self.update_sample)
         self.preview_status = QLabel("preview: stopped")
@@ -128,21 +180,10 @@ class InspectorDock(QWidget):
 
     def _build(self) -> None:
         layout = QVBoxLayout(self)
-        layout.addWidget(self._toolbar())
         layout.addWidget(self.tabs)
         self.tabs.addTab(self._topic_page(), "Topic Inspector")
         self.tabs.addTab(self._image_page(), "Image Monitor")
         self.refresh_graph()
-
-    def _toolbar(self) -> QWidget:
-        widget = QWidget()
-        layout = QHBoxLayout(widget)
-        layout.setContentsMargins(0, 0, 0, 0)
-        refresh = QPushButton("Refresh Graph")
-        refresh.clicked.connect(self.refresh_graph)
-        layout.addWidget(refresh)
-        layout.addStretch(1)
-        return widget
 
     def _topic_page(self) -> QWidget:
         page = QWidget()
@@ -239,6 +280,10 @@ class InspectorDock(QWidget):
             self._append(self.echo_log, f"graph error: {error}")
             return
         graph = result if isinstance(result, dict) else {}
+        self.set_graph_data(graph)
+        self.graphUpdated.emit(graph)
+
+    def set_graph_data(self, graph: dict[str, Any]) -> None:
         nodes = [str(item.get("name", "")) for item in graph.get("nodes", []) if isinstance(item, dict)]
         topics = [item for item in graph.get("topics", []) if isinstance(item, dict)]
         self._topic_types = {str(item.get("name") or item.get("topic") or ""): str(item.get("type") or item.get("message_type") or "") for item in topics}
@@ -246,7 +291,10 @@ class InspectorDock(QWidget):
         self._fill_combo(self.node, nodes)
         self._fill_combo(self.topic, topic_names)
         self._fill_combo(self.image_topic, [name for name in topic_names if self._topic_types.get(name) == "sensor_msgs/msg/Image"])
-        self._append(self.echo_log, f"graph refreshed: {len(topic_names)} topics, {len(nodes)} nodes")
+        if topic_names:
+            self._append(self.echo_log, f"graph refreshed: {len(topic_names)} topics, {len(nodes)} nodes")
+        else:
+            self._append(self.echo_log, self._graph_error_summary(graph) or f"graph refreshed: 0 topics, {len(nodes)} nodes")
         self.update_topic_type(self.topic.currentText())
         self.update_image_topic_type(self.image_topic.currentText())
 
@@ -262,7 +310,7 @@ class InspectorDock(QWidget):
             return
         self.start_process(mode, ["ros2", "topic", mode, topic], self.echo_log if mode == "echo" else self.hz_log)
 
-    def start_process(self, role: str, command: list[str], output: QPlainTextEdit) -> None:
+    def start_process(self, role: str, command: list[str], output: InspectorTerminal) -> None:
         self.stop_process(role)
         process = QProcess(self)
         program, arguments = self._ros_shell_command(command)
@@ -273,7 +321,7 @@ class InspectorDock(QWidget):
         process.readyReadStandardOutput.connect(lambda proc=process, pane=output: self._drain_process(proc, pane))
         process.finished.connect(lambda code, status, pane=output, item=role: self._process_finished(item, pane, code, status))
         self._processes[role] = process
-        output.setPlainText("$ " + " ".join(command))
+        output.reset_text("$ " + " ".join(command))
         process.start()
 
     def _ros_shell_command(self, command: list[str]) -> tuple[str, list[str]]:
@@ -287,12 +335,24 @@ class InspectorDock(QWidget):
         for key, value in os.environ.items():
             env.insert(key, value)
         env.insert("RMW_IMPLEMENTATION", os.environ.get("RMW_IMPLEMENTATION", os.environ.get("ROBODATASET_RMW_IMPLEMENTATION", "rmw_cyclonedds_cpp")))
+        env.insert("ROS_LOG_DIR", os.environ.get("ROS_LOG_DIR", "/tmp/robodataset_ros_logs"))
         root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
         src_dir = os.path.join(root_dir, "src")
         current_pythonpath = env.value("PYTHONPATH", "")
         if src_dir not in current_pythonpath.split(os.pathsep):
             env.insert("PYTHONPATH", f"{src_dir}{os.pathsep}{current_pythonpath}" if current_pythonpath else src_dir)
         return env
+
+    def _graph_error_summary(self, graph: dict[str, Any]) -> str:
+        errors = graph.get("errors", {}) if isinstance(graph, dict) else {}
+        if not isinstance(errors, dict):
+            return ""
+        parts = []
+        for key in ["topics", "nodes", "services"]:
+            text = str(errors.get(key) or "").strip()
+            if text:
+                parts.append(f"{key}: {text.splitlines()[0]}")
+        return "graph returned no topics. " + " | ".join(parts) if parts else ""
 
     def stop_process(self, role: str) -> None:
         process = self._processes.pop(role, None)
@@ -303,14 +363,14 @@ class InspectorDock(QWidget):
             process.kill()
             process.waitForFinished(1000)
 
-    def _drain_process(self, process: QProcess, output: QPlainTextEdit) -> None:
+    def _drain_process(self, process: QProcess, output: InspectorTerminal) -> None:
         data = bytes(process.readAllStandardOutput()).decode(errors="replace")
         if data:
-            output.appendPlainText(data.rstrip())
+            output.append_output(data.rstrip())
 
-    def _process_finished(self, role: str, output: QPlainTextEdit, code: int, status) -> None:
+    def _process_finished(self, role: str, output: InspectorTerminal, code: int, status) -> None:
         self._processes.pop(role, None)
-        output.appendPlainText(f"[process exited] code={code} status={status}")
+        output.append_output(f"[process exited] code={code} status={status}")
 
     def start_image_preview(self) -> None:
         topic = self._selected_image_topic_name()
@@ -459,7 +519,7 @@ class InspectorDock(QWidget):
 
     def show_frame_stats(self) -> None:
         if self._latest_frame is None:
-            self.frame_stats.setPlainText("No frame available.")
+            self.frame_stats.reset_text("No frame available.")
             return
         frame = self._latest_frame.astype(np.float32)
         luminance = 0.2126 * frame[:, :, 0] + 0.7152 * frame[:, :, 1] + 0.0722 * frame[:, :, 2]
@@ -473,7 +533,7 @@ class InspectorDock(QWidget):
             f"rgb mean: R={means[0]:.2f} G={means[1]:.2f} B={means[2]:.2f}\n"
             f"rgb std: R={stds[0]:.2f} G={stds[1]:.2f} B={stds[2]:.2f}"
         )
-        self.frame_stats.setPlainText(text)
+        self.frame_stats.reset_text(text)
 
     def update_sample(self, x: int, y: int, r: int, g: int, b: int) -> None:
         self.sample.setText(f"sample: x={x} y={y} rgb=({r}, {g}, {b})")
@@ -528,14 +588,11 @@ class InspectorDock(QWidget):
         topic = self._selected_image_topic_name()
         self.image_type_label.setText(f"image type: {self._topic_types.get(topic, '-') or '-'}")
 
-    def _append(self, output: QPlainTextEdit, text: str) -> None:
-        output.appendPlainText(text)
+    def _append(self, output: InspectorTerminal, text: str) -> None:
+        output.append_output(text)
 
-    def _terminal(self) -> QPlainTextEdit:
-        terminal = QPlainTextEdit()
-        terminal.setReadOnly(True)
-        terminal.setMaximumBlockCount(2000)
-        return terminal
+    def _terminal(self, max_blocks: int = 1500) -> InspectorTerminal:
+        return InspectorTerminal(max_blocks=max_blocks)
 
     def show_topic(self) -> None:
         self.tabs.setCurrentIndex(0)

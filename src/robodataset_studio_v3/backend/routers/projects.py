@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from robodataset_studio_v3.models.project import ProjectCreateRequest, ProjectOpenPathRequest, ProjectSummary
+from robodataset_studio_v3.models.project import ProjectConfigBindRequest, ProjectCreateRequest, ProjectOpenPathRequest, ProjectSummary
 from robodataset_studio_v3.services.project_service import project_service
 
 router = APIRouter()
@@ -28,3 +28,13 @@ def open_project_path(request: ProjectOpenPathRequest) -> ProjectSummary:
         return service.open_path(request.path)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.put("/{project_key}/config", response_model=ProjectSummary)
+def bind_project_config(project_key: str, request: ProjectConfigBindRequest) -> ProjectSummary:
+    try:
+        return service.bind_config(project_key, request.config_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

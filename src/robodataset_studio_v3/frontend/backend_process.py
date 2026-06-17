@@ -6,6 +6,7 @@ import subprocess
 import sys
 import time
 import tempfile
+import signal
 from pathlib import Path
 
 from robodataset_studio_v3.frontend.api_client import ApiClient
@@ -21,14 +22,13 @@ class BackendProcess:
         self.log_path: Path | None = None
 
     def ensure_running(self, timeout_sec: float = 8.0) -> None:
-        if self.is_healthy():
-            return
+        self.cleanup_stale_backends()
         self.port = self._find_available_port(self.port)
         self.api.base_url = f"http://{self.host}:{self.port}"
         self.start()
         deadline = time.time() + timeout_sec
         while time.time() < deadline:
-            if self.is_healthy():
+            if self.is_healthy() and self.has_required_routes():
                 return
             if self.process is not None and self.process.poll() is not None:
                 break
@@ -42,6 +42,13 @@ class BackendProcess:
             return False
         return data.get("status") == "ok"
 
+    def has_required_routes(self) -> bool:
+        try:
+            configs = self.api.get("/api/config/library", timeout=2.0)
+        except Exception:
+            return False
+        return isinstance(configs, list)
+
     def start(self) -> None:
         if self.process is not None and self.process.poll() is None:
             return
@@ -50,6 +57,15 @@ class BackendProcess:
         env["PYTHONPATH"] = f"{src}:{env.get('PYTHONPATH', '')}" if env.get("PYTHONPATH") else src
         env["ROBODATASET_V3_BACKEND_HOST"] = self.host
         env["ROBODATASET_V3_BACKEND_PORT"] = str(self.port)
+        env["ROBODATASET_V3_ROOT"] = str(self.root_dir)
+        env.setdefault("ROS_SETUP", "/opt/ros/humble/setup.bash")
+        env.setdefault("ROBODATASET_RMW_IMPLEMENTATION", env.get("RMW_IMPLEMENTATION", "rmw_cyclonedds_cpp"))
+        env.setdefault("RMW_IMPLEMENTATION", env["ROBODATASET_RMW_IMPLEMENTATION"])
+        env.setdefault("ROS_LOG_DIR", "/tmp/robodataset_ros_logs")
+        try:
+            Path(env["ROS_LOG_DIR"]).mkdir(parents=True, exist_ok=True)
+        except Exception:
+            env["ROS_LOG_DIR"] = "/tmp"
         log_dir = Path(tempfile.gettempdir())
         self.log_path = log_dir / f"robodataset_studio_v3_backend_{self.port}.log"
         log_file = self.log_path.open("w", encoding="utf-8")
@@ -61,7 +77,38 @@ class BackendProcess:
             stdout=log_file,
             stderr=subprocess.STDOUT,
             text=True,
+            start_new_session=True,
         )
+
+    def cleanup_stale_backends(self) -> None:
+        marker = "robodataset_studio_v3.backend.main"
+        root_marker = str(self.root_dir)
+        try:
+            output = subprocess.check_output(["ps", "-eo", "pid,args"], text=True)
+        except Exception:
+            return
+        current_pid = os.getpid()
+        for line in output.splitlines():
+            line = line.strip()
+            if marker not in line:
+                continue
+            try:
+                pid_text = line.split(None, 1)[0]
+                pid = int(pid_text)
+            except Exception:
+                continue
+            if pid == current_pid:
+                continue
+            if not self._pid_cwd_matches(pid, root_marker):
+                continue
+            self._kill_pid(pid)
+
+    def _pid_cwd_matches(self, pid: int, root_marker: str) -> bool:
+        try:
+            cwd = os.readlink(f"/proc/{pid}/cwd")
+        except Exception:
+            return False
+        return cwd == root_marker
 
     def _python_executable(self) -> str:
         venv_python = self.root_dir / ".venv" / "bin" / "python"
@@ -103,9 +150,43 @@ class BackendProcess:
     def stop(self) -> None:
         if self.process is None or self.process.poll() is not None:
             return
-        self.process.terminate()
+        pid = self.process.pid
         try:
-            self.process.wait(timeout=3.0)
+            os.killpg(pid, signal.SIGTERM)
+        except Exception:
+            self.process.terminate()
+        try:
+            self.process.wait(timeout=1.5)
         except subprocess.TimeoutExpired:
-            self.process.kill()
-            self.process.wait(timeout=3.0)
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except Exception:
+                self.process.kill()
+            self.process.wait(timeout=1.5)
+        finally:
+            self.process = None
+
+    def _kill_pid(self, pid: int) -> None:
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        except Exception:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except Exception:
+                return
+        deadline = time.time() + 1.0
+        while time.time() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.05)
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except Exception:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except Exception:
+                pass

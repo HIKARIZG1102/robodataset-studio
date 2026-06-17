@@ -14,7 +14,7 @@ class SettingsService:
         return {
             "language": "en",
             "recent_projects": [],
-            "ai": {"base_url": "", "model": "", "timeout_sec": 30, "enabled": False},
+            "ai": {"enabled": False, "base_url": "", "api_key": "", "model": "", "timeout_sec": 90},
             "server_profiles": [],
             "ui": {"last_active_tab": "", "inspector_visible": True},
         }
@@ -27,6 +27,10 @@ class SettingsService:
             return self.default_settings()
         settings = self.default_settings()
         settings.update(data)
+        if isinstance(data.get("ai"), dict):
+            settings["ai"].update(data["ai"])
+        if isinstance(data.get("ui"), dict):
+            settings["ui"].update(data["ui"])
         return settings
 
     def write(self, settings: dict[str, Any]) -> dict[str, Any]:

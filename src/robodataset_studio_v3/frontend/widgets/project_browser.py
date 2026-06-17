@@ -15,7 +15,9 @@ class ProjectBrowserDialog(QDialog):
         self.browsed_project: ProjectSummary | None = None
         self.list_widget = QListWidget()
         for project in projects:
-            self.list_widget.addItem(f"{project.name}\n  _{project.version}")
+            lock = "locked" if project.has_recorded_data else "editable"
+            config = project.config_id or "no config"
+            self.list_widget.addItem(f"{project.name}\n  _{project.version} | {config} | {lock}")
         buttons = QDialogButtonBox(QDialogButtonBox.Open | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)

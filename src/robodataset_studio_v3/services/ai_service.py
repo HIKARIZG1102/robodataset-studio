@@ -12,12 +12,15 @@ class AiService:
     def config_prompt(self, dataset_config: dict[str, Any], ros_context: dict[str, Any] | None = None) -> dict[str, Any]:
         prompt = "\n".join(
             [
-                "You are helping generate a RoboDataset dataset_config.yaml.",
+                "You are helping generate the dataset_config section for RoboDataset Studio.",
                 "Return valid YAML only unless asked for explanation.",
+                "Return only the dataset_config mapping. Do not wrap it under total_config unless explicitly asked.",
+                "Do not include project name or project version: those belong to the project, not the reusable config.",
                 "Use selected ROS topics, topic info, echo samples, and hz checks to fill streams/state/action.",
-                "Do not include upload server settings, API keys, passwords, or UI state.",
+                "Keep listener-only runtime behavior and do not enable robot command publishing unless explicitly requested.",
+                "Do not include upload settings, AI API keys, passwords, config_meta, paths, collection, review, convert, or UI state.",
                 "",
-                "Current dataset_config:",
+                "Current config:",
                 str(dataset_config),
                 "",
                 "ROS context:",
@@ -42,9 +45,9 @@ class AiService:
         task = task_service.run_instant("ai_review_prompt", "generated AI review prompt", result)
         return {"task_id": task.task_id, "result": result}
 
-    def models(self, base_url: str = "") -> dict[str, Any]:
+    def models(self, base_url: str = "", api_key: str = "") -> dict[str, Any]:
         task = task_service.create_task("ai_models", "checking AI models")
-        api_key = os.environ.get("ROBOT_DATA_AI_API_KEY", "")
+        api_key = api_key or os.environ.get("ROBOT_DATA_AI_API_KEY", "")
         if not base_url:
             result = {"base_url": base_url, "models": [], "error": "base_url is empty"}
             task_service.fail_task(task.task_id, message="model discovery failed", error=result["error"])
@@ -63,9 +66,9 @@ class AiService:
             task_service.fail_task(task.task_id, message="model discovery failed", error=str(exc))
         return {"task_id": task.task_id, "result": result}
 
-    def send(self, prompt: str, kind: str = "ai", base_url: str = "", model: str = "") -> dict[str, Any]:
+    def send(self, prompt: str, kind: str = "ai", base_url: str = "", model: str = "", api_key: str = "") -> dict[str, Any]:
         task = task_service.create_task(kind, "AI request started")
-        api_key = os.environ.get("ROBOT_DATA_AI_API_KEY", "")
+        api_key = api_key or os.environ.get("ROBOT_DATA_AI_API_KEY", "")
         if not base_url or not model:
             result = {"kind": kind, "response": "", "error": "base_url and model are required", "prompt_chars": len(prompt)}
             task_service.fail_task(task.task_id, message="AI request failed", error=result["error"])

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from PySide6.QtWidgets import QComboBox, QFormLayout, QHBoxLayout, QLineEdit, QPlainTextEdit, QPushButton, QSplitter, QWidget
+from PySide6.QtWidgets import QFormLayout, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QSplitter, QWidget
 
 from robodataset_studio_v3.frontend.api_client import ApiClient, ProjectSummary
 from robodataset_studio_v3.frontend.pages.base import BasePage
@@ -11,18 +11,12 @@ from robodataset_studio_v3.frontend.pages.base import BasePage
 class AiPage(BasePage):
     def __init__(self, api: ApiClient, project: ProjectSummary | None = None) -> None:
         super().__init__("AI Assist", api, project)
-        self.base_url = QLineEdit()
-        self.model = QComboBox()
-        self.model.setEditable(True)
         self.prompt = QPlainTextEdit()
         self.response = QPlainTextEdit()
         self.response.setReadOnly(True)
         self._build()
 
     def _build(self) -> None:
-        form = QFormLayout()
-        form.addRow("Base URL", self.base_url)
-        form.addRow("Model", self.model)
         buttons = QHBoxLayout()
         for label, handler in [
             ("List Models", self.models),
@@ -42,14 +36,19 @@ class AiPage(BasePage):
         response_layout.addRow("AI Response", self.response)
         splitter.addWidget(prompt_box)
         splitter.addWidget(response_box)
-        self.layout.addLayout(form)
+        self.layout.addWidget(QLabel("AI base URL, API key, model, and timeout are configured in Settings."))
         self.layout.addLayout(buttons)
         self.layout.addWidget(splitter)
         self.finish_layout()
 
     def models(self) -> None:
         self.status.setText("Requesting models...")
-        self.run_async(self.api.post, self._finish_models, "/api/ai/models", {"base_url": self.base_url.text().strip()}, timeout=30.0)
+        self.run_async(self.models_with_settings, self._finish_models)
+
+    def models_with_settings(self) -> object:
+        settings = self.api.get("/api/settings", timeout=5.0)
+        ai = settings.get("ai", {}) if isinstance(settings, dict) and isinstance(settings.get("ai"), dict) else {}
+        return self.api.post("/api/ai/models", {"base_url": str(ai.get("base_url", "")), "api_key": str(ai.get("api_key", ""))}, timeout=30.0)
 
     def _finish_models(self, result: object, error: object) -> None:
         if error is not None:
@@ -58,20 +57,8 @@ class AiPage(BasePage):
         data = result if isinstance(result, dict) else {}
         payload = data.get("result", data) if isinstance(data.get("result", data), dict) else {}
         models = payload.get("models", []) if isinstance(payload, dict) else []
-        current = self.model.currentText().strip()
-        self.model.clear()
-        if isinstance(models, list):
-            for item in models:
-                if isinstance(item, dict):
-                    name = str(item.get("id") or item.get("name") or "")
-                else:
-                    name = str(item)
-                if name:
-                    self.model.addItem(name)
-        if current:
-            self.model.setCurrentText(current)
         self.response.setPlainText(json.dumps(result, ensure_ascii=False, indent=2, default=str))
-        self.status.setText("Models loaded" if self.model.count() else "No available models")
+        self.status.setText("Models loaded" if models else "No available models")
 
     def config_prompt(self) -> None:
         dataset_config = {}
@@ -108,17 +95,23 @@ class AiPage(BasePage):
 
     def send(self) -> None:
         self.status.setText("Sending AI request...")
-        self.run_async(
-            self.api.post,
-            self._finish_send,
+        self.run_async(self.send_with_settings, self._finish_send, self.prompt.toPlainText().strip())
+
+    def send_with_settings(self, prompt: str) -> object:
+        settings = self.api.get("/api/settings", timeout=5.0)
+        ai = settings.get("ai", {}) if isinstance(settings, dict) and isinstance(settings.get("ai"), dict) else {}
+        if not ai.get("enabled"):
+            raise RuntimeError("Enable AI in Settings first.")
+        return self.api.post(
             "/api/ai/send",
             {
-                "prompt": self.prompt.toPlainText().strip(),
+                "prompt": prompt,
                 "kind": "ai",
-                "base_url": self.base_url.text().strip(),
-                "model": self.model.currentText().strip(),
+                "base_url": str(ai.get("base_url", "")),
+                "model": str(ai.get("model", "")),
+                "api_key": str(ai.get("api_key", "")),
             },
-            timeout=120.0,
+            timeout=float(ai.get("timeout_sec") or 120),
         )
 
     def _finish_send(self, result: object, error: object) -> None:

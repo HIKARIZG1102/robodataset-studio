@@ -5,21 +5,19 @@ from typing import Any
 
 from PySide6.QtCore import Qt, QThreadPool
 from PySide6.QtWidgets import (
-    QAbstractItemView,
     QComboBox,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QMessageBox,
     QPushButton,
-    QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
 )
 
 from robodataset_studio_v3.frontend.api_client import ApiClient, ProjectSummary
 from robodataset_studio_v3.frontend.pages.base import BasePage
 from robodataset_studio_v3.frontend.worker import ApiWorker
+from robodataset_studio_v3.frontend.widgets.topic_tree import TopicTreeWidget
 
 
 class RosPage(BasePage):
@@ -29,25 +27,19 @@ class RosPage(BasePage):
         self.graph_data: dict[str, Any] = {"nodes": [], "topics": [], "services": []}
         self.node_combo = QComboBox()
         self.node_combo.setEditable(True)
-        self.topic_table = QTableWidget(0, 3)
-        self.topic_table.setHorizontalHeaderLabels(["Use", "Topic", "Type"])
-        self.topic_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.topic_table.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.topic_table.setWordWrap(False)
-        self.topic_table.itemChanged.connect(self._selected_topics_changed)
+        self.topic_tree = TopicTreeWidget()
+        self.topic_tree.selectionChanged.connect(self._selected_topics_changed)
         self.selection_status = QLabel("selected topics: 0")
         self._workers: list[ApiWorker] = []
         self._build_page()
 
     def _build_page(self) -> None:
         controls = QHBoxLayout()
-        refresh = QPushButton("Refresh ROS Graph")
-        refresh.clicked.connect(self.graph)
         save = QPushButton("Apply Selected Topics To Config")
         save.clicked.connect(self.apply_selection_to_config)
         node_info = QPushButton("Node Details")
         node_info.clicked.connect(self.node_details)
-        controls.addWidget(refresh)
+        controls.addWidget(QLabel("Use the top toolbar Refresh Graph button to update the global ROS graph."))
         controls.addWidget(save)
         controls.addStretch(1)
 
@@ -58,7 +50,8 @@ class RosPage(BasePage):
 
         topics_box = QGroupBox("Discovered topics")
         topics_layout = QVBoxLayout(topics_box)
-        topics_layout.addWidget(self.topic_table)
+        topics_layout.addWidget(QLabel("Topics are grouped by their top-level ROS namespace. Expand a group to choose individual topics."))
+        topics_layout.addWidget(self.topic_tree)
         topics_layout.addWidget(self.selection_status)
 
         self.layout.addLayout(controls)
@@ -81,6 +74,13 @@ class RosPage(BasePage):
         node_count = len(graph.get("nodes", [])) if isinstance(graph.get("nodes"), list) else 0
         self.show_result(graph, f"ROS graph refreshed: {topic_count} topics, {node_count} nodes")
 
+    def set_graph_data(self, graph: dict[str, Any]) -> None:
+        self.graph_data = graph if isinstance(graph, dict) else {"nodes": [], "topics": [], "services": []}
+        self._populate_graph(self.graph_data)
+        topic_count = len(self.graph_data.get("topics", [])) if isinstance(self.graph_data.get("topics"), list) else 0
+        node_count = len(self.graph_data.get("nodes", [])) if isinstance(self.graph_data.get("nodes"), list) else 0
+        self.status.setText(f"Using global ROS graph: {topic_count} topics, {node_count} nodes")
+
     def _populate_graph(self, graph: dict[str, Any]) -> None:
         nodes = [str(node.get("name", "")) for node in graph.get("nodes", []) if isinstance(node, dict)]
         topics = [topic for topic in graph.get("topics", []) if isinstance(topic, dict)]
@@ -97,20 +97,11 @@ class RosPage(BasePage):
         self.node_combo.blockSignals(False)
 
         selected = self._configured_selected_topic_names()
-        self.topic_table.blockSignals(True)
-        self.topic_table.setRowCount(len(topics))
-        for row, topic in enumerate(topics):
-            name = str(topic.get("name") or topic.get("topic") or "")
-            typ = str(topic.get("type") or topic.get("message_type") or "")
-            use = QTableWidgetItem("")
-            use.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            use.setCheckState(Qt.Checked if name in selected else Qt.Unchecked)
-            self.topic_table.setItem(row, 0, use)
-            self.topic_table.setItem(row, 1, self._readonly_item(name))
-            self.topic_table.setItem(row, 2, self._readonly_item(typ))
-        self.topic_table.resizeColumnsToContents()
-        self.topic_table.blockSignals(False)
+        self.topic_tree.populate(topics, selected)
         self._selected_topics_changed()
+        if not topics:
+            error_text = self._graph_error_summary(graph)
+            self.status.setText(error_text or "No ROS topics found. Check ROS setup and running nodes, then Refresh Graph.")
 
     def _configured_selected_topic_names(self) -> set[str]:
         if self.project is None:
@@ -132,16 +123,19 @@ class RosPage(BasePage):
         self.selection_status.setText(f"selected topics: {len(self.selected_topics())}")
 
     def selected_topics(self) -> list[dict[str, str]]:
-        topics = []
-        for row in range(self.topic_table.rowCount()):
-            use = self.topic_table.item(row, 0)
-            if use is None or use.checkState() != Qt.Checked:
-                continue
-            name = self.topic_table.item(row, 1).text() if self.topic_table.item(row, 1) else ""
-            typ = self.topic_table.item(row, 2).text() if self.topic_table.item(row, 2) else ""
-            if name:
-                topics.append({"name": name, "topic": name, "type": typ, "message_type": typ})
-        return topics
+        return self.topic_tree.selected_topics()
+
+    def _graph_error_summary(self, graph: dict[str, Any]) -> str:
+        errors = graph.get("errors", {}) if isinstance(graph, dict) else {}
+        if not isinstance(errors, dict):
+            return ""
+        parts = []
+        for key in ["topics", "nodes", "services"]:
+            text = str(errors.get(key) or "").strip()
+            if text:
+                line = text.splitlines()[0]
+                parts.append(f"{key}: {line}")
+        return "ROS graph returned no topics. " + " | ".join(parts) if parts else ""
 
     def apply_selection_to_config(self) -> None:
         if self.project is None:
@@ -253,10 +247,6 @@ class RosPage(BasePage):
         worker.signals.finished.connect(finish, Qt.QueuedConnection)
         self.pool.start(worker)
 
-    def _readonly_item(self, text: str) -> QTableWidgetItem:
-        item = QTableWidgetItem(text)
-        item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-        return item
 
     def _stream_name_from_topic(self, topic: str) -> str:
         clean = topic.strip("/").replace("/", "_").replace("-", "_") or "rgb"

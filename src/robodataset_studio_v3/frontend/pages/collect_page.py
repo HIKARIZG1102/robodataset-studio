@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
@@ -35,12 +36,19 @@ class CollectPage(BasePage):
         self.samples.setSuffix(" samples")
         self.samples.setValue(20)
         self.plan = QLabel("Plan: -")
+        self.session_label = QLabel("Session: -")
+        self.task_label = QLabel("Task: -")
         self.streams = QTableWidget(0, 6)
         self.streams.setHorizontalHeaderLabels(["Name", "Modality", "Source", "Topic/Endpoint", "Type", "Role"])
         self.mode.currentIndexChanged.connect(lambda _index: self.update_mode_ui())
         self.duration.valueChanged.connect(lambda _value: self.update_plan_text())
         self.samples.valueChanged.connect(lambda _value: self.update_plan_text())
         self.current_dataset_config: dict[str, Any] = {}
+        self.active_task_id = ""
+        self.active_session_dir = ""
+        self.task_timer = QTimer(self)
+        self.task_timer.setInterval(1000)
+        self.task_timer.timeout.connect(self.poll_active_task)
         self._build()
         self.refresh_plan()
 
@@ -71,6 +79,8 @@ class CollectPage(BasePage):
         self.layout.addWidget(QLabel("Uses the current dataset_config.yaml. Image monitors are available from the global Inspector panel."))
         self.layout.addLayout(controls)
         self.layout.addWidget(self.plan)
+        self.layout.addWidget(self.session_label)
+        self.layout.addWidget(self.task_label)
         self.layout.addWidget(self.streams)
         self.finish_layout()
         self.update_mode_ui()
@@ -173,7 +183,7 @@ class CollectPage(BasePage):
         self.status.setText("Starting recording...")
         self.run_async(
             self.api.post,
-            lambda result, error: self.finish_async_result(result, error, "Recording started"),
+            self._finish_start_recording,
             "/api/recording/start",
             payload,
             timeout=20.0,
@@ -183,8 +193,58 @@ class CollectPage(BasePage):
         self.status.setText("Stopping recording...")
         self.run_async(
             self.api.post,
-            lambda result, error: self.finish_async_result(result, error, "Recording stopped"),
+            self._finish_stop_recording,
             "/api/recording/stop",
             {"project_key": self.project_key()},
             timeout=20.0,
         )
+
+    def _finish_start_recording(self, result: object, error: object) -> None:
+        if error is not None:
+            self.show_error(error if isinstance(error, Exception) else Exception(str(error)))
+            return
+        payload = result if isinstance(result, dict) else {}
+        self.active_task_id = str(payload.get("task_id") or "")
+        self.active_session_dir = str(payload.get("session_dir") or "")
+        self.session_label.setText(f"Session: {self.active_session_dir or '-'}")
+        self.task_label.setText(f"Task: {self.active_task_id or '-'}")
+        self.show_result(payload, "Recording task started")
+        if self.active_task_id:
+            self.task_timer.start()
+
+    def _finish_stop_recording(self, result: object, error: object) -> None:
+        if error is not None:
+            self.show_error(error if isinstance(error, Exception) else Exception(str(error)))
+            return
+        payload = result if isinstance(result, dict) else {}
+        self.show_result(payload, "Stop requested")
+        task_id = str(payload.get("task_id") or self.active_task_id)
+        if task_id:
+            self.active_task_id = task_id
+            self.task_label.setText(f"Task: {task_id}")
+            self.task_timer.start()
+
+    def poll_active_task(self) -> None:
+        if not self.active_task_id:
+            self.task_timer.stop()
+            return
+        self.run_async(self.api.get, self._finish_task_poll, f"/api/tasks/{self.active_task_id}", timeout=5.0)
+
+    def _finish_task_poll(self, result: object, error: object) -> None:
+        if error is not None:
+            self.status.setText(f"Task poll failed: {error}")
+            self.task_timer.stop()
+            return
+        task = result if isinstance(result, dict) else {}
+        status = str(task.get("status") or "")
+        message = str(task.get("message") or "")
+        self.task_label.setText(f"Task: {self.active_task_id} [{status}] {message}")
+        if status in {"done", "failed", "cancelled"}:
+            self.task_timer.stop()
+            self.show_result(task, f"Recording {status}")
+            result_payload = task.get("result", {}) if isinstance(task.get("result"), dict) else {}
+            session_dir = str(result_payload.get("session_dir") or self.active_session_dir)
+            if session_dir:
+                self.active_session_dir = session_dir
+                self.session_label.setText(f"Session: {session_dir}")
+            self.refresh_plan()

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import yaml
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QPlainTextEdit, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QMessageBox, QPushButton, QPlainTextEdit, QTabWidget, QVBoxLayout, QWidget
 
 from robodataset_studio_v3.frontend.api_client import ApiClient, ProjectSummary
 
@@ -62,6 +62,13 @@ class ProjectConfigPage(QWidget):
         self.status.setText(str(result))
 
     def save(self) -> None:
+        if self.project.has_recorded_data:
+            QMessageBox.warning(
+                self,
+                "Project Config",
+                "This project already has recorded data. Create a new project version before changing its config.",
+            )
+            return
         try:
             project_config = self._project_config_from_text()
             result = self.api.put(f"/api/config/project/{self.project.key}", project_config)

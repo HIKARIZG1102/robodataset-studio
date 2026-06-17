@@ -22,6 +22,18 @@ class UploadRequest(ConnectRequest):
     repair: bool = False
 
 
+class LocalPathRequest(BaseModel):
+    local_path: str = ""
+
+
+class RemotePathRequest(ConnectRequest):
+    remote_path: str = ""
+
+
+class RemoteMkdirRequest(RemotePathRequest):
+    folder_name: str = ""
+
+
 @router.get("/dependencies", response_model=dict[str, Any])
 def dependencies() -> dict[str, Any]:
     return upload_service.dependency_check()
@@ -32,16 +44,41 @@ def connect(request: ConnectRequest) -> dict[str, Any]:
     return upload_service.connect(request.host, request.username, request.port)
 
 
+@router.post("/manifest", response_model=dict[str, Any])
+def manifest(request: LocalPathRequest) -> dict[str, Any]:
+    return upload_service.manifest(request.local_path)
+
+
+@router.post("/manifest/verify", response_model=dict[str, Any])
+def verify_manifest(request: LocalPathRequest) -> dict[str, Any]:
+    return upload_service.verify_local_manifest(request.local_path)
+
+
+@router.post("/remote/list", response_model=dict[str, Any])
+def remote_list(request: RemotePathRequest) -> dict[str, Any]:
+    return upload_service.remote_list(request.host, request.username, request.remote_path, request.port)
+
+
+@router.post("/remote/mkdir", response_model=dict[str, Any])
+def remote_mkdir(request: RemoteMkdirRequest) -> dict[str, Any]:
+    return upload_service.remote_mkdir(request.host, request.username, request.remote_path, request.folder_name, request.port)
+
+
+@router.post("/remote/space", response_model=dict[str, Any])
+def remote_space(request: RemotePathRequest) -> dict[str, Any]:
+    return upload_service.remote_space(request.host, request.username, request.remote_path, request.port)
+
+
 @router.post("/start", response_model=dict[str, Any])
 def start(request: UploadRequest) -> dict[str, Any]:
-    return upload_service.start(request.local_path, request.remote_path, request.host, request.username, repair=request.repair)
+    return upload_service.start(request.local_path, request.remote_path, request.host, request.username, repair=request.repair, port=request.port)
 
 
 @router.post("/repair", response_model=dict[str, Any])
 def repair(request: UploadRequest) -> dict[str, Any]:
-    return upload_service.start(request.local_path, request.remote_path, request.host, request.username, repair=True)
+    return upload_service.start(request.local_path, request.remote_path, request.host, request.username, repair=True, port=request.port)
 
 
 @router.post("/verify", response_model=dict[str, Any])
 def verify(request: UploadRequest) -> dict[str, Any]:
-    return upload_service.verify(request.local_path, request.remote_path, request.host)
+    return upload_service.verify(request.local_path, request.remote_path, request.host, port=request.port)

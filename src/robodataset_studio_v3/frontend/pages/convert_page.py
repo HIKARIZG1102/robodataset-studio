@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import QFileDialog, QFormLayout, QHBoxLayout, QLineEdit, QPushButton, QWidget
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import QFileDialog, QFormLayout, QHBoxLayout, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, QWidget
 
 from robodataset_studio_v3.frontend.api_client import ApiClient, ProjectSummary
 from robodataset_studio_v3.frontend.pages.base import BasePage
@@ -12,6 +13,15 @@ class ConvertPage(BasePage):
         self.root = QLineEdit()
         self.sessions = QLineEdit()
         self.output_dir = QLineEdit()
+        self.session_table = QTableWidget(0, 5)
+        self.session_table.setHorizontalHeaderLabels(["Use", "Session", "Episodes", "Status", "Path"])
+        if project is not None:
+            self.root.setText(f"{project.path}/raw_sessions")
+            self.output_dir.setText(f"{project.path}/exports")
+        self.active_task_id = ""
+        self.task_timer = QTimer(self)
+        self.task_timer.setInterval(1000)
+        self.task_timer.timeout.connect(self.poll_task)
         form = QFormLayout()
         form.addRow("Raw sessions root", self._path_row(self.root, self.browse_root))
         form.addRow("Selected sessions, comma separated", self.sessions)
@@ -23,6 +33,7 @@ class ConvertPage(BasePage):
             buttons.addWidget(button)
         self.layout.addLayout(form)
         self.layout.addLayout(buttons)
+        self.layout.addWidget(self.session_table)
         self.finish_layout()
 
     def scan(self) -> None:
@@ -34,9 +45,11 @@ class ConvertPage(BasePage):
             self.show_error(error if isinstance(error, Exception) else Exception(str(error)))
             return
         if isinstance(result, dict):
-            sessions = result.get("sessions", [])
+            payload = result.get("result", result)
+            sessions = payload.get("sessions", []) if isinstance(payload, dict) else []
             if isinstance(sessions, list):
-                self.sessions.setText(", ".join(str(item) for item in sessions))
+                self.populate_sessions(sessions)
+                self.sessions.setText(", ".join(self.selected_session_paths()))
         self.show_result(result, "Sessions scanned")
 
     def merge(self) -> None:
@@ -46,9 +59,65 @@ class ConvertPage(BasePage):
         self._convert("/api/convert/hdf5", "HDF5 task created")
 
     def _convert(self, path: str, status: str) -> None:
-        payload = {"sessions": self._split_csv(self.sessions.text()), "output_dir": self.output_dir.text().strip()}
+        selected = self.selected_session_paths() or self._split_csv(self.sessions.text())
+        payload = {"sessions": selected, "output_dir": self.output_dir.text().strip()}
         self.status.setText(f"{status}...")
-        self.run_async(self.api.post, lambda result, error: self.finish_async_result(result, error, status), path, payload, timeout=120.0)
+        self.run_async(self.api.post, lambda result, error: self._finish_convert_start(result, error, status), path, payload, timeout=20.0)
+
+    def _finish_convert_start(self, result: object, error: object, status: str) -> None:
+        if error is not None:
+            self.show_error(error if isinstance(error, Exception) else Exception(str(error)))
+            return
+        self.show_result(result, status)
+        payload = result if isinstance(result, dict) else {}
+        self.active_task_id = str(payload.get("task_id") or "")
+        if self.active_task_id:
+            self.task_timer.start()
+
+    def poll_task(self) -> None:
+        if not self.active_task_id:
+            self.task_timer.stop()
+            return
+        self.run_async(self.api.get, self._finish_task_poll, f"/api/tasks/{self.active_task_id}", timeout=5.0)
+
+    def _finish_task_poll(self, result: object, error: object) -> None:
+        if error is not None:
+            self.status.setText(f"Task poll failed: {error}")
+            self.task_timer.stop()
+            return
+        task = result if isinstance(result, dict) else {}
+        status = str(task.get("status") or "")
+        self.status.setText(f"Task {self.active_task_id}: {status} {task.get('message', '')}")
+        if status in {"done", "failed", "cancelled"}:
+            self.task_timer.stop()
+            self.show_result(task, f"Convert {status}")
+
+    def populate_sessions(self, sessions: list[object]) -> None:
+        self.session_table.setRowCount(len(sessions))
+        for row, session in enumerate(sessions):
+            item = session if isinstance(session, dict) else {"path": str(session), "name": str(session).split("/")[-1]}
+            use = QTableWidgetItem("")
+            use.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            use.setCheckState(Qt.Checked if int(item.get("episode_count", 0) or 0) > 0 else Qt.Unchecked)
+            values = [
+                use,
+                QTableWidgetItem(str(item.get("name", ""))),
+                QTableWidgetItem(str(item.get("episode_count", ""))),
+                QTableWidgetItem(str(item.get("status", ""))),
+                QTableWidgetItem(str(item.get("path", ""))),
+            ]
+            for col, value in enumerate(values):
+                self.session_table.setItem(row, col, value)
+        self.session_table.resizeColumnsToContents()
+
+    def selected_session_paths(self) -> list[str]:
+        paths = []
+        for row in range(self.session_table.rowCount()):
+            use = self.session_table.item(row, 0)
+            path = self.session_table.item(row, 4)
+            if use is not None and use.checkState() == Qt.Checked and path is not None and path.text().strip():
+                paths.append(path.text().strip())
+        return paths
 
     def _split_csv(self, value: str) -> list[str]:
         return [item.strip() for item in value.split(",") if item.strip()]

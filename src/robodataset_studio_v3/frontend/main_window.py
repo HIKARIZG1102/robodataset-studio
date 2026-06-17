@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThreadPool
 from PySide6.QtWidgets import (
     QDockWidget,
     QLabel,
     QMainWindow,
     QMessageBox,
+    QPushButton,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -24,10 +25,12 @@ from robodataset_studio_v3.frontend.pages.ros_page import RosPage
 from robodataset_studio_v3.frontend.pages.settings_page import SettingsPage
 from robodataset_studio_v3.frontend.pages.tutorial_page import TutorialPage
 from robodataset_studio_v3.frontend.pages.upload_page import UploadPage
+from robodataset_studio_v3.frontend.widgets.config_library_page import ConfigLibraryPage
 from robodataset_studio_v3.frontend.widgets.inspector import InspectorDock
 from robodataset_studio_v3.frontend.widgets.project_config_page import ProjectConfigPage
 from robodataset_studio_v3.frontend.widgets.project_browser import ProjectBrowserDialog
 from robodataset_studio_v3.frontend.widgets.project_dialog import NewProjectDialog
+from robodataset_studio_v3.frontend.worker import ApiWorker
 
 
 class MainWindow(QMainWindow):
@@ -43,7 +46,12 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.empty)
         self.inspector: InspectorDock | None = None
         self.inspector_dock: QDockWidget | None = None
+        self.ros_graph_cache: dict | None = None
+        self.refresh_graph_button: QPushButton | None = None
+        self.pool = QThreadPool.globalInstance()
+        self._workers: list[ApiWorker] = []
         self._build_menu()
+        self._build_graph_button()
         self._ensure_backend()
 
     def _ensure_backend(self) -> None:
@@ -65,30 +73,59 @@ class MainWindow(QMainWindow):
         new_project.triggered.connect(self.new_project)
         open_project.triggered.connect(self.open_project)
 
-        project_menu = self.menuBar().addMenu("Project")
-        project_menu.addAction("Project Config", self.open_project_config_tab)
+        config_menu = self.menuBar().addMenu("Config")
+        config_menu.addAction("Config Library", self.open_config_library_tab)
+        config_menu.addAction("Current Project Config", self.open_project_config_tab)
 
         tools_menu = self.menuBar().addMenu("Tools")
         tools_menu.addAction("Collect", lambda: self.open_action_tab("collect"))
-        tools_menu.addAction("ROS Discovery", lambda: self.open_action_tab("ros"))
         tools_menu.addAction("Data Review", lambda: self.open_action_tab("review"))
         tools_menu.addAction("Convert", lambda: self.open_action_tab("convert"))
         tools_menu.addAction("Upload", lambda: self.open_action_tab("upload"))
         tools_menu.addAction("AI Assist", lambda: self.open_action_tab("ai"))
         tools_menu.addAction("Logs", lambda: self.open_action_tab("logs"))
-        tools_menu.addSeparator()
-        tools_menu.addAction("Toggle Inspector", self.toggle_inspector)
 
-        inspector_menu = self.menuBar().addMenu("Inspector")
-        inspector_menu.addAction("Show / Hide Inspector", self.toggle_inspector)
-        inspector_menu.addAction("Topic Inspector", self.show_topic_inspector)
-        inspector_menu.addAction("Image Monitor", self.show_image_monitor)
+        self.menuBar().addAction("Inspector", self.toggle_inspector)
 
         settings_menu = self.menuBar().addMenu("Settings")
         settings_menu.addAction("Settings", lambda: self.open_action_tab("settings"))
 
         help_menu = self.menuBar().addMenu("Help")
         help_menu.addAction("Tutorial", lambda: self.open_action_tab("tutorial"))
+
+    def _build_graph_button(self) -> None:
+        refresh = QPushButton("Refresh Graph")
+        refresh.setObjectName("refreshGraphButton")
+        refresh.setToolTip("Refresh the global ROS graph for Config, Discovery, and Inspector.")
+        refresh.setCursor(Qt.PointingHandCursor)
+        refresh.clicked.connect(self.refresh_ros_graph)
+        refresh.setStyleSheet(
+            """
+            QPushButton#refreshGraphButton {
+                margin: 3px 8px 3px 12px;
+                padding: 5px 14px;
+                border: 1px solid #2f6f9f;
+                border-radius: 6px;
+                color: #ffffff;
+                background: #1f6aa5;
+                font-weight: 600;
+            }
+            QPushButton#refreshGraphButton:hover {
+                background: #267fbe;
+                border-color: #3b8fc8;
+            }
+            QPushButton#refreshGraphButton:pressed {
+                background: #18527f;
+            }
+            QPushButton#refreshGraphButton:disabled {
+                color: #d8dee6;
+                background: #6c7a86;
+                border-color: #7b8792;
+            }
+            """
+        )
+        self.refresh_graph_button = refresh
+        self.menuBar().setCornerWidget(refresh, Qt.TopRightCorner)
 
     def _empty_workspace(self) -> QWidget:
         widget = QWidget()
@@ -99,7 +136,7 @@ class MainWindow(QMainWindow):
         return widget
 
     def new_project(self) -> None:
-        dialog = NewProjectDialog(self)
+        dialog = NewProjectDialog(self.api, self)
         if not dialog.exec():
             return
         try:
@@ -108,12 +145,34 @@ class MainWindow(QMainWindow):
                 version=dialog.version.text().strip(),
                 operator=dialog.operator.text().strip(),
                 root_path=dialog.root_path.text().strip(),
+                config_id=dialog.selected_config_id(),
             )
         except Exception as exc:
             QMessageBox.warning(self, "New Project", f"Cannot create project:\n{exc}")
             return
         self.current_project = project
         self._load_project_workspace()
+
+    def open_config_library_tab(self) -> None:
+        self._ensure_workspace(allow_empty=True)
+        tab_id = "config_library"
+        existing = self.open_tabs.get(tab_id)
+        if existing is not None:
+            self.workspace.setCurrentWidget(existing)
+            return
+        page = ConfigLibraryPage(self.api, self.current_project)
+        if self.ros_graph_cache:
+            page.set_graph_data(self.ros_graph_cache)
+        self.open_tabs[tab_id] = page
+        index = self.workspace.insertTab(0, page, "Config Library")
+        self.workspace.setCurrentIndex(index)
+
+    def new_config(self) -> None:
+        self.open_config_library_tab()
+        page = self.open_tabs.get("config_library")
+        starter = getattr(page, "start_new_config", None)
+        if callable(starter):
+            starter()
 
     def open_project(self) -> None:
         try:
@@ -180,6 +239,10 @@ class MainWindow(QMainWindow):
                 self.workspace.setCurrentWidget(existing)
             return
         page = self._make_action_page(tab_id)
+        if self.ros_graph_cache:
+            handler = getattr(page, "set_graph_data", None)
+            if callable(handler):
+                handler(self.ros_graph_cache)
         self.open_tabs[tab_id] = page
         index = self.workspace.addTab(page, self._tab_title(tab_id))
         if switch:
@@ -232,6 +295,9 @@ class MainWindow(QMainWindow):
         dock = self._ensure_inspector()
         dock.setVisible(not dock.isVisible())
 
+    def show_inspector(self) -> None:
+        self._ensure_inspector().show()
+
     def show_topic_inspector(self) -> None:
         dock = self._ensure_inspector()
         if self.inspector is not None:
@@ -244,6 +310,34 @@ class MainWindow(QMainWindow):
             self.inspector.show_image()
         dock.show()
 
+    def refresh_ros_graph(self) -> None:
+        self.statusBar().showMessage("Refreshing ROS graph...")
+        if self.refresh_graph_button is not None:
+            self.refresh_graph_button.setEnabled(False)
+            self.refresh_graph_button.setText("Refreshing...")
+        worker = ApiWorker(self.api.get, "/api/ros/graph", timeout=12.0)
+        self._workers.append(worker)
+
+        def finish(result: object, error: object, item: ApiWorker = worker) -> None:
+            try:
+                if error is not None:
+                    self.statusBar().showMessage(f"ROS graph refresh failed: {error}")
+                    return
+                graph = result if isinstance(result, dict) else {}
+                self._ros_graph_updated(graph)
+                topics = graph.get("topics", []) if isinstance(graph.get("topics"), list) else []
+                nodes = graph.get("nodes", []) if isinstance(graph.get("nodes"), list) else []
+                self.statusBar().showMessage(f"ROS graph refreshed: {len(topics)} topics, {len(nodes)} nodes")
+            finally:
+                if self.refresh_graph_button is not None:
+                    self.refresh_graph_button.setEnabled(True)
+                    self.refresh_graph_button.setText("Refresh Graph")
+                if item in self._workers:
+                    self._workers.remove(item)
+
+        worker.signals.finished.connect(finish, Qt.QueuedConnection)
+        self.pool.start(worker)
+
     def _ensure_inspector(self) -> QDockWidget:
         if self.inspector_dock is not None:
             return self.inspector_dock
@@ -251,6 +345,7 @@ class MainWindow(QMainWindow):
         self.inspector_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
         try:
             self.inspector = InspectorDock(self.api)
+            self.inspector.graphUpdated.connect(self._ros_graph_updated)
             self.inspector_dock.setWidget(self.inspector)
         except Exception as exc:
             fallback = QLabel(f"Inspector failed to initialize:\n{exc}")
@@ -259,6 +354,15 @@ class MainWindow(QMainWindow):
             self.inspector = None
         self.addDockWidget(Qt.RightDockWidgetArea, self.inspector_dock)
         return self.inspector_dock
+
+    def _ros_graph_updated(self, graph: dict) -> None:
+        self.ros_graph_cache = graph
+        if self.inspector is not None:
+            self.inspector.set_graph_data(graph)
+        for widget in self.open_tabs.values():
+            handler = getattr(widget, "set_graph_data", None)
+            if callable(handler):
+                handler(graph)
 
     def close_workspace_tab(self, index: int) -> None:
         widget = self.workspace.widget(index)

@@ -25,7 +25,7 @@ class ProjectService:
         for path in sorted(item for item in self.root.iterdir() if item.is_dir()):
             name, version = self._split_key(path.name)
             self._known_paths[path.name] = path
-            projects.append(ProjectSummary(key=path.name, name=name, version=version, path=str(path)))
+            projects.append(self._summary_for_path(path))
         return projects
 
     def project_dir(self, key: str) -> Path:
@@ -45,7 +45,7 @@ class ProjectService:
         key = path.name
         name, version = self._split_key(key)
         self._known_paths[key] = path
-        return ProjectSummary(key=key, name=name, version=version, path=str(path))
+        return self._summary_for_path(path)
 
     def create_project(self, request: ProjectCreateRequest) -> ProjectSummary:
         name = self._safe_part(request.name or "untitled_project")
@@ -59,10 +59,70 @@ class ProjectService:
         self._known_paths[key] = path
         for child in ["raw_sessions", "review", "exports", "logs"]:
             (path / child).mkdir(exist_ok=True)
-        project_meta = {"project": {"name": name, "version": version, "operator": request.operator, "notes": request.notes}}
+        config_id = request.config_id or "default_calvin"
+        project_meta = {
+            "project": {
+                "name": name,
+                "version": version,
+                "operator": request.operator,
+                "notes": request.notes,
+                "config_id": config_id,
+            }
+        }
         (path / "project.yaml").write_text(yaml.safe_dump(project_meta, sort_keys=False, allow_unicode=True), encoding="utf-8")
-        self.config_service.write_default_configs(path)
-        return ProjectSummary(key=key, name=name, version=version, path=str(path))
+        try:
+            self.config_service.apply_library_config_to_project(path, config_id)
+        except FileNotFoundError:
+            self.config_service.ensure_default_library_config()
+            config_id = "default_calvin"
+            project_meta["project"]["config_id"] = config_id
+            (path / "project.yaml").write_text(yaml.safe_dump(project_meta, sort_keys=False, allow_unicode=True), encoding="utf-8")
+            self.config_service.apply_library_config_to_project(path, config_id)
+        return self._summary_for_path(path)
+
+    def bind_config(self, key: str, config_id: str) -> ProjectSummary:
+        path = self.project_dir(key)
+        if self.has_recorded_data(path):
+            raise RuntimeError("project already has recorded data; create a new project version before loading another config")
+        self.config_service.apply_library_config_to_project(path, config_id)
+        meta = self._project_meta(path)
+        meta.setdefault("project", {})
+        meta["project"]["config_id"] = config_id
+        (path / "project.yaml").write_text(yaml.safe_dump(meta, sort_keys=False, allow_unicode=True), encoding="utf-8")
+        return self._summary_for_path(path)
+
+    def has_recorded_data(self, path: Path) -> bool:
+        raw_sessions = path / "raw_sessions"
+        if not raw_sessions.exists():
+            return False
+        for item in raw_sessions.rglob("*"):
+            if item.is_file() and (item.name.startswith("episode_") or item.suffix in {".npz", ".hdf5"}):
+                return True
+            if item.is_dir() and item.name.startswith("session_"):
+                training = item / "training"
+                if training.exists() and any(training.glob("episode_*.npz")):
+                    return True
+        return False
+
+    def _summary_for_path(self, path: Path) -> ProjectSummary:
+        name, version = self._split_key(path.name)
+        meta = self._project_meta(path)
+        project = meta.get("project", {}) if isinstance(meta.get("project"), dict) else {}
+        return ProjectSummary(
+            key=path.name,
+            name=str(project.get("name") or name),
+            version=str(project.get("version") or version),
+            path=str(path),
+            config_id=str(project.get("config_id") or ""),
+            has_recorded_data=self.has_recorded_data(path),
+        )
+
+    def _project_meta(self, path: Path) -> dict:
+        meta_path = path / "project.yaml"
+        if not meta_path.exists():
+            return {}
+        data = yaml.safe_load(meta_path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
 
     def _safe_part(self, value: str) -> str:
         text = "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in value.strip())

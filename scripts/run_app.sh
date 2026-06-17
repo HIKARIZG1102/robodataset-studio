@@ -18,6 +18,10 @@ if [[ -f "${ROS_SETUP}" ]]; then
 fi
 
 export RMW_IMPLEMENTATION="${ROBODATASET_RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
+export ROBODATASET_RMW_IMPLEMENTATION="${ROBODATASET_RMW_IMPLEMENTATION:-${RMW_IMPLEMENTATION}}"
+export ROS_SETUP
+export ROS_LOG_DIR="${ROS_LOG_DIR:-/tmp/robodataset_ros_logs}"
+mkdir -p "${ROS_LOG_DIR}" 2>/dev/null || true
 export PYTHONPATH="${ROOT_DIR}/src:${PYTHONPATH:-}"
 
 if [[ -n "${ENV_PYTHON:-}" && -x "${ENV_PYTHON}" ]]; then
