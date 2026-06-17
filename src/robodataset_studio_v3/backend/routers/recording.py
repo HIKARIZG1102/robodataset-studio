@@ -35,6 +35,11 @@ def start(request: RecordingStartRequest) -> dict[str, Any]:
     )
 
 
+@router.post("/simulate", response_model=dict[str, Any])
+def simulate(request: RecordingStartRequest) -> dict[str, Any]:
+    return recording_service.simulate(request.project_key, target_samples=request.target_samples)
+
+
 @router.post("/stop", response_model=dict[str, Any])
 def stop(request: ProjectRequest) -> dict[str, Any]:
     return recording_service.stop(request.project_key)

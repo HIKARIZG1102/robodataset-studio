@@ -46,6 +46,9 @@ class SshConnection:
 
 
 class UploadService:
+    def __init__(self) -> None:
+        self._active_processes: dict[str, subprocess.Popen[str]] = {}
+
     def dependency_check(self) -> dict[str, Any]:
         result = {
             "ssh": shutil.which("ssh") is not None,
@@ -164,17 +167,34 @@ class UploadService:
 
     def start(self, local_path: str, remote_path: str, host: str = "", username: str = "", repair: bool = False, port: int = 22, password: str = "", key_path: str = "") -> dict[str, Any]:
         task = task_service.create_task("upload_repair" if repair else "upload", "upload started")
+        task_service.register_cancel_callback(task.task_id, lambda task_id=task.task_id: self.cancel(task_id))
         Thread(target=self._start_worker, args=(task.task_id, local_path, remote_path, host, username, repair, port, password, key_path), daemon=True).start()
         return {"task_id": task.task_id, "local_path": local_path, "remote_path": remote_path, "host": host, "username": username, "repair": repair, "port": port, "auth_mode": self._connection(host, username, remote_path, port, password, key_path).auth_mode}
 
     def _start_worker(self, task_id: str, local_path: str, remote_path: str, host: str, username: str, repair: bool, port: int, password: str, key_path: str) -> None:
-        result = self._start_sync(local_path, remote_path, host, username, repair, port, password, key_path)
-        if result.get("ok"):
-            task_service.complete_task(task_id, message="upload finished", result=result)
-        else:
-            task_service.fail_task(task_id, message="upload failed", error=str(result.get("error", "")))
+        try:
+            result = self._start_sync(task_id, local_path, remote_path, host, username, repair, port, password, key_path)
+            if task_service.is_cancelled(task_id):
+                return
+            if result.get("ok"):
+                task_service.complete_task(task_id, message="upload finished", result=result)
+            else:
+                task_service.fail_task(task_id, message="upload failed", error=str(result.get("error", "")))
+        finally:
+            task_service.clear_cancel_callback(task_id)
+            self._active_processes.pop(task_id, None)
 
-    def _start_sync(self, local_path: str, remote_path: str, host: str = "", username: str = "", repair: bool = False, port: int = 22, password: str = "", key_path: str = "") -> dict[str, Any]:
+    def cancel(self, task_id: str) -> dict[str, Any]:
+        process = self._active_processes.get(task_id)
+        if process is not None and process.poll() is None:
+            task_service.add_log(task_id, "upload cancel requested; terminating transfer process")
+            try:
+                process.terminate()
+            except Exception as exc:
+                task_service.add_log(task_id, f"terminate failed: {exc}")
+        return {"task_id": task_id, "cancel_requested": True}
+
+    def _start_sync(self, task_id: str, local_path: str, remote_path: str, host: str = "", username: str = "", repair: bool = False, port: int = 22, password: str = "", key_path: str = "") -> dict[str, Any]:
         local = Path(local_path).expanduser()
         deps = self.dependency_check()
         connection = self._connection(host, username, remote_path, port, password, key_path)
@@ -204,22 +224,26 @@ class UploadService:
         else:
             try:
                 if repair:
+                    task_service.add_log(task_id, "verifying remote manifest before repair")
                     verify_result = self._remote_verify_connection(local, connection)
                     rel_paths = self._repair_paths(verify_result)
                     if not rel_paths:
                         result.update({"ok": True, "message": "remote already verified", "verify": verify_result})
                     elif connection.password or connection.key_path:
-                        upload_result = self._upload_sftp(local, connection, rel_paths)
+                        upload_result = self._upload_sftp(local, connection, rel_paths, task_id=task_id)
                         result.update({"ok": True, "verify": verify_result, **upload_result})
                     else:
-                        command = self._repair_command(local, connection.target, rel_paths, connection.port, connection.key_path)
-                        result.update(self._run_command(command))
-                        result["verify"] = verify_result
+                        command, files_from = self._repair_command(local, connection.target, rel_paths, connection.port, connection.key_path)
+                        try:
+                            result.update(self._run_command(command, task_id=task_id))
+                            result["verify"] = verify_result
+                        finally:
+                            self._cleanup_temp_file(files_from, task_id)
                 elif connection.password or connection.key_path:
-                    result.update({"ok": True, **self._upload_sftp(local, connection)})
+                    result.update({"ok": True, **self._upload_sftp(local, connection, task_id=task_id)})
                 else:
                     command = self._rsync_command(local, connection.target, connection.port, connection.key_path)
-                    result.update(self._run_command(command))
+                    result.update(self._run_command(command, task_id=task_id))
             except Exception as exc:
                 result["ok"] = False
                 result["error"] = str(exc)
@@ -390,7 +414,7 @@ print(json.dumps({{"ok": True, "path": str(root), "entries": entries}}, ensure_a
         command.extend([source, target])
         return command
 
-    def _repair_command(self, local_path: Path, target: str, rel_paths: list[str], port: int = 22, key_path: str = "") -> list[str]:
+    def _repair_command(self, local_path: Path, target: str, rel_paths: list[str], port: int = 22, key_path: str = "") -> tuple[list[str], Path]:
         source_root = local_path.parent if local_path.is_file() else local_path
         files_from = self._write_files_from(rel_paths)
         command = [
@@ -412,7 +436,7 @@ print(json.dumps({{"ok": True, "path": str(root), "entries": entries}}, ensure_a
             target,
             ]
         )
-        return command
+        return command, files_from
 
     def _rsync_ssh_command(self, port: int = 22, key_path: str = "") -> str:
         parts = ["ssh"]
@@ -422,15 +446,39 @@ print(json.dumps({{"ok": True, "path": str(root), "entries": entries}}, ensure_a
             parts.extend(["-i", shlex.quote(key_path)])
         return " ".join(parts) if len(parts) > 1 else ""
 
-    def _run_command(self, command: list[str]) -> dict[str, Any]:
-        completed = subprocess.run(command, text=True, capture_output=True, check=False)
+    def _run_command(self, command: list[str], *, task_id: str = "") -> dict[str, Any]:
+        if task_id:
+            task_service.add_log(task_id, "$ " + " ".join(shlex.quote(item) for item in command))
+        process = subprocess.Popen(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1)
+        if task_id:
+            self._active_processes[task_id] = process
+        output_lines: list[str] = []
+        assert process.stdout is not None
+        for raw_line in process.stdout:
+            line = raw_line.rstrip("\n\r")
+            if not line:
+                continue
+            output_lines.append(line)
+            if len(output_lines) > 300:
+                output_lines = output_lines[-300:]
+            if task_id:
+                task_service.add_log(task_id, line)
+            if task_id and task_service.is_cancelled(task_id):
+                try:
+                    process.terminate()
+                except Exception:
+                    pass
+                break
+        returncode = process.wait()
+        if task_id:
+            self._active_processes.pop(task_id, None)
         return {
-            "ok": completed.returncode == 0,
+            "ok": returncode == 0 and not (task_id and task_service.is_cancelled(task_id)),
             "command": command,
-            "returncode": completed.returncode,
-            "stdout_tail": completed.stdout.splitlines()[-80:],
-            "stderr_tail": completed.stderr.splitlines()[-80:],
-            "error": "" if completed.returncode == 0 else completed.stderr.strip(),
+            "returncode": returncode,
+            "stdout_tail": output_lines[-80:],
+            "stderr_tail": [],
+            "error": "" if returncode == 0 else "\n".join(output_lines[-20:]),
         }
 
     def _remote_verify(self, local_path: Path, target: str, port: int = 22) -> dict[str, Any]:
@@ -533,7 +581,7 @@ print(json.dumps({{"ok": not missing and not mismatched, "checked": checked, "mi
                 paths.extend(str(item) for item in value)
         return sorted(set(path for path in paths if path and not path.startswith("/") and ".." not in PurePosixPath(path).parts))
 
-    def _upload_sftp(self, local_path: Path, connection: SshConnection, rel_paths: list[str] | None = None) -> dict[str, Any]:
+    def _upload_sftp(self, local_path: Path, connection: SshConnection, rel_paths: list[str] | None = None, *, task_id: str = "") -> dict[str, Any]:
         source = local_path.expanduser().resolve()
         base, paths = UploadManifest().source_base_and_files(source)
         selected = set(self._safe_relative_paths(rel_paths or []))
@@ -546,11 +594,15 @@ print(json.dumps({{"ok": not missing and not mismatched, "checked": checked, "mi
             try:
                 self._ensure_remote_dir(sftp, connection.remote_path)
                 for path in paths:
+                    if task_id and task_service.is_cancelled(task_id):
+                        raise RuntimeError("upload cancelled")
                     if not path.is_file():
                         continue
                     rel_path = path.relative_to(base).as_posix()
                     remote_file = self._remote_join(connection.remote_path, rel_path)
                     self._ensure_remote_dir(sftp, str(PurePosixPath(remote_file).parent))
+                    if task_id:
+                        task_service.add_log(task_id, f"sftp put {rel_path} -> {remote_file}")
                     sftp.put(str(path), remote_file)
                     uploaded.append(rel_path)
             finally:
@@ -604,6 +656,15 @@ print(json.dumps({{"ok": not missing and not mismatched, "checked": checked, "mi
             for rel_path in rel_paths:
                 handle.write(f"{rel_path}\n")
         return Path(handle.name)
+
+    def _cleanup_temp_file(self, path: Path, task_id: str = "") -> None:
+        try:
+            path.unlink(missing_ok=True)
+            if task_id:
+                task_service.add_log(task_id, f"removed temporary files-from manifest: {path}")
+        except Exception as exc:
+            if task_id:
+                task_service.add_log(task_id, f"temporary files-from cleanup failed: {exc}")
 
 
 upload_service = UploadService()

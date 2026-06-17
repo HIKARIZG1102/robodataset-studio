@@ -48,11 +48,14 @@ class MainWindow(QMainWindow):
         self.inspector_dock: QDockWidget | None = None
         self.ros_graph_cache: dict | None = None
         self.refresh_graph_button: QPushButton | None = None
+        self.settings: dict = {}
+        self._restoring_workspace = False
         self.pool = QThreadPool.globalInstance()
         self._workers: list[ApiWorker] = []
         self._build_menu()
         self._build_graph_button()
         self._ensure_backend()
+        self._restore_startup_state()
 
     def _ensure_backend(self) -> None:
         try:
@@ -151,6 +154,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "New Project", f"Cannot create project:\n{exc}")
             return
         self.current_project = project
+        self._remember_project(project)
         self._load_project_workspace()
 
     def open_config_library_tab(self) -> None:
@@ -197,6 +201,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Open Project", f"Cannot open project folder:\n{exc}")
                 return
         self.current_project = selected
+        self._remember_project(selected)
         self._load_project_workspace()
 
     def _load_project_workspace(self) -> None:
@@ -205,10 +210,17 @@ class MainWindow(QMainWindow):
         self.workspace = QTabWidget()
         self.workspace.setTabsClosable(True)
         self.workspace.tabCloseRequested.connect(self.close_workspace_tab)
+        self.workspace.currentChanged.connect(self._workspace_tab_changed)
         self.open_tabs = {}
+        self._restoring_workspace = True
         for tab_id in ["collect", "review", "convert", "upload", "logs"]:
             self._add_action_tab(tab_id, switch=False)
         self.setCentralWidget(self.workspace)
+        self._restoring_workspace = False
+        self._sync_inspector_project()
+        last_tab = self._ui_settings().get("last_active_tab", "")
+        if isinstance(last_tab, str) and last_tab in self.open_tabs:
+            self.workspace.setCurrentWidget(self.open_tabs[last_tab])
 
     def open_project_config_tab(self) -> None:
         if self.current_project is None:
@@ -286,6 +298,7 @@ class MainWindow(QMainWindow):
             self.workspace = QTabWidget()
             self.workspace.setTabsClosable(True)
             self.workspace.tabCloseRequested.connect(self.close_workspace_tab)
+            self.workspace.currentChanged.connect(self._workspace_tab_changed)
             self.open_tabs = {}
             self.setCentralWidget(self.workspace)
             return
@@ -295,6 +308,7 @@ class MainWindow(QMainWindow):
     def toggle_inspector(self) -> None:
         dock = self._ensure_inspector()
         dock.setVisible(not dock.isVisible())
+        self._save_ui_state()
 
     def show_inspector(self) -> None:
         self._ensure_inspector().show()
@@ -346,6 +360,7 @@ class MainWindow(QMainWindow):
         self.inspector_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
         try:
             self.inspector = InspectorDock(self.api)
+            self.inspector.set_project(self.current_project)
             self.inspector.graphUpdated.connect(self._ros_graph_updated)
             self.inspector_dock.setWidget(self.inspector)
         except Exception as exc:
@@ -353,7 +368,10 @@ class MainWindow(QMainWindow):
             fallback.setAlignment(Qt.AlignTop | Qt.AlignLeft)
             self.inspector_dock.setWidget(fallback)
             self.inspector = None
+        self.inspector_dock.visibilityChanged.connect(lambda _visible: self._save_ui_state())
         self.addDockWidget(Qt.RightDockWidgetArea, self.inspector_dock)
+        visible = bool(self._ui_settings().get("inspector_visible", True))
+        self.inspector_dock.setVisible(visible)
         return self.inspector_dock
 
     def _ros_graph_updated(self, graph: dict) -> None:
@@ -374,7 +392,74 @@ class MainWindow(QMainWindow):
         self.workspace.removeTab(index)
         widget.deleteLater()
 
+    def _workspace_tab_changed(self, _index: int) -> None:
+        if self._restoring_workspace:
+            return
+        self._save_ui_state()
+
+    def _restore_startup_state(self) -> None:
+        try:
+            settings = self.api.get("/api/settings", timeout=5.0)
+        except Exception:
+            settings = {}
+        self.settings = settings if isinstance(settings, dict) else {}
+        ui = self._ui_settings()
+        project_path = str(ui.get("last_project_path") or "")
+        if project_path:
+            try:
+                self.current_project = self.api.open_project_path(project_path)
+                self._load_project_workspace()
+            except Exception as exc:
+                self.statusBar().showMessage(f"Could not restore last project: {exc}")
+        if bool(ui.get("inspector_visible", True)):
+            self._ensure_inspector()
+
+    def _ui_settings(self) -> dict:
+        ui = self.settings.get("ui", {}) if isinstance(self.settings.get("ui"), dict) else {}
+        return ui
+
+    def _current_tab_id(self) -> str:
+        if not isinstance(self.workspace, QTabWidget):
+            return ""
+        widget = self.workspace.currentWidget()
+        for tab_id, tab_widget in self.open_tabs.items():
+            if tab_widget is widget:
+                return tab_id
+        return ""
+
+    def _remember_project(self, project: ProjectSummary) -> None:
+        settings = dict(self.settings or {})
+        recent = settings.get("recent_projects", []) if isinstance(settings.get("recent_projects"), list) else []
+        row = {"key": project.key, "name": project.name, "version": project.version, "path": project.path, "config_id": project.config_id}
+        recent = [item for item in recent if not (isinstance(item, dict) and str(item.get("path", "")) == project.path)]
+        recent.insert(0, row)
+        settings["recent_projects"] = recent[:20]
+        settings.setdefault("ui", {})
+        settings["ui"]["last_project_path"] = project.path
+        self._write_settings(settings)
+
+    def _sync_inspector_project(self) -> None:
+        if self.inspector is not None:
+            self.inspector.set_project(self.current_project)
+
+    def _save_ui_state(self) -> None:
+        settings = dict(self.settings or {})
+        settings.setdefault("ui", {})
+        settings["ui"]["last_active_tab"] = self._current_tab_id()
+        settings["ui"]["inspector_visible"] = bool(self.inspector_dock and self.inspector_dock.isVisible())
+        if self.current_project is not None:
+            settings["ui"]["last_project_path"] = self.current_project.path
+        self._write_settings(settings)
+
+    def _write_settings(self, settings: dict) -> None:
+        try:
+            saved = self.api.put("/api/settings", settings, timeout=10.0)
+            self.settings = saved if isinstance(saved, dict) else settings
+        except Exception as exc:
+            self.statusBar().showMessage(f"Settings save failed: {exc}")
+
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        self._save_ui_state()
         if self.inspector is not None:
             self.inspector.stop_workers()
         self.backend.stop()

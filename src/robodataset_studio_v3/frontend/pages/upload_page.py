@@ -6,6 +6,7 @@ from typing import Any
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QComboBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -28,6 +29,8 @@ from robodataset_studio_v3.frontend.pages.base import BasePage
 class UploadPage(BasePage):
     def __init__(self, api: ApiClient, project: ProjectSummary | None = None) -> None:
         super().__init__("Upload", api, project)
+        self.profile = QComboBox()
+        self.profile.setEditable(True)
         self.local_path = QLineEdit()
         self.remote_path = QLineEdit()
         self.host = QLineEdit()
@@ -54,6 +57,7 @@ class UploadPage(BasePage):
         self.remote_files.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.remote_files.cellDoubleClicked.connect(self.open_remote_row)
         self.active_task_id = ""
+        self.settings: dict[str, Any] = {}
         self.task_timer = QTimer(self)
         self.task_timer.setInterval(1000)
         self.task_timer.timeout.connect(self.poll_task)
@@ -63,6 +67,7 @@ class UploadPage(BasePage):
         self.password.textChanged.connect(self.update_auth_hint)
         self.key_path.textChanged.connect(self.update_auth_hint)
         self._build()
+        self.load_profiles()
 
     def _build(self) -> None:
         local_box = QGroupBox("Local source")
@@ -82,6 +87,17 @@ class UploadPage(BasePage):
 
         remote_box = QGroupBox("Server and remote directory")
         remote_layout = QFormLayout(remote_box)
+        profile_actions = QHBoxLayout()
+        for label, handler in [
+            ("Load Profile", self.load_selected_profile),
+            ("Save Profile", self.save_profile),
+            ("Delete Profile", self.delete_profile),
+        ]:
+            button = QPushButton(label)
+            button.clicked.connect(handler)
+            profile_actions.addWidget(button)
+        remote_layout.addRow("Server profile", self.profile)
+        remote_layout.addRow(profile_actions)
         remote_layout.addRow("Host / IP", self.host)
         remote_layout.addRow("Port", self.port)
         remote_layout.addRow("Username", self.username)
@@ -114,6 +130,7 @@ class UploadPage(BasePage):
             ("Start rsync upload", self.upload),
             ("Repair / Resume verified upload", self.repair),
             ("Verify remote manifest", self.verify),
+            ("Cancel current task", self.cancel_task),
             ("Refresh task", self.poll_task),
         ]:
             button = QPushButton(label)
@@ -140,6 +157,87 @@ class UploadPage(BasePage):
         self.layout.addWidget(self.task_summary)
         self.layout.addWidget(splitter, 1)
         self.finish_layout()
+
+    def load_profiles(self) -> None:
+        self.run_async(self.api.get, self._finish_load_profiles, "/api/settings", timeout=5.0)
+
+    def _finish_load_profiles(self, result: object, error: object) -> None:
+        if error is not None:
+            self.status.setText(f"Cannot load upload profiles: {error}")
+            return
+        self.settings = result if isinstance(result, dict) else {}
+        profiles = self.settings.get("server_profiles", []) if isinstance(self.settings.get("server_profiles"), list) else []
+        current = self.profile.currentText().strip()
+        self.profile.blockSignals(True)
+        self.profile.clear()
+        for item in profiles:
+            if isinstance(item, dict):
+                name = str(item.get("name") or item.get("host") or "")
+                if name:
+                    self.profile.addItem(name, item)
+        if current:
+            self.profile.setEditText(current)
+        self.profile.blockSignals(False)
+
+    def load_selected_profile(self) -> None:
+        data = self.profile.currentData()
+        if not isinstance(data, dict):
+            self.status.setText("Select a saved server profile first.")
+            return
+        self.host.setText(str(data.get("host", "")))
+        self.port.setValue(int(data.get("port") or 22))
+        self.username.setText(str(data.get("username", "")))
+        self.remote_path.setText(str(data.get("remote_path", "")))
+        self.key_path.setText(str(data.get("key_path", "")))
+        self.password.clear()
+        self.update_auth_hint()
+        self.status.setText(f"Loaded profile: {self.profile.currentText().strip()}")
+
+    def save_profile(self) -> None:
+        name = self.profile.currentText().strip() or self.host.text().strip()
+        if not name:
+            self.status.setText("Profile name or host is required.")
+            return
+        settings = dict(self.settings or {})
+        profiles = settings.get("server_profiles", []) if isinstance(settings.get("server_profiles"), list) else []
+        payload = {
+            "name": name,
+            "host": self.host.text().strip(),
+            "port": int(self.port.value()),
+            "username": self.username.text().strip(),
+            "remote_path": self.remote_path.text().strip(),
+            "key_path": self.key_path.text().strip(),
+            "auth_mode": "key" if self.key_path.text().strip() else ("password" if self.password.text() else "agent_or_default_key"),
+        }
+        updated = [item for item in profiles if not (isinstance(item, dict) and str(item.get("name", "")) == name)]
+        updated.append(payload)
+        settings["server_profiles"] = updated
+        self.run_async(self.api.put, lambda result, error: self._finish_profile_saved(result, error, name), "/api/settings", settings, timeout=10.0)
+
+    def _finish_profile_saved(self, result: object, error: object, name: str) -> None:
+        if error is not None:
+            self.show_error(error if isinstance(error, Exception) else Exception(str(error)))
+            return
+        self.settings = result if isinstance(result, dict) else self.settings
+        self.status.setText(f"Saved profile: {name}")
+        self.load_profiles()
+
+    def delete_profile(self) -> None:
+        name = self.profile.currentText().strip()
+        if not name:
+            return
+        settings = dict(self.settings or {})
+        profiles = settings.get("server_profiles", []) if isinstance(settings.get("server_profiles"), list) else []
+        settings["server_profiles"] = [item for item in profiles if not (isinstance(item, dict) and str(item.get("name", "")) == name)]
+        self.run_async(self.api.put, lambda result, error: self._finish_profile_deleted(result, error, name), "/api/settings", settings, timeout=10.0)
+
+    def _finish_profile_deleted(self, result: object, error: object, name: str) -> None:
+        if error is not None:
+            self.show_error(error if isinstance(error, Exception) else Exception(str(error)))
+            return
+        self.settings = result if isinstance(result, dict) else self.settings
+        self.status.setText(f"Deleted profile: {name}")
+        self.load_profiles()
 
     def load_upload_defaults(self, project_key: str) -> None:
         try:
@@ -224,6 +322,18 @@ class UploadPage(BasePage):
 
     def verify(self) -> None:
         self._post("/api/upload/verify", self.payload(), "Verify task created")
+
+    def cancel_task(self) -> None:
+        if not self.active_task_id:
+            self.status.setText("No active task to cancel.")
+            return
+        self.run_async(
+            self.api.post,
+            lambda result, error: self.finish_async_result(result, error, "Cancel requested"),
+            f"/api/tasks/{self.active_task_id}/cancel",
+            {},
+            timeout=10.0,
+        )
 
     def _post(self, path: str, payload: dict[str, Any], status: str, *, poll: bool = True, callback=None) -> None:
         self.status.setText(f"{status}...")
@@ -337,7 +447,11 @@ class UploadPage(BasePage):
         task = result if isinstance(result, dict) else {}
         status = str(task.get("status") or "")
         message = str(task.get("message") or "")
-        self.task_summary.setText(f"task: {self.active_task_id} {status} {message}")
+        logs = task.get("logs", []) if isinstance(task.get("logs"), list) else []
+        progress_text = self._latest_progress(logs)
+        self.task_summary.setText(f"task: {self.active_task_id} {status} {message}" + (f" | {progress_text}" if progress_text else ""))
+        if logs:
+            self.output.setPlainText("\n".join(str(line) for line in logs[-300:]))
         if status in {"done", "failed", "cancelled"}:
             self.task_timer.stop()
             self.show_result(task, f"Upload {status}")
@@ -347,6 +461,13 @@ class UploadPage(BasePage):
                     f"remote verify: ok={result_payload.get('ok')} checked={result_payload.get('checked', 0)} "
                     f"missing={len(result_payload.get('missing', []))} mismatched={len(result_payload.get('mismatched', []))}"
                 )
+
+    def _latest_progress(self, logs: list[object]) -> str:
+        for raw in reversed(logs):
+            text = str(raw)
+            if "%" in text and ("/s" in text or "B/s" in text):
+                return text.strip()
+        return ""
 
     def browse_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Select local file", self.local_path.text().strip())

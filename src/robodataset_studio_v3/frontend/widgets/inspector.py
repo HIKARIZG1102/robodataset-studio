@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from robodataset_studio_v3.frontend.api_client import ApiClient
+from robodataset_studio_v3.frontend.api_client import ApiClient, ProjectSummary
 from robodataset_studio_v3.frontend.worker import ApiWorker
 
 
@@ -135,6 +135,7 @@ class InspectorDock(QWidget):
     def __init__(self, api: ApiClient) -> None:
         super().__init__()
         self.api = api
+        self.project: ProjectSummary | None = None
         self.pool = QThreadPool.globalInstance()
         self.tabs = QTabWidget()
         self.node = QComboBox()
@@ -240,15 +241,18 @@ class InspectorDock(QWidget):
         topic_row.addWidget(self.image_type_label)
         self.image_topic.currentTextChanged.connect(self.update_image_topic_type)
         controls = QHBoxLayout()
+        project_monitor = QPushButton("Monitor project image")
         start = QPushButton("Start image monitor")
         stop = QPushButton("Stop image monitor")
         pause = QPushButton("Pause / Resume")
         stats = QPushButton("Frame stats")
+        project_monitor.clicked.connect(self.start_project_image_monitor)
         start.clicked.connect(self.start_image_preview)
         stop.clicked.connect(self.stop_image_preview)
         pause.clicked.connect(self.toggle_pause)
         stats.clicked.connect(self.show_frame_stats)
         self.playback_fps.valueChanged.connect(self._update_display_timer)
+        controls.addWidget(project_monitor)
         controls.addWidget(start)
         controls.addWidget(stop)
         controls.addWidget(pause)
@@ -412,6 +416,52 @@ class InspectorDock(QWidget):
         self._preview_buffer = ""
         process.start()
         self._append(self.preview_log, f"$ image-monitor subscribe {topic}")
+
+    def start_project_image_monitor(self) -> None:
+        if self.project is None:
+            self.preview_status.setText("preview error: no project is open")
+            return
+        self._start_worker(self.api.get_dataset_config, self._finish_project_monitor_config, self.project.key)
+
+    def _finish_project_monitor_config(self, result: object, error: object) -> None:
+        if error is not None:
+            self.preview_status.setText(f"preview error: {error}")
+            self._append(self.preview_log, f"project monitor config error: {error}")
+            return
+        config = result if isinstance(result, dict) else {}
+        topic = self._first_project_image_topic(config)
+        if not topic:
+            self.preview_status.setText("preview error: current project config has no image topic")
+            return
+        index = self.image_topic.findText(topic)
+        if index >= 0:
+            self.image_topic.setCurrentIndex(index)
+        else:
+            self.image_topic.setEditText(topic)
+        self.show_image()
+        self.start_image_preview()
+
+    def _first_project_image_topic(self, config: dict[str, Any]) -> str:
+        streams = config.get("streams", [])
+        if isinstance(streams, list):
+            for item in streams:
+                if not isinstance(item, dict):
+                    continue
+                message_type = str(item.get("message_type") or item.get("type") or "")
+                topic = str(item.get("topic") or "")
+                if topic and message_type == "sensor_msgs/msg/Image":
+                    return topic
+            for item in streams:
+                if isinstance(item, dict) and item.get("topic"):
+                    topic = str(item.get("topic") or "")
+                    if self._topic_types.get(topic) == "sensor_msgs/msg/Image":
+                        return topic
+        cameras = config.get("cameras", [])
+        if isinstance(cameras, list):
+            for item in cameras:
+                if isinstance(item, dict) and item.get("topic"):
+                    return str(item.get("topic"))
+        return ""
 
     def stop_image_preview(self, clear_display: bool = True) -> None:
         process = self._preview_process
@@ -599,6 +649,9 @@ class InspectorDock(QWidget):
 
     def show_image(self) -> None:
         self.tabs.setCurrentIndex(1)
+
+    def set_project(self, project: ProjectSummary | None) -> None:
+        self.project = project
 
     def stop_workers(self) -> None:
         self._closing = True

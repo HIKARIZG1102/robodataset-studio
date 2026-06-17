@@ -10,6 +10,7 @@ from robodataset_studio_v3.models.task import TaskRecord
 class TaskService:
     def __init__(self) -> None:
         self._tasks: dict[str, TaskRecord] = {}
+        self._cancel_callbacks: dict[str, Any] = {}
         self._counter = count(1)
 
     def list_tasks(self) -> list[TaskRecord]:
@@ -43,6 +44,12 @@ class TaskService:
 
     def cancel_task(self, task_id: str) -> TaskRecord:
         task = self._require_task(task_id)
+        callback = self._cancel_callbacks.get(task_id)
+        if callable(callback):
+            try:
+                callback()
+            except Exception as exc:
+                task.logs.append(f"cancel callback failed: {exc}")
         task.status = "cancelled"
         task.message = "cancelled"
         task.ended_at = datetime.now()
@@ -51,7 +58,19 @@ class TaskService:
     def add_log(self, task_id: str, line: str) -> TaskRecord:
         task = self._require_task(task_id)
         task.logs.append(line)
+        if len(task.logs) > 1500:
+            task.logs = task.logs[-1500:]
         return task
+
+    def register_cancel_callback(self, task_id: str, callback: Any) -> None:
+        self._cancel_callbacks[task_id] = callback
+
+    def clear_cancel_callback(self, task_id: str) -> None:
+        self._cancel_callbacks.pop(task_id, None)
+
+    def is_cancelled(self, task_id: str) -> bool:
+        task = self.get_task(task_id)
+        return bool(task and task.status == "cancelled")
 
     def run_instant(self, kind: str, message: str, result: dict[str, Any]) -> TaskRecord:
         task = self.create_task(kind, message)

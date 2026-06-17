@@ -56,10 +56,12 @@ class CollectPage(BasePage):
         controls = QHBoxLayout()
         refresh = QPushButton("Refresh Listener Plan")
         preflight = QPushButton("Check Nodes")
+        simulate = QPushButton("Simulate Listener Episode")
         start = QPushButton("Start Recording")
         stop = QPushButton("Stop Recording")
         refresh.clicked.connect(self.refresh_plan)
         preflight.clicked.connect(self.preflight)
+        simulate.clicked.connect(self.simulate_episode)
         start.clicked.connect(self.start_recording)
         stop.clicked.connect(self.stop_recording)
         self.duration_label = QLabel("Duration")
@@ -73,6 +75,7 @@ class CollectPage(BasePage):
         controls.addStretch(1)
         controls.addWidget(refresh)
         controls.addWidget(preflight)
+        controls.addWidget(simulate)
         controls.addWidget(start)
         controls.addWidget(stop)
         self.layout.addWidget(QLabel("Listener Recording Console"))
@@ -185,6 +188,17 @@ class CollectPage(BasePage):
             self.api.post,
             self._finish_start_recording,
             "/api/recording/start",
+            payload,
+            timeout=20.0,
+        )
+
+    def simulate_episode(self) -> None:
+        payload: dict[str, Any] = {"project_key": self.project_key(), "mode": "simulate", "target_samples": int(self.samples.value())}
+        self.status.setText("Writing simulated listener episode...")
+        self.run_async(
+            self.api.post,
+            self._finish_start_recording,
+            "/api/recording/simulate",
             payload,
             timeout=20.0,
         )

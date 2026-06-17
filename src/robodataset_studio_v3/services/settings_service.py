@@ -16,7 +16,7 @@ class SettingsService:
             "recent_projects": [],
             "ai": {"enabled": False, "base_url": "", "api_key": "", "model": "", "timeout_sec": 90},
             "server_profiles": [],
-            "ui": {"last_active_tab": "", "inspector_visible": True},
+            "ui": {"last_active_tab": "", "inspector_visible": True, "last_project_path": ""},
         }
 
     def read(self) -> dict[str, Any]:

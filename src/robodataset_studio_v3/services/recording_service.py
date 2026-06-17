@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
-from threading import Event, Thread
+from threading import Thread
 from typing import Any
 
+import numpy as np
 import yaml
 
-from robodataset_studio_v3.ros.episode_recorder import RosEpisodeRecorder
 from robodataset_studio_v3.services.config_service import ConfigService
 from robodataset_studio_v3.services.project_service import project_service
 from robodataset_studio_v3.services.ros_service import ros_service
@@ -19,7 +23,6 @@ class RecordingService:
         self.projects = project_service
         self.configs = ConfigService()
         self.active: dict[str, dict[str, Any]] = {}
-        self.recorder = RosEpisodeRecorder()
 
     def preflight(self, project_key: str) -> dict[str, Any]:
         dataset_config = self.configs.read_dataset_config(self.projects.project_dir(project_key))
@@ -41,21 +44,29 @@ class RecordingService:
         for topic in sorted(set(topics)):
             info = ros_service.topic_info(topic)
             echo = ros_service.echo_once(topic)
+            hz = ros_service.topic_hz(topic)
+            hz_text = str(hz.get("stdout") or "")
             topic_checks.append(
                 {
                     "topic": topic,
                     "info_ok": bool(info.get("ok")),
                     "echo_ok": bool(echo.get("ok")),
+                    "hz_ok": bool(hz.get("ok") or "average rate:" in hz_text),
+                    "hz": self._parse_hz(hz_text),
                     "info_error": "" if info.get("ok") else str(info.get("stderr") or info.get("error") or ""),
                     "echo_error": "" if echo.get("ok") else str(echo.get("stderr") or echo.get("error") or ""),
+                    "hz_error": "" if hz.get("ok") or "average rate:" in hz_text else str(hz.get("stderr") or hz.get("error") or ""),
                 }
             )
         missing = [row["topic"] for row in topic_checks if not row["info_ok"]]
         silent = [row["topic"] for row in topic_checks if row["info_ok"] and not row["echo_ok"]]
+        no_hz = [row["topic"] for row in topic_checks if row["info_ok"] and not row["hz_ok"]]
         if missing:
             warnings.append("topic info failed: " + ", ".join(missing))
         if silent:
             warnings.append("topic echo once failed or timed out: " + ", ".join(silent))
+        if no_hz:
+            warnings.append("topic hz failed or timed out: " + ", ".join(no_hz))
         result = {
             "project_key": project_key,
             "streams": len(streams) if isinstance(streams, list) else 0,
@@ -89,13 +100,17 @@ class RecordingService:
         payload = yaml.safe_dump(dataset_config, sort_keys=False, allow_unicode=True)
         (session_dir / "dataset_config.yaml").write_text(payload, encoding="utf-8")
         (session_dir / "collection_config.yaml").write_text(payload, encoding="utf-8")
+        stop_file = session_dir / ".recording_stop"
+        if stop_file.exists():
+            stop_file.unlink()
         task = task_service.create_task("recording", f"recording started for {project_key}")
-        cancel_event = Event()
-        self.active[project_key] = {"task_id": task.task_id, "session_dir": str(session_dir), "mode": mode, "cancel_event": cancel_event}
+        process = self._launch_recording_process(session_dir / "dataset_config.yaml", training_dir, stop_file, duration_sec, target_samples)
+        self.active[project_key] = {"task_id": task.task_id, "session_dir": str(session_dir), "mode": mode, "stop_file": stop_file, "process": process, "cancelled": False}
+        task_service.register_cancel_callback(task.task_id, lambda key=project_key: self.cancel_recording(key))
         task_service.add_log(task.task_id, f"session: {session_dir}")
         Thread(
             target=self._record_worker,
-            args=(project_key, task.task_id, dataset_config, training_dir, cancel_event, duration_sec, target_samples),
+            args=(project_key, task.task_id, process, training_dir, stop_file),
             daemon=True,
         ).start()
         return {"task_id": task.task_id, "session_dir": str(session_dir), "mode": mode}
@@ -105,43 +120,179 @@ class RecordingService:
         if state is None:
             task = task_service.run_instant("recording_stop", f"no active recording for {project_key}", {"active": False})
             return {"task_id": task.task_id, "active": False}
-        cancel_event = state.get("cancel_event")
-        if isinstance(cancel_event, Event):
-            cancel_event.set()
+        stop_file = state.get("stop_file")
+        if isinstance(stop_file, Path):
+            stop_file.touch()
+        process = state.get("process")
+        if isinstance(process, subprocess.Popen) and process.poll() is None:
+            Thread(target=self._terminate_later, args=(process, state["task_id"]), daemon=True).start()
         task_service.add_log(state["task_id"], "stop requested")
         return {"task_id": state["task_id"], "active": True, "session_dir": state["session_dir"], "message": "stop requested"}
+
+    def cancel_recording(self, project_key: str) -> dict[str, Any]:
+        state = self.active.get(project_key)
+        if state is not None:
+            state["cancelled"] = True
+        return self.stop(project_key)
+
+    def simulate(self, project_key: str, target_samples: int | None = None) -> dict[str, Any]:
+        project_dir = self.projects.project_dir(project_key)
+        dataset_config = self.configs.read_dataset_config(project_dir)
+        session_name = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}_simulated"
+        session_dir = project_dir / "raw_sessions" / session_name
+        training_dir = session_dir / "training"
+        task = task_service.create_task("recording_simulate", f"simulating listener episode for {project_key}")
+        Thread(target=self._simulate_worker, args=(task.task_id, dataset_config, session_dir, training_dir, target_samples), daemon=True).start()
+        return {"task_id": task.task_id, "session_dir": str(session_dir), "mode": "simulate"}
 
     def _record_worker(
         self,
         project_key: str,
         task_id: str,
-        dataset_config: dict[str, Any],
+        process: subprocess.Popen[str],
         training_dir: Path,
-        cancel_event: Event,
-        duration_sec: float | None,
-        target_samples: int | None,
+        stop_file: Path,
     ) -> None:
         try:
-            result = self.recorder.record_episode(
-                dataset_config,
-                training_dir,
-                0,
-                duration_sec=duration_sec,
-                target_samples=target_samples,
-                cancel_event=cancel_event,
-            )
-            payload = {
-                "path": str(result.path),
-                "steps": result.steps,
-                "streams": result.streams,
-                "warnings": result.warnings,
-                "session_dir": str(training_dir.parent),
-            }
-            task_service.complete_task(task_id, message="recording completed", result=payload)
+            stdout, stderr = process.communicate()
+            for line in (stdout or "").splitlines()[-120:]:
+                task_service.add_log(task_id, line)
+            for line in (stderr or "").splitlines()[-120:]:
+                task_service.add_log(task_id, line)
+            payload = self._json_from_output(stdout) or self._json_from_output(stderr) or {}
+            payload.setdefault("session_dir", str(training_dir.parent))
+            state = self.active.get(project_key, {})
+            if process.returncode == 0 and payload.get("ok", True):
+                payload.setdefault("path", str(training_dir / "episode_0000000.npz"))
+                task_service.complete_task(task_id, message="recording completed", result=payload)
+            elif task_service.is_cancelled(task_id) or bool(state.get("cancelled")):
+                task_service.cancel_task(task_id)
+            else:
+                task_service.fail_task(task_id, message="recording failed", error=str(payload.get("error") or stderr or f"exit code {process.returncode}"))
         except Exception as exc:
             task_service.fail_task(task_id, message="recording failed", error=str(exc))
         finally:
+            task_service.clear_cancel_callback(task_id)
             self.active.pop(project_key, None)
+
+    def _launch_recording_process(
+        self,
+        config_path: Path,
+        training_dir: Path,
+        stop_file: Path,
+        duration_sec: float | None,
+        target_samples: int | None,
+    ) -> subprocess.Popen[str]:
+        command = [
+            sys.executable,
+            "-m",
+            "robodataset_studio_v3.ros.record_episode_cli",
+            "--config",
+            str(config_path),
+            "--episodes-dir",
+            str(training_dir),
+            "--episode-index",
+            "0",
+            "--stop-file",
+            str(stop_file),
+        ]
+        if duration_sec is not None:
+            command.extend(["--duration-sec", str(float(duration_sec))])
+        if target_samples is not None:
+            command.extend(["--target-samples", str(int(target_samples))])
+        env = os.environ.copy()
+        src_dir = Path(__file__).resolve().parents[3] / "src"
+        current_pythonpath = env.get("PYTHONPATH", "")
+        if str(src_dir) not in current_pythonpath.split(os.pathsep):
+            env["PYTHONPATH"] = f"{src_dir}{os.pathsep}{current_pythonpath}" if current_pythonpath else str(src_dir)
+        return subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+
+    def _terminate_later(self, process: subprocess.Popen[str], task_id: str, delay_sec: float = 8.0) -> None:
+        try:
+            process.wait(timeout=delay_sec)
+        except subprocess.TimeoutExpired:
+            task_service.add_log(task_id, f"recording subprocess did not stop within {delay_sec:g}s; terminating")
+            try:
+                process.terminate()
+            except Exception:
+                return
+
+    def _simulate_worker(self, task_id: str, dataset_config: dict[str, Any], session_dir: Path, training_dir: Path, target_samples: int | None) -> None:
+        try:
+            training_dir.mkdir(parents=True, exist_ok=True)
+            payload = yaml.safe_dump(dataset_config, sort_keys=False, allow_unicode=True)
+            (session_dir / "dataset_config.yaml").write_text(payload, encoding="utf-8")
+            (session_dir / "collection_config.yaml").write_text(payload, encoding="utf-8")
+            recording = dataset_config.get("recording", {}) if isinstance(dataset_config.get("recording"), dict) else {}
+            samples = int(target_samples or recording.get("target_samples") or max(int(float(recording.get("sample_rate_hz") or 10) * 2), 2))
+            samples = max(samples, 2)
+            transition_count = samples - 1
+            streams = [item for item in dataset_config.get("streams", []) if isinstance(item, dict)]
+            image_streams = [item for item in streams if item.get("message_type") == "sensor_msgs/msg/Image"]
+            state_dim = int(dataset_config.get("action", {}).get("dim") or dataset_config.get("robot", {}).get("joint_count") or 7)
+            for index in range(transition_count):
+                arrays: dict[str, Any] = {}
+                for stream in image_streams:
+                    name = str(stream.get("name") or stream.get("calvin_key") or "rgb_static")
+                    arrays[name] = self._simulated_frame(index)
+                robot_obs = np.linspace(0, 1, state_dim, dtype=np.float32) + np.float32(index * 0.01)
+                action = np.full((state_dim,), 0.01, dtype=np.float32)
+                arrays.update(
+                    {
+                        "robot_obs": robot_obs,
+                        "rel_actions": action,
+                        "actions": action.copy(),
+                        "episode_metadata": np.array(json.dumps({"mock": True, "transition_index": index, "collection_config": dataset_config}, ensure_ascii=False)),
+                        "collection_config": np.array(json.dumps(dataset_config, ensure_ascii=False)),
+                    }
+                )
+                self._write_npz_atomic(training_dir / f"episode_{index:07d}.npz", arrays)
+            metadata = {"mock": True, "steps": transition_count, "collection_config": dataset_config, "session_dir": str(session_dir)}
+            (session_dir / "session_metadata.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            task_service.complete_task(task_id, message="simulated episode written", result={"ok": True, "session_dir": str(session_dir), "steps": transition_count})
+        except Exception as exc:
+            task_service.fail_task(task_id, message="simulation failed", error=str(exc))
+
+    def _simulated_frame(self, index: int) -> np.ndarray:
+        height, width = 120, 160
+        x = np.linspace(0, 255, width, dtype=np.uint8)
+        y = np.linspace(0, 255, height, dtype=np.uint8)[:, None]
+        frame = np.zeros((height, width, 3), dtype=np.uint8)
+        frame[:, :, 0] = (x[None, :] + index * 3) % 255
+        frame[:, :, 1] = (y + index * 5) % 255
+        frame[:, :, 2] = 96
+        return frame
+
+    def _write_npz_atomic(self, path: Path, arrays: dict[str, Any]) -> None:
+        tmp_path = path.with_suffix(".npz.tmp")
+        with tmp_path.open("wb") as file:
+            np.savez_compressed(file, **arrays)
+            file.flush()
+            os.fsync(file.fileno())
+        tmp_path.replace(path)
+
+    def _parse_hz(self, stdout: str) -> float | None:
+        for line in stdout.splitlines():
+            if "average rate:" in line:
+                try:
+                    return float(line.split("average rate:", 1)[1].strip().split()[0])
+                except Exception:
+                    return None
+        return None
+
+    def _json_from_output(self, text: str | None) -> dict[str, Any] | None:
+        if not text:
+            return None
+        for line in reversed(text.splitlines()):
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                payload = json.loads(line)
+            except Exception:
+                continue
+            return payload if isinstance(payload, dict) else None
+        return None
 
 
 recording_service = RecordingService()
