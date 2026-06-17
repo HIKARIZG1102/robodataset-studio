@@ -15,6 +15,7 @@ class AiService:
         selected_topics = context.get("selected_topics", []) if isinstance(context.get("selected_topics"), list) else []
         selected_topic_probes = context.get("selected_topic_probes", []) if isinstance(context.get("selected_topic_probes"), list) else []
         current_total_config = self._safe_total_config(context.get("current_total_config", {}) if isinstance(context.get("current_total_config"), dict) else {})
+        dataset_config = self._safe_dataset_config(dataset_config)
         prompt_context = {
             "selected_topics": selected_topics,
             "selected_topic_probes": selected_topic_probes,
@@ -53,6 +54,15 @@ class AiService:
         safe = dict(config)
         for key in ["upload", "config_meta", "paths", "collection", "review", "convert", "ui", "ai"]:
             safe.pop(key, None)
+        if isinstance(safe.get("dataset_config"), dict):
+            safe["dataset_config"] = self._safe_dataset_config(safe["dataset_config"])
+        return safe
+
+    def _safe_dataset_config(self, dataset_config: dict[str, Any]) -> dict[str, Any]:
+        safe = dict(dataset_config)
+        ros = dict(safe.get("ros", {})) if isinstance(safe.get("ros"), dict) else {}
+        ros.pop("discovery_snapshot", None)
+        safe["ros"] = ros
         return safe
 
     def review_prompt(self, review_summary: dict[str, Any]) -> dict[str, Any]:

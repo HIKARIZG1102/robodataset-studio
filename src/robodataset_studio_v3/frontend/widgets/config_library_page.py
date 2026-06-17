@@ -867,6 +867,7 @@ class ConfigLibraryPage(QWidget):
 
     def build_prompt_with_ros_probes(self, total_config: dict[str, Any], selected_topics: list[dict[str, str]], timeout: float = 90.0) -> object:
         dataset = total_config.get("dataset_config", {}) if isinstance(total_config.get("dataset_config"), dict) else {}
+        dataset = self.ai_safe_dataset_config(dataset)
         topic_probes = []
         per_call_timeout = max(min(timeout / max(len(selected_topics) * 3, 1), 8.0), 2.0)
         for topic in selected_topics:
@@ -880,7 +881,7 @@ class ConfigLibraryPage(QWidget):
                 ("hz", "/api/ros/topic-hz"),
             ]:
                 try:
-                    probe[key] = self.api.post(path, {"topic": name}, timeout=per_call_timeout)
+                    probe[key] = self.compact_probe_result(self.api.post(path, {"topic": name}, timeout=per_call_timeout))
                 except Exception as exc:
                     probe[key] = {"ok": False, "error": str(exc)}
             topic_probes.append(
@@ -900,7 +901,45 @@ class ConfigLibraryPage(QWidget):
         if isinstance(safe, dict):
             safe.pop("config_meta", None)
             safe.pop("upload", None)
+            if isinstance(safe.get("dataset_config"), dict):
+                safe["dataset_config"] = self.ai_safe_dataset_config(safe["dataset_config"])
         return safe if isinstance(safe, dict) else {}
+
+    def ai_safe_dataset_config(self, dataset: dict[str, Any]) -> dict[str, Any]:
+        safe = json.loads(json.dumps(dataset, ensure_ascii=False, default=str))
+        if not isinstance(safe, dict):
+            return {}
+        ros = safe.get("ros", {}) if isinstance(safe.get("ros"), dict) else {}
+        ros.pop("discovery_snapshot", None)
+        safe["ros"] = ros
+        return safe
+
+    def compact_probe_result(self, result: object) -> dict[str, Any]:
+        payload = result if isinstance(result, dict) else {}
+        compact: dict[str, Any] = {"ok": bool(payload.get("ok"))}
+        for key in ["returncode", "rmw"]:
+            if key in payload:
+                compact[key] = payload[key]
+        stdout = str(payload.get("stdout") or "")
+        stderr = str(payload.get("stderr") or payload.get("error") or "")
+        if stdout:
+            compact["stdout_summary"] = self._probe_summary(stdout)
+        if stderr:
+            compact["error_summary"] = self._probe_summary(stderr)
+        if "error" in payload and not stderr:
+            compact["error_summary"] = str(payload.get("error"))
+        return compact
+
+    def _probe_summary(self, text: str, max_lines: int = 8, max_chars: int = 800) -> str:
+        clean_lines = []
+        for raw in text.splitlines():
+            line = re.sub(r"\x1b\[[0-9;]*m", "", raw).strip()
+            if line:
+                clean_lines.append(line)
+            if len(clean_lines) >= max_lines:
+                break
+        summary = "\n".join(clean_lines) if clean_lines else text.strip()
+        return summary[:max_chars]
 
     def finish_prompt(self, result: object, error: object) -> None:
         if error is not None:
