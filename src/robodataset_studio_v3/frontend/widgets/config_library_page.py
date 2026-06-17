@@ -887,6 +887,9 @@ class ConfigLibraryPage(QWidget):
             topic_probes.append(
                 probe
             )
+        failures = self.ai_probe_failures(topic_probes)
+        if failures:
+            raise RuntimeError("ROS topic checks failed; AI prompt not generated:\n" + "\n".join(failures[:12]))
         ros_context = {
             "selected_topics": selected_topics,
             "selected_topic_probes": topic_probes,
@@ -928,6 +931,9 @@ class ConfigLibraryPage(QWidget):
             compact["error_summary"] = self._probe_summary(stderr)
         if "error" in payload and not stderr:
             compact["error_summary"] = str(payload.get("error"))
+        text = "\n".join(str(compact.get(key, "")) for key in ["stdout_summary", "error_summary"])
+        if self._probe_text_has_error(text):
+            compact["ok"] = False
         return compact
 
     def _probe_summary(self, text: str, max_lines: int = 8, max_chars: int = 800) -> str:
@@ -940,6 +946,34 @@ class ConfigLibraryPage(QWidget):
                 break
         summary = "\n".join(clean_lines) if clean_lines else text.strip()
         return summary[:max_chars]
+
+    def ai_probe_failures(self, topic_probes: list[dict[str, Any]]) -> list[str]:
+        failures: list[str] = []
+        for probe in topic_probes:
+            selected = probe.get("selected", {}) if isinstance(probe.get("selected"), dict) else {}
+            topic = str(selected.get("topic") or selected.get("name") or "")
+            for key in ["topic_info", "echo_once", "hz"]:
+                check = probe.get(key, {}) if isinstance(probe.get(key), dict) else {}
+                if not check.get("ok"):
+                    reason = str(check.get("error_summary") or check.get("error") or "not ok").splitlines()[0]
+                    failures.append(f"{topic}: {key} failed: {reason}")
+        return failures
+
+    def _probe_text_has_error(self, text: str) -> bool:
+        lower = text.lower()
+        markers = [
+            "traceback",
+            "timed out",
+            "timeout",
+            "runtimeerror",
+            "fault",
+            "failed init_port",
+            "rtps_transport",
+            "error]",
+            "package not found",
+            "no package metadata",
+        ]
+        return any(marker in lower for marker in markers)
 
     def finish_prompt(self, result: object, error: object) -> None:
         if error is not None:
