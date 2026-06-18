@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QFileDialog, QFormLayout, QHBoxLayout, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, QWidget
+from PySide6.QtWidgets import QApplication, QFileDialog, QFormLayout, QHeaderView, QHBoxLayout, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, QWidget
 
 from robodataset_studio_v3.frontend.api_client import ApiClient, ProjectSummary
 from robodataset_studio_v3.frontend.pages.base import BasePage
@@ -11,10 +11,16 @@ class ConvertPage(BasePage):
     def __init__(self, api: ApiClient, project: ProjectSummary | None = None) -> None:
         super().__init__("Convert", api, project)
         self.root = QLineEdit()
-        self.sessions = QLineEdit()
         self.output_dir = QLineEdit()
+        self.output_name = QLineEdit("calvin")
         self.session_table = QTableWidget(0, 5)
         self.session_table.setHorizontalHeaderLabels(["Use", "Session", "Episodes", "Status", "Path"])
+        self.session_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.session_table.horizontalHeader().setStretchLastSection(True)
+        self.session_table.setMouseTracking(True)
+        self.session_table.cellPressed.connect(self._begin_check_drag)
+        self.session_table.cellEntered.connect(self._drag_check_row)
+        self._drag_check_state: Qt.CheckState | None = None
         if project is not None:
             self.root.setText(f"{project.path}/raw_sessions")
             self.output_dir.setText(f"{project.path}/exports")
@@ -24,14 +30,20 @@ class ConvertPage(BasePage):
         self.task_timer.timeout.connect(self.poll_task)
         form = QFormLayout()
         form.addRow("Raw sessions root", self._path_row(self.root, self.browse_root))
-        form.addRow("Selected sessions, comma separated", self.sessions)
         form.addRow("Output dir", self._path_row(self.output_dir, self.browse_output))
+        form.addRow("Output name", self.output_name)
+        selection_buttons = QHBoxLayout()
+        for label, handler in [("Select All", self.select_all), ("Clear", self.clear_selection), ("Invert", self.invert_selection)]:
+            button = QPushButton(label)
+            button.clicked.connect(handler)
+            selection_buttons.addWidget(button)
         buttons = QHBoxLayout()
         for label, handler in [("Scan Sessions", self.scan), ("Merge Sessions", self.merge), ("Convert To HDF5", self.hdf5)]:
             button = QPushButton(label)
             button.clicked.connect(handler)
             buttons.addWidget(button)
         self.layout.addLayout(form)
+        self.layout.addLayout(selection_buttons)
         self.layout.addLayout(buttons)
         self.layout.addWidget(self.session_table)
         self.finish_layout()
@@ -49,7 +61,6 @@ class ConvertPage(BasePage):
             sessions = payload.get("sessions", []) if isinstance(payload, dict) else []
             if isinstance(sessions, list):
                 self.populate_sessions(sessions)
-                self.sessions.setText(", ".join(self.selected_session_paths()))
         self.show_result(result, "Sessions scanned")
 
     def merge(self) -> None:
@@ -59,8 +70,8 @@ class ConvertPage(BasePage):
         self._convert("/api/convert/hdf5", "HDF5 task created")
 
     def _convert(self, path: str, status: str) -> None:
-        selected = self.selected_session_paths() or self._split_csv(self.sessions.text())
-        payload = {"sessions": selected, "output_dir": self.output_dir.text().strip()}
+        selected = self.selected_session_paths()
+        payload = {"sessions": selected, "output_dir": self.output_dir.text().strip(), "output_name": self.output_name.text().strip()}
         self.status.setText(f"{status}...")
         self.run_async(self.api.post, lambda result, error: self._finish_convert_start(result, error, status), path, payload, timeout=20.0)
 
@@ -98,7 +109,7 @@ class ConvertPage(BasePage):
             item = session if isinstance(session, dict) else {"path": str(session), "name": str(session).split("/")[-1]}
             use = QTableWidgetItem("")
             use.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            use.setCheckState(Qt.Checked if int(item.get("episode_count", 0) or 0) > 0 else Qt.Unchecked)
+            use.setCheckState(Qt.Checked)
             values = [
                 use,
                 QTableWidgetItem(str(item.get("name", ""))),
@@ -108,7 +119,47 @@ class ConvertPage(BasePage):
             ]
             for col, value in enumerate(values):
                 self.session_table.setItem(row, col, value)
-        self.session_table.resizeColumnsToContents()
+        for col, width in enumerate([54, 220, 82, 120]):
+            self.session_table.setColumnWidth(col, width)
+
+    def select_all(self) -> None:
+        self._set_all_checks(Qt.Checked)
+
+    def clear_selection(self) -> None:
+        self._set_all_checks(Qt.Unchecked)
+
+    def invert_selection(self) -> None:
+        for row in range(self.session_table.rowCount()):
+            item = self.session_table.item(row, 0)
+            if item is not None:
+                item.setCheckState(Qt.Unchecked if item.checkState() == Qt.Checked else Qt.Checked)
+
+    def _set_all_checks(self, state: Qt.CheckState) -> None:
+        for row in range(self.session_table.rowCount()):
+            item = self.session_table.item(row, 0)
+            if item is not None:
+                item.setCheckState(state)
+
+    def _begin_check_drag(self, row: int, column: int) -> None:
+        if column != 0:
+            self._drag_check_state = None
+            return
+        item = self.session_table.item(row, 0)
+        if item is None:
+            self._drag_check_state = None
+            return
+        self._drag_check_state = Qt.Unchecked if item.checkState() == Qt.Checked else Qt.Checked
+        item.setCheckState(self._drag_check_state)
+
+    def _drag_check_row(self, row: int, column: int) -> None:
+        if column != 0 or self._drag_check_state is None:
+            return
+        if not (QApplication.mouseButtons() & Qt.LeftButton):
+            self._drag_check_state = None
+            return
+        item = self.session_table.item(row, 0)
+        if item is not None:
+            item.setCheckState(self._drag_check_state)
 
     def selected_session_paths(self) -> list[str]:
         paths = []

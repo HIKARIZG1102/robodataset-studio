@@ -33,6 +33,10 @@ class RecordingService:
             warnings.append("no streams configured")
         if not state_keys:
             warnings.append("no state keys configured")
+        dataset = dataset_config.get("dataset", {}) if isinstance(dataset_config.get("dataset"), dict) else {}
+        requires_actions = bool(dataset.get("requires_actions", True))
+        if requires_actions and not state_keys:
+            warnings.append("dataset requires actions but no JointState state key is configured; recording will use placeholder robot_obs/actions")
         topic_checks = []
         topics: list[str] = []
         for stream in streams if isinstance(streams, list) else []:
@@ -200,12 +204,31 @@ class RecordingService:
             command.extend(["--duration-sec", str(float(duration_sec))])
         if target_samples is not None:
             command.extend(["--target-samples", str(int(target_samples))])
-        env = os.environ.copy()
-        src_dir = Path(__file__).resolve().parents[3] / "src"
-        current_pythonpath = env.get("PYTHONPATH", "")
-        if str(src_dir) not in current_pythonpath.split(os.pathsep):
-            env["PYTHONPATH"] = f"{src_dir}{os.pathsep}{current_pythonpath}" if current_pythonpath else str(src_dir)
+        env = self._recording_process_env()
         return subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+
+    def _recording_process_env(self) -> dict[str, str]:
+        env = os.environ.copy()
+        env.setdefault("RMW_IMPLEMENTATION", env.get("ROBODATASET_RMW_IMPLEMENTATION", "rmw_cyclonedds_cpp"))
+        ros_log_dir = env.get("ROS_LOG_DIR") or "/tmp/robodataset_ros_logs"
+        try:
+            Path(ros_log_dir).mkdir(parents=True, exist_ok=True)
+        except Exception:
+            ros_log_dir = "/tmp"
+        env["ROS_LOG_DIR"] = ros_log_dir
+        src_dir = Path(__file__).resolve().parents[3] / "src"
+        python_version = f"python{sys.version_info.major}.{sys.version_info.minor}"
+        ros_setup = env.get("ROS_SETUP", "/opt/ros/humble/setup.bash")
+        ros_root = Path(ros_setup).resolve().parent if ros_setup else Path("/opt/ros/humble")
+        pythonpath_candidates = [
+            src_dir,
+            ros_root / "local" / "lib" / python_version / "dist-packages",
+            ros_root / "lib" / python_version / "site-packages",
+        ]
+        current_pythonpath = [path for path in env.get("PYTHONPATH", "").split(os.pathsep) if path]
+        prepend = [str(path) for path in pythonpath_candidates if path.is_dir() and str(path) not in current_pythonpath]
+        env["PYTHONPATH"] = os.pathsep.join([*prepend, *current_pythonpath])
+        return env
 
     def _terminate_later(self, process: subprocess.Popen[str], task_id: str, delay_sec: float = 8.0) -> None:
         try:

@@ -17,6 +17,7 @@ class ScanRequest(BaseModel):
 class ConvertRequest(BaseModel):
     sessions: list[str]
     output_dir: str
+    output_name: str = ""
 
 
 @router.post("/scan", response_model=dict[str, Any])
@@ -26,9 +27,9 @@ def scan(request: ScanRequest) -> dict[str, Any]:
 
 @router.post("/merge", response_model=dict[str, Any])
 def merge(request: ConvertRequest) -> dict[str, Any]:
-    return convert_service.merge(request.sessions, request.output_dir)
+    return convert_service.merge(request.sessions, request.output_dir, request.output_name)
 
 
 @router.post("/hdf5", response_model=dict[str, Any])
 def hdf5(request: ConvertRequest) -> dict[str, Any]:
-    return convert_service.hdf5(request.sessions, request.output_dir)
+    return convert_service.hdf5(request.sessions, request.output_dir, request.output_name)

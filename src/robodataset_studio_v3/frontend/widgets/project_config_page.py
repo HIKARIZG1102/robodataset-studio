@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import yaml
-from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QMessageBox, QPushButton, QPlainTextEdit, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QMessageBox, QPushButton, QPlainTextEdit, QScrollArea, QSizePolicy, QTabWidget, QVBoxLayout, QWidget
 
 from robodataset_studio_v3.frontend.api_client import ApiClient, ProjectSummary
 
 
 class ProjectConfigPage(QWidget):
+    projectConfigChanged = Signal(object)
+
     def __init__(self, api: ApiClient, project: ProjectSummary, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.api = api
@@ -20,7 +23,13 @@ class ProjectConfigPage(QWidget):
         self.refresh()
 
     def _build(self) -> None:
-        layout = QVBoxLayout(self)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        content.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        layout = QVBoxLayout(content)
         title = QLabel(f"Project Config: {self.project.key}")
         refresh = QPushButton("Refresh From Project")
         refresh.clicked.connect(self.refresh)
@@ -50,6 +59,8 @@ class ProjectConfigPage(QWidget):
         layout.addLayout(buttons)
         layout.addWidget(tabs)
         layout.addWidget(self.status)
+        scroll.setWidget(content)
+        root.addWidget(scroll)
 
     def refresh_library(self) -> None:
         try:
@@ -92,7 +103,7 @@ class ProjectConfigPage(QWidget):
             QMessageBox.warning(
                 self,
                 "Load Config",
-                "This project already has recorded data. Create a new project version before loading another config.",
+                "This project already has recorded data. You can reload the current library config, but create a new project version before switching to another config.",
             )
             return
         try:
@@ -101,6 +112,7 @@ class ProjectConfigPage(QWidget):
             self.status.setText(f"Cannot load config into project: {exc}")
             return
         self.status.setText(f"Loaded config into project: {config_id}")
+        self.projectConfigChanged.emit(self.project)
         self.refresh()
 
     def preview(self) -> None:
@@ -127,6 +139,7 @@ class ProjectConfigPage(QWidget):
             self.status.setText(f"Cannot save config: {exc}")
             return
         self.status.setText(str(result))
+        self.projectConfigChanged.emit(self.project)
         self.refresh()
 
     def _project_config_from_text(self) -> dict:

@@ -17,19 +17,40 @@ from robodataset_studio_v3.services.task_service import task_service
 
 class RosService:
     def graph(self) -> dict[str, Any]:
-        topics_result = self._run_ros_with_fallback(["ros2", "topic", "list", "--no-daemon", "-t"], ["ros2", "topic", "list", "-t"], timeout=8)
-        nodes_result = self._run_ros_with_fallback(["ros2", "node", "list", "--no-daemon"], ["ros2", "node", "list"], timeout=8)
-        services_result = self._run_ros_with_fallback(["ros2", "service", "list", "--no-daemon", "-t"], ["ros2", "service", "list", "-t"], timeout=8)
+        topics_result = self._sample_ros_graph(
+            ["ros2", "topic", "list", "--no-daemon", "-t"],
+            ["ros2", "topic", "list", "-t"],
+            parser=self._parse_name_type_lines,
+            timeout=4,
+            samples=3,
+        )
+        nodes_result = self._sample_ros_graph(
+            ["ros2", "node", "list", "--no-daemon"],
+            ["ros2", "node", "list"],
+            parser=self._parse_name_lines,
+            timeout=3,
+            samples=1,
+        )
+        services_result = self._sample_ros_graph(
+            ["ros2", "service", "list", "--no-daemon", "-t"],
+            ["ros2", "service", "list", "-t"],
+            parser=self._parse_name_type_lines,
+            timeout=3,
+            samples=1,
+        )
         available = bool(topics_result.get("ok") or nodes_result.get("ok") or services_result.get("ok"))
         return {
             "available": available,
-            "topics": self._parse_name_type_lines(str(topics_result.get("stdout") or "")),
-            "nodes": self._parse_name_lines(str(nodes_result.get("stdout") or "")),
-            "services": self._parse_name_type_lines(str(services_result.get("stdout") or "")),
+            "topics": topics_result.get("items", []),
+            "nodes": nodes_result.get("items", []),
+            "services": services_result.get("items", []),
             "runtime": {
                 "topics_rmw": topics_result.get("rmw", ""),
                 "nodes_rmw": nodes_result.get("rmw", ""),
                 "services_rmw": services_result.get("rmw", ""),
+                "topics_samples": topics_result.get("samples", 0),
+                "nodes_samples": nodes_result.get("samples", 0),
+                "services_samples": services_result.get("samples", 0),
             },
             "errors": {
                 "topics": "" if topics_result.get("ok") else str(topics_result.get("stderr") or ""),
@@ -37,6 +58,39 @@ class RosService:
                 "services": "" if services_result.get("ok") else str(services_result.get("stderr") or ""),
             },
         }
+
+    def _sample_ros_graph(
+        self,
+        primary: list[str],
+        fallback: list[str],
+        *,
+        parser: Any,
+        timeout: int,
+        samples: int = 3,
+    ) -> dict[str, Any]:
+        merged: dict[str, dict[str, str]] = {}
+        best_result: dict[str, Any] | None = None
+        errors: list[str] = []
+        for index in range(max(samples, 1)):
+            result = self._run_ros_with_fallback(primary, fallback, timeout=timeout)
+            if result.get("ok"):
+                rows = parser(str(result.get("stdout") or ""))
+                if best_result is None or len(rows) > len(best_result.get("items", [])):
+                    best_result = {**result, "items": rows}
+                for row in rows:
+                    key = str(row.get("topic") or row.get("name") or "")
+                    if key:
+                        merged[key] = row
+            else:
+                errors.append(str(result.get("stderr") or ""))
+            if index < samples - 1:
+                time.sleep(0.25)
+        if merged:
+            items = [merged[key] for key in sorted(merged)]
+            result = best_result or {"ok": True, "stdout": "", "stderr": "", "returncode": 0}
+            return {**result, "ok": True, "items": items, "samples": samples}
+        result = best_result or {"ok": False, "stdout": "", "stderr": "\n".join(error for error in errors if error), "returncode": 1}
+        return {**result, "items": [], "samples": samples}
 
     def topic_info(self, topic: str) -> dict[str, Any]:
         rclpy_result = self._topic_info_rclpy(topic)

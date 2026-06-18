@@ -48,6 +48,7 @@ class SshConnection:
 class UploadService:
     def __init__(self) -> None:
         self._active_processes: dict[str, subprocess.Popen[str]] = {}
+        self._temp_manifests: set[Path] = set()
 
     def dependency_check(self) -> dict[str, Any]:
         result = {
@@ -75,9 +76,12 @@ class UploadService:
     def manifest(self, local_path: str) -> dict[str, Any]:
         local = Path(local_path).expanduser()
         manifest = UploadManifest().build(local)
+        manifest_path = self._write_temp_manifest(manifest)
         preview_files = manifest.get("files", [])[:200]
         result = {
             "local_path": str(local),
+            "manifest_path": str(manifest_path),
+            "temporary": True,
             "schema": manifest.get("schema", ""),
             "source": manifest.get("source", ""),
             "source_type": manifest.get("source_type", ""),
@@ -89,9 +93,24 @@ class UploadService:
         task = task_service.run_instant("upload_manifest", f"built upload manifest for {local}", result)
         return {"task_id": task.task_id, "result": result}
 
-    def verify_local_manifest(self, local_path: str) -> dict[str, Any]:
+    def verify_local_manifest(self, local_path: str, manifest_path: str = "") -> dict[str, Any]:
         local = Path(local_path).expanduser()
+        manifest_file = Path(manifest_path).expanduser() if manifest_path else Path()
+        if manifest_path and manifest_file.exists():
+            verify_result = UploadManifest().verify(manifest_file)
+            manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+            result = {
+                "local_path": str(local),
+                "manifest_path": str(manifest_file),
+                "temporary": manifest_file in self._temp_manifests,
+                "file_count": manifest.get("file_count", 0),
+                "total_size_bytes": manifest.get("total_size_bytes", 0),
+                **verify_result,
+            }
+            task = task_service.run_instant("upload_manifest_verify", f"verified local manifest {manifest_file}", result)
+            return {"task_id": task.task_id, "result": result}
         manifest = UploadManifest().build(local)
+        manifest_file = self._write_temp_manifest(manifest)
         missing = []
         mismatched = []
         checked = 0
@@ -107,6 +126,8 @@ class UploadService:
                 mismatched.append(rel)
         result = {
             "local_path": str(local),
+            "manifest_path": str(manifest_file),
+            "temporary": True,
             "ok": not missing and not mismatched,
             "checked": checked,
             "missing": missing,
@@ -116,6 +137,15 @@ class UploadService:
         }
         task = task_service.run_instant("upload_manifest_verify", f"verified local manifest for {local}", result)
         return {"task_id": task.task_id, "result": result}
+
+    def cleanup_manifest(self, manifest_path: str) -> dict[str, Any]:
+        path = Path(manifest_path).expanduser()
+        removed = False
+        if path in self._temp_manifests and path.exists():
+            path.unlink()
+            removed = True
+        self._temp_manifests.discard(path)
+        return {"ok": True, "manifest_path": str(path), "removed": removed}
 
     def remote_list(self, host: str, username: str, remote_path: str, port: int = 22, password: str = "", key_path: str = "") -> dict[str, Any]:
         connection = self._connection(host, username, remote_path, port, password, key_path)
@@ -656,6 +686,21 @@ print(json.dumps({{"ok": not missing and not mismatched, "checked": checked, "mi
             for rel_path in rel_paths:
                 handle.write(f"{rel_path}\n")
         return Path(handle.name)
+
+    def _write_temp_manifest(self, manifest: dict[str, Any]) -> Path:
+        handle = tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            prefix="robodataset_upload_manifest_",
+            suffix=".json",
+            delete=False,
+        )
+        with handle:
+            json.dump(manifest, handle, indent=2, ensure_ascii=False)
+            handle.write("\n")
+        path = Path(handle.name)
+        self._temp_manifests.add(path)
+        return path
 
     def _cleanup_temp_file(self, path: Path, task_id: str = "") -> None:
         try:

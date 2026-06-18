@@ -5,7 +5,7 @@ import re
 from typing import Any
 
 import yaml
-from PySide6.QtCore import Qt, QThreadPool, QTimer
+from PySide6.QtCore import Qt, QThreadPool, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -20,6 +20,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QPlainTextEdit,
+    QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QTabWidget,
@@ -33,6 +35,8 @@ from robodataset_studio_v3.frontend.widgets.topic_tree import TopicTreeWidget
 
 
 class ConfigLibraryPage(QWidget):
+    projectConfigChanged = Signal(object)
+
     def __init__(self, api: ApiClient, project: ProjectSummary | None = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.api = api
@@ -110,7 +114,6 @@ class ConfigLibraryPage(QWidget):
         for spin in [self.crop_x, self.crop_y, self.crop_w, self.crop_h, self.resize_w, self.resize_h]:
             spin.setRange(0, 8192)
 
-        self.upload_enabled = QCheckBox("Enable upload config")
         self.upload_profile = self.editable_combo(["local_lab_server", "internal_gpu_server", "remote_backup", "custom"])
         self.upload_lan_host = QLineEdit()
         self.upload_wan_host = QLineEdit()
@@ -118,10 +121,7 @@ class ConfigLibraryPage(QWidget):
         self.upload_port.setRange(1, 65535)
         self.upload_port.setValue(22)
         self.upload_username = QLineEdit()
-        self.upload_password = QLineEdit()
-        self.upload_password.setEchoMode(QLineEdit.Password)
         self.upload_key_path = QLineEdit()
-        self.upload_remote_root = QLineEdit()
         self.upload_rsync = QCheckBox("Use rsync")
         self.upload_repair = QCheckBox("Repair / resume verified upload")
         self.upload_verify = QCheckBox("Verify after upload")
@@ -135,9 +135,19 @@ class ConfigLibraryPage(QWidget):
         self._build()
         self._connect_auto_sync()
         self.refresh_list()
+        QTimer.singleShot(0, self.ensure_ros_graph_loaded)
 
     def _build(self) -> None:
-        layout = QVBoxLayout(self)
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        content = QWidget()
+        content.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(8, 8, 8, 8)
         top_box = QGroupBox("Current config")
         top = QHBoxLayout(top_box)
         refresh = QPushButton("Refresh")
@@ -204,7 +214,9 @@ class ConfigLibraryPage(QWidget):
 
         layout.addWidget(top_box)
         layout.addWidget(splitter, 1)
-        layout.addWidget(self.status)
+        scroll.setWidget(content)
+        root_layout.addWidget(scroll)
+        root_layout.addWidget(self.status)
 
         apply_shortcut = QShortcut(QKeySequence.Save, self.editor)
         apply_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
@@ -231,9 +243,7 @@ class ConfigLibraryPage(QWidget):
             self.upload_lan_host,
             self.upload_wan_host,
             self.upload_username,
-            self.upload_password,
             self.upload_key_path,
-            self.upload_remote_root,
         ]:
             widget.textChanged.connect(self.schedule_form_sync)
         for combo in [
@@ -267,7 +277,6 @@ class ConfigLibraryPage(QWidget):
         for checkbox in [
             self.crop_enabled,
             self.resize_enabled,
-            self.upload_enabled,
             self.upload_rsync,
             self.upload_repair,
             self.upload_verify,
@@ -350,15 +359,12 @@ class ConfigLibraryPage(QWidget):
     def _upload_form(self) -> QWidget:
         widget = QWidget()
         form = QFormLayout(widget)
-        form.addRow(self.upload_enabled)
         form.addRow("Upload config name", self.upload_profile)
         form.addRow("Internal IP / Host", self.upload_lan_host)
         form.addRow("Public IP / Host", self.upload_wan_host)
         form.addRow("Port", self.upload_port)
         form.addRow("Username", self.upload_username)
-        form.addRow("Password", self.upload_password)
         form.addRow("Private key path", self.upload_key_path)
-        form.addRow("Remote root", self.upload_remote_root)
         form.addRow(self.upload_rsync)
         form.addRow(self.upload_repair)
         form.addRow(self.upload_verify)
@@ -464,6 +470,13 @@ class ConfigLibraryPage(QWidget):
         saved_id = str(saved.get("id") or name)
         self.status.setText(f"{action} config: {saved_id}")
         self.loaded_config_id = saved_id
+        if self.project is not None and saved_id == self.project.config_id:
+            try:
+                self.project = self.api.bind_project_config(self.project.key, saved_id)
+                self.projectConfigChanged.emit(self.project)
+                self.status.setText(f"{action} config and refreshed project: {saved_id}")
+            except Exception as exc:
+                self.status.setText(f"{action} config: {saved_id}; project refresh failed: {exc}")
         self.refresh_list()
         idx = self.config_select.findData(saved_id)
         if idx >= 0:
@@ -542,7 +555,12 @@ class ConfigLibraryPage(QWidget):
 
     def refresh_ros_graph(self) -> None:
         self.status.setText("Refreshing ROS graph...")
-        self.run_async(self.api.get, self.finish_ros_graph, "/api/ros/graph", timeout=12.0)
+        self.run_async(self.api.get, self.finish_ros_graph, "/api/ros/graph", timeout=30.0)
+
+    def ensure_ros_graph_loaded(self) -> None:
+        topics = self.graph_data.get("topics", []) if isinstance(self.graph_data, dict) else []
+        if not topics:
+            self.refresh_ros_graph()
 
     def finish_ros_graph(self, result: object, error: object) -> None:
         if error is not None:
@@ -551,10 +569,12 @@ class ConfigLibraryPage(QWidget):
         self.set_graph_data(result if isinstance(result, dict) else {})
 
     def populate_topics(self) -> None:
-        topics = [item for item in self.graph_data.get("topics", []) if isinstance(item, dict)]
+        graph_topics = [item for item in self.graph_data.get("topics", []) if isinstance(item, dict)]
+        configured_rows = self.configured_selected_topic_rows()
+        topics = self.merge_topic_rows(graph_topics, configured_rows)
         self.update_ros_based_choices(topics)
-        selected = {item.get("topic") or item.get("name") for item in self.selected_topic_rows()}
-        selected.update(self.configured_selected_topic_names())
+        selected = {item.get("topic") or item.get("name") for item in configured_rows}
+        selected.update({item.get("topic") or item.get("name") for item in self.topic_tree.selected_topics()})
         self.topic_tree.populate(topics, selected)
         self.update_selected_topics_preview()
 
@@ -582,13 +602,26 @@ class ConfigLibraryPage(QWidget):
         return [dict(row) for row in rows if isinstance(row, dict)]
 
     def configured_selected_topic_names(self) -> set[str]:
+        return {str(row.get("topic") or row.get("name") or "") for row in self.configured_selected_topic_rows()}
+
+    def configured_selected_topic_rows(self) -> list[dict[str, Any]]:
         try:
             config = self.current_config(default=False)
         except Exception:
-            return set()
+            return []
         ros = self.total_ros_config(config)
         rows = ros.get("selected_topics", []) if isinstance(ros.get("selected_topics"), list) else []
-        return {str(row.get("topic") or row.get("name") or "") for row in rows if isinstance(row, dict)}
+        return [dict(row) for row in rows if isinstance(row, dict)]
+
+    def merge_topic_rows(self, graph_topics: list[dict[str, Any]], configured_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        merged: dict[str, dict[str, Any]] = {}
+        for row in [*graph_topics, *configured_rows]:
+            name = str(row.get("topic") or row.get("name") or "")
+            if not name:
+                continue
+            msg_type = str(row.get("type") or row.get("message_type") or "")
+            merged[name] = {"name": name, "topic": name, "type": msg_type, "message_type": msg_type}
+        return [merged[name] for name in sorted(merged)]
 
     def total_ros_config(self, config: dict[str, Any]) -> dict[str, Any]:
         ros = config.get("ros", {}) if isinstance(config.get("ros"), dict) else {}
@@ -752,15 +785,12 @@ class ConfigLibraryPage(QWidget):
         self.resize_enabled.setChecked(bool(resize.get("enabled", False)))
         self.resize_w.setValue(int(resize.get("width", 0) or 0))
         self.resize_h.setValue(int(resize.get("height", 0) or 0))
-        self.upload_enabled.setChecked(bool(upload.get("enabled", False)))
         self.upload_profile.setCurrentText(str(upload.get("name") or upload.get("profile_name") or ""))
         self.upload_lan_host.setText(str(upload.get("lan_host") or upload.get("host") or ""))
         self.upload_wan_host.setText(str(upload.get("wan_host", "")))
         self.upload_port.setValue(int(upload.get("port") or 22))
         self.upload_username.setText(str(upload.get("username", "")))
-        self.upload_password.setText(str(upload.get("password", "")))
         self.upload_key_path.setText(str(upload.get("key_path", "")))
-        self.upload_remote_root.setText(str(upload.get("remote_root", "")))
         self.upload_rsync.setChecked(bool(upload.get("use_rsync", True)))
         self.upload_repair.setChecked(bool(upload.get("repair_resume_enabled", True)))
         self.upload_verify.setChecked(bool(upload.get("verify_after_upload", True)))
@@ -813,16 +843,13 @@ class ConfigLibraryPage(QWidget):
                 stream.setdefault("preview", {})["crop"] = dict(crop)
                 stream.setdefault("preview", {})["resize"] = dict(resize)
         config["upload"] = {
-            "enabled": self.upload_enabled.isChecked(),
             "name": self.upload_profile.currentText().strip(),
             "host": self.upload_lan_host.text().strip() or self.upload_wan_host.text().strip(),
             "lan_host": self.upload_lan_host.text().strip(),
             "wan_host": self.upload_wan_host.text().strip(),
             "port": int(self.upload_port.value()),
             "username": self.upload_username.text().strip(),
-            "password": self.upload_password.text(),
             "key_path": self.upload_key_path.text().strip(),
-            "remote_root": self.upload_remote_root.text().strip(),
             "use_rsync": self.upload_rsync.isChecked(),
             "repair_resume_enabled": self.upload_repair.isChecked(),
             "verify_after_upload": self.upload_verify.isChecked(),
@@ -838,8 +865,8 @@ class ConfigLibraryPage(QWidget):
                 warnings.append("dataset_config is missing")
             elif not dataset.get("streams"):
                 warnings.append("no streams configured")
-            if not config.get("upload", {}).get("host") and config.get("upload", {}).get("enabled"):
-                warnings.append("upload enabled but host is empty")
+            if config.get("upload", {}) and not config.get("upload", {}).get("host"):
+                warnings.append("upload host is empty")
             self.status.setText("OK" if not warnings else "Warnings: " + "; ".join(warnings))
             self.refresh_preview(config)
         except Exception as exc:
@@ -861,7 +888,7 @@ class ConfigLibraryPage(QWidget):
                 lines.append(f"    {key.get('name')}: dim={key.get('output_dim')} <- {key.get('source_topic')}")
         lines.append(f"  action: {action.get('name', 'rel_actions')} dim={action.get('dim', 0)} <- {action.get('source_topic', '')}")
         upload = config.get("upload", {}) if isinstance(config.get("upload"), dict) else {}
-        lines.append(f"upload: {'enabled' if upload.get('enabled') else 'disabled'} host={upload.get('host', '')} remote={upload.get('remote_root', '')}")
+        lines.append(f"upload: host={upload.get('host', '')}")
         self.preview.setPlainText("\n".join(lines))
 
     def build_default_ai_prompt(self) -> None:
@@ -1149,7 +1176,7 @@ class ConfigLibraryPage(QWidget):
         return "static"
 
     def default_upload_config(self) -> dict[str, Any]:
-        return {"enabled": False, "name": "", "host": "", "lan_host": "", "wan_host": "", "port": 22, "username": "", "password": "", "key_path": "", "remote_root": "", "use_rsync": True, "repair_resume_enabled": True, "verify_after_upload": True}
+        return {"name": "", "host": "", "lan_host": "", "wan_host": "", "port": 22, "username": "", "key_path": "", "use_rsync": True, "repair_resume_enabled": True, "verify_after_upload": True}
 
     def default_dataset_config(self) -> dict[str, Any]:
         return {"environment": {}, "instruction": {}, "robot": {}, "cameras": [], "streams": [], "state": {"keys": []}, "action": {"name": "rel_actions", "source": "", "source_topic": "", "format": "delta_state", "dim": 0, "fields": []}, "recording": {"sample_rate_hz": 10, "stop_mode": "manual", "episode_duration_sec": 0.0, "target_samples": 0}, "dataset": {"output_format": ["npz", "hdf5"], "schema": "calvin_style", "split": "training", "episode_prefix": "episode_", "write_language_annotations": True, "language_annotation_file": "lang_annotations/auto_lang_ann.npy"}}

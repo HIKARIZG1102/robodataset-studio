@@ -61,7 +61,7 @@ class RosPage(BasePage):
 
     def graph(self) -> None:
         self.status.setText("Refreshing ROS graph...")
-        self._start_worker(self.api.get, self._finish_graph, "/api/ros/graph", timeout=12.0)
+        self._start_worker(self.api.get, self._finish_graph, "/api/ros/graph", timeout=30.0)
 
     def _finish_graph(self, result: object, error: object) -> None:
         if error is not None:
@@ -83,7 +83,9 @@ class RosPage(BasePage):
 
     def _populate_graph(self, graph: dict[str, Any]) -> None:
         nodes = [str(node.get("name", "")) for node in graph.get("nodes", []) if isinstance(node, dict)]
-        topics = [topic for topic in graph.get("topics", []) if isinstance(topic, dict)]
+        graph_topics = [topic for topic in graph.get("topics", []) if isinstance(topic, dict)]
+        configured_topics = self._configured_selected_topic_rows()
+        topics = self._merge_topic_rows(graph_topics, configured_topics)
         self.node_combo.blockSignals(True)
         current_node = self.node_combo.currentText().strip()
         self.node_combo.clear()
@@ -104,20 +106,30 @@ class RosPage(BasePage):
             self.status.setText(error_text or "No ROS topics found. Check ROS setup and running nodes, then Refresh Graph.")
 
     def _configured_selected_topic_names(self) -> set[str]:
+        return {str(topic.get("name") or topic.get("topic") or "") for topic in self._configured_selected_topic_rows()}
+
+    def _configured_selected_topic_rows(self) -> list[dict[str, Any]]:
         if self.project is None:
-            return set()
+            return []
         try:
             config = self.api.get_project_config(self.project.key)
         except Exception:
-            return set()
+            return []
         ros = config.get("ros", {}) if isinstance(config, dict) else {}
         selected = ros.get("selected_topics", []) if isinstance(ros, dict) else []
-        names = set()
         if isinstance(selected, list):
-            for topic in selected:
-                if isinstance(topic, dict):
-                    names.add(str(topic.get("name") or topic.get("topic") or ""))
-        return names
+            return [dict(topic) for topic in selected if isinstance(topic, dict)]
+        return []
+
+    def _merge_topic_rows(self, graph_topics: list[dict[str, Any]], configured_topics: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        merged: dict[str, dict[str, Any]] = {}
+        for row in [*graph_topics, *configured_topics]:
+            name = str(row.get("topic") or row.get("name") or "")
+            if not name:
+                continue
+            msg_type = str(row.get("type") or row.get("message_type") or "")
+            merged[name] = {"name": name, "topic": name, "type": msg_type, "message_type": msg_type}
+        return [merged[name] for name in sorted(merged)]
 
     def _selected_topics_changed(self) -> None:
         self.selection_status.setText(f"selected topics: {len(self.selected_topics())}")

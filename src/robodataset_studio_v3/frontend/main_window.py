@@ -3,12 +3,15 @@ from __future__ import annotations
 import os
 
 from PySide6.QtCore import Qt, QThreadPool
+from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
+    QApplication,
     QDockWidget,
     QLabel,
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QToolBar,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -37,22 +40,31 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("RoboDataset Studio V3")
+        self.resize(1280, 860)
+        self.setMinimumSize(760, 520)
         self.api = ApiClient()
         self.backend = BackendProcess(self.api)
         self.current_project: ProjectSummary | None = None
         self.open_tabs: dict[str, QWidget] = {}
         self.workspace = QTabWidget()
+        self._configure_workspace(self.workspace)
         self.empty = self._empty_workspace()
         self.setCentralWidget(self.empty)
         self.inspector: InspectorDock | None = None
         self.inspector_dock: QDockWidget | None = None
         self.ros_graph_cache: dict | None = None
         self.refresh_graph_button: QPushButton | None = None
+        self.project_summary = QLabel("")
         self.settings: dict = {}
+        self.ui_scale = 1.0
+        self._base_font_point_size = QApplication.font().pointSizeF()
+        if self._base_font_point_size <= 0:
+            self._base_font_point_size = 10.0
         self._restoring_workspace = False
         self.pool = QThreadPool.globalInstance()
         self._workers: list[ApiWorker] = []
         self._build_menu()
+        self._build_project_summary_bar()
         self._build_graph_button()
         self._ensure_backend()
         self._restore_startup_state()
@@ -92,6 +104,13 @@ class MainWindow(QMainWindow):
 
         settings_menu = self.menuBar().addMenu("Settings")
         settings_menu.addAction("Settings", lambda: self.open_action_tab("settings"))
+        settings_menu.addSeparator()
+        zoom_in = settings_menu.addAction("Zoom In", self.zoom_in)
+        zoom_in.setShortcut(QKeySequence("Ctrl++"))
+        zoom_out = settings_menu.addAction("Zoom Out", self.zoom_out)
+        zoom_out.setShortcut(QKeySequence("Ctrl+-"))
+        reset_zoom = settings_menu.addAction("Reset Zoom", self.reset_zoom)
+        reset_zoom.setShortcut(QKeySequence("Ctrl+0"))
 
         help_menu = self.menuBar().addMenu("Help")
         help_menu.addAction("Tutorial", lambda: self.open_action_tab("tutorial"))
@@ -130,6 +149,25 @@ class MainWindow(QMainWindow):
         self.refresh_graph_button = refresh
         self.menuBar().setCornerWidget(refresh, Qt.TopRightCorner)
 
+    def _build_project_summary_bar(self) -> None:
+        toolbar = QToolBar("Project")
+        toolbar.setMovable(False)
+        self.project_summary.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.project_summary.setWordWrap(False)
+        toolbar.addWidget(self.project_summary)
+        self.addToolBar(Qt.TopToolBarArea, toolbar)
+        self.update_project_summary()
+
+    def update_project_summary(self) -> None:
+        if self.current_project is None:
+            self.project_summary.setText("Project: none | Config: none")
+            return
+        state = "recorded" if self.current_project.has_recorded_data else "editable"
+        self.project_summary.setText(
+            f"Project: {self.current_project.name} {self.current_project.version} | "
+            f"Config: {self.current_project.config_id or 'none'} | {state}"
+        )
+
     def _empty_workspace(self) -> QWidget:
         widget = QWidget()
         layout = QVBoxLayout(widget)
@@ -155,6 +193,7 @@ class MainWindow(QMainWindow):
             return
         self.current_project = project
         self._remember_project(project)
+        self.update_project_summary()
         self._load_project_workspace()
 
     def open_config_library_tab(self) -> None:
@@ -165,6 +204,7 @@ class MainWindow(QMainWindow):
             self.workspace.setCurrentWidget(existing)
             return
         page = ConfigLibraryPage(self.api, self.current_project)
+        page.projectConfigChanged.connect(self._project_config_changed)
         if self.ros_graph_cache:
             page.set_graph_data(self.ros_graph_cache)
         self.open_tabs[tab_id] = page
@@ -202,15 +242,14 @@ class MainWindow(QMainWindow):
                 return
         self.current_project = selected
         self._remember_project(selected)
+        self.update_project_summary()
         self._load_project_workspace()
 
     def _load_project_workspace(self) -> None:
         if self.current_project is None:
             return
         self.workspace = QTabWidget()
-        self.workspace.setTabsClosable(True)
-        self.workspace.tabCloseRequested.connect(self.close_workspace_tab)
-        self.workspace.currentChanged.connect(self._workspace_tab_changed)
+        self._configure_workspace(self.workspace)
         self.open_tabs = {}
         self._restoring_workspace = True
         for tab_id in ["collect", "review", "convert", "upload", "logs"]:
@@ -218,6 +257,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.workspace)
         self._restoring_workspace = False
         self._sync_inspector_project()
+        self.update_project_summary()
         last_tab = self._ui_settings().get("last_active_tab", "")
         if isinstance(last_tab, str) and last_tab in self.open_tabs:
             self.workspace.setCurrentWidget(self.open_tabs[last_tab])
@@ -233,6 +273,7 @@ class MainWindow(QMainWindow):
             self.workspace.setCurrentWidget(existing)
             return
         page = ProjectConfigPage(self.api, self.current_project)
+        page.projectConfigChanged.connect(self._project_config_changed)
         self.open_tabs[tab_id] = page
         index = self.workspace.insertTab(0, page, "Project Config")
         self.workspace.setCurrentIndex(index)
@@ -296,9 +337,7 @@ class MainWindow(QMainWindow):
     def _ensure_workspace(self, *, allow_empty: bool = False) -> None:
         if self.current_project is None and allow_empty and self.centralWidget() is self.empty:
             self.workspace = QTabWidget()
-            self.workspace.setTabsClosable(True)
-            self.workspace.tabCloseRequested.connect(self.close_workspace_tab)
-            self.workspace.currentChanged.connect(self._workspace_tab_changed)
+            self._configure_workspace(self.workspace)
             self.open_tabs = {}
             self.setCentralWidget(self.workspace)
             return
@@ -330,7 +369,7 @@ class MainWindow(QMainWindow):
         if self.refresh_graph_button is not None:
             self.refresh_graph_button.setEnabled(False)
             self.refresh_graph_button.setText("Refreshing...")
-        worker = ApiWorker(self.api.get, "/api/ros/graph", timeout=12.0)
+        worker = ApiWorker(self.api.get, "/api/ros/graph", timeout=30.0)
         self._workers.append(worker)
 
         def finish(result: object, error: object, item: ApiWorker = worker) -> None:
@@ -404,11 +443,13 @@ class MainWindow(QMainWindow):
             settings = {}
         self.settings = settings if isinstance(settings, dict) else {}
         ui = self._ui_settings()
+        self.apply_ui_scale(float(ui.get("scale", 1.0) or 1.0), persist=False)
         project_path = str(ui.get("last_project_path") or "")
         if project_path:
             try:
                 self.current_project = self.api.open_project_path(project_path)
                 self._load_project_workspace()
+                self.update_project_summary()
             except Exception as exc:
                 self.statusBar().showMessage(f"Could not restore last project: {exc}")
         if bool(ui.get("inspector_visible", True)):
@@ -442,11 +483,66 @@ class MainWindow(QMainWindow):
         if self.inspector is not None:
             self.inspector.set_project(self.current_project)
 
+    def _configure_workspace(self, widget: QTabWidget) -> None:
+        widget.setTabsClosable(True)
+        widget.setMovable(True)
+        widget.setDocumentMode(True)
+        widget.tabCloseRequested.connect(self.close_workspace_tab)
+        widget.currentChanged.connect(self._workspace_tab_changed)
+
+    def zoom_in(self) -> None:
+        self.apply_ui_scale(self.ui_scale + 0.1)
+
+    def zoom_out(self) -> None:
+        self.apply_ui_scale(self.ui_scale - 0.1)
+
+    def reset_zoom(self) -> None:
+        self.apply_ui_scale(1.0)
+
+    def apply_ui_scale(self, scale: float, *, persist: bool = True) -> None:
+        scale = max(0.7, min(1.4, round(float(scale), 2)))
+        self.ui_scale = scale
+        font = QApplication.font()
+        font.setPointSizeF(max(7.0, self._base_font_point_size * scale))
+        QApplication.instance().setFont(font)
+        self.statusBar().showMessage(f"UI scale: {scale:.0%}")
+        if persist:
+            settings = dict(self.settings or {})
+            settings.setdefault("ui", {})
+            settings["ui"]["scale"] = scale
+            self._write_settings(settings)
+
+    def _project_config_changed(self, project: object) -> None:
+        if isinstance(project, ProjectSummary):
+            self.current_project = project
+        elif self.current_project is not None:
+            try:
+                self.current_project = self.api.open_project_path(self.current_project.path)
+            except Exception as exc:
+                self.statusBar().showMessage(f"Project refresh failed: {exc}")
+                return
+        self.update_project_summary()
+        if self.current_project is not None:
+            self._remember_project(self.current_project)
+        self._sync_inspector_project()
+        sender = self.sender()
+        for widget in self.open_tabs.values():
+            setattr(widget, "project", self.current_project)
+            refresh = getattr(widget, "on_project_config_changed", None)
+            if callable(refresh):
+                refresh(self.current_project)
+            elif widget is not sender:
+                fallback = getattr(widget, "refresh", None)
+                if callable(fallback) and widget.__class__.__name__ == "ProjectConfigPage":
+                    fallback()
+        self.statusBar().showMessage("Project config refreshed across open tabs")
+
     def _save_ui_state(self) -> None:
         settings = dict(self.settings or {})
         settings.setdefault("ui", {})
         settings["ui"]["last_active_tab"] = self._current_tab_id()
         settings["ui"]["inspector_visible"] = bool(self.inspector_dock and self.inspector_dock.isVisible())
+        settings["ui"]["scale"] = self.ui_scale
         if self.current_project is not None:
             settings["ui"]["last_project_path"] = self.current_project.path
         self._write_settings(settings)

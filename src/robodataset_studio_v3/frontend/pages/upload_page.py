@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QGroupBox,
+    QHeaderView,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -30,7 +31,7 @@ class UploadPage(BasePage):
     def __init__(self, api: ApiClient, project: ProjectSummary | None = None) -> None:
         super().__init__("Upload", api, project)
         self.local_path = QLineEdit()
-        self.remote_path = QLineEdit()
+        self.remote_path = QLineEdit("/data/dataset")
         self.host = QLineEdit()
         self.port = QSpinBox()
         self.port.setRange(1, 65535)
@@ -41,15 +42,21 @@ class UploadPage(BasePage):
         self.key_path = QLineEdit()
         self.auth_hint = QLabel("auth: agent_or_default_key")
         self.new_folder = QLineEdit()
+        self.path_breadcrumbs = QHBoxLayout()
         self.manifest_summary = QLabel("manifest: not built")
         self.remote_summary = QLabel("remote: not listed")
         self.task_summary = QLabel("task: idle")
+        self.manifest_path = ""
         self.manifest_table = QTableWidget(0, 3)
         self.manifest_table.setHorizontalHeaderLabels(["Path", "Size", "SHA256"])
+        self.manifest_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.manifest_table.horizontalHeader().setStretchLastSection(True)
         self.manifest_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.manifest_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.remote_files = QTableWidget(0, 3)
         self.remote_files.setHorizontalHeaderLabels(["Name", "Type", "Size"])
+        self.remote_files.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.remote_files.horizontalHeader().setStretchLastSection(True)
         self.remote_files.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.remote_files.setSelectionMode(QAbstractItemView.SingleSelection)
         self.remote_files.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -62,6 +69,9 @@ class UploadPage(BasePage):
         self.config_timer.setInterval(2000)
         self.config_timer.timeout.connect(self.reload_upload_config_silent)
         self._upload_config_signature = ""
+        for field in [self.host, self.username, self.key_path]:
+            field.setReadOnly(True)
+        self.port.setReadOnly(True)
         if project is not None:
             self.local_path.setText(f"{project.path}/exports")
             self.load_upload_defaults(project.key)
@@ -96,7 +106,9 @@ class UploadPage(BasePage):
         remote_layout.addRow("Password", self.password)
         remote_layout.addRow("Private key path", self._key_path_row())
         remote_layout.addRow("Authentication", self.auth_hint)
+        self.remote_path.textChanged.connect(self.update_remote_breadcrumbs)
         remote_layout.addRow("Remote directory", self.remote_path)
+        remote_layout.addRow("Path", self._breadcrumb_widget())
         remote_actions = QHBoxLayout()
         for label, handler in [
             ("Connect and list", self.connect_and_list),
@@ -149,11 +161,16 @@ class UploadPage(BasePage):
         self.layout.addWidget(self.task_summary)
         self.layout.addWidget(splitter, 1)
         self.finish_layout()
+        self.update_remote_breadcrumbs()
         if self.project is not None:
             self.config_timer.start()
 
     def reload_upload_config(self) -> None:
         self._reload_upload_config(silent=False)
+
+    def on_project_config_changed(self, project: ProjectSummary | None) -> None:
+        self.project = project
+        self._reload_upload_config(silent=True)
 
     def reload_upload_config_silent(self) -> None:
         self._reload_upload_config(silent=True)
@@ -194,15 +211,10 @@ class UploadPage(BasePage):
         if signature == self._upload_config_signature:
             return False
         self._upload_config_signature = signature
-        self.remote_path.setText(str(upload.get("remote_root", "")))
         self.host.setText(str(upload.get("host") or upload.get("lan_host") or upload.get("wan_host") or ""))
         self.username.setText(str(upload.get("username", "")))
         self.key_path.setText(str(upload.get("key_path", "")))
         self.port.setValue(int(upload.get("port") or 22))
-        if upload.get("password"):
-            self.password.setText(str(upload.get("password", "")))
-        else:
-            self.password.clear()
         self.update_auth_hint()
         return True
 
@@ -242,7 +254,7 @@ class UploadPage(BasePage):
     def verify_local_manifest(self) -> None:
         self._post(
             "/api/upload/manifest/verify",
-            {"local_path": self.local_path.text().strip()},
+            {"local_path": self.local_path.text().strip(), "manifest_path": self.manifest_path},
             "Local manifest verified",
             poll=False,
             callback=self._finish_local_verify,
@@ -268,6 +280,7 @@ class UploadPage(BasePage):
     def use_current_remote(self) -> None:
         self.remote_summary.setText(f"remote target: {self.remote_path.text().strip() or '/'}")
         self.status.setText("Remote target selected")
+        self.update_remote_breadcrumbs()
 
     def upload(self) -> None:
         self._post("/api/upload/start", self.payload(), "Upload task created")
@@ -314,7 +327,12 @@ class UploadPage(BasePage):
         count = int(payload.get("file_count", 0) or 0) if isinstance(payload, dict) else 0
         size = int(payload.get("total_size_bytes", 0) or 0) if isinstance(payload, dict) else 0
         truncated = bool(payload.get("truncated", False)) if isinstance(payload, dict) else False
-        self.manifest_summary.setText(f"manifest: {count} file(s), {self._format_bytes(size)}" + ("; preview truncated" if truncated else ""))
+        old_manifest = self.manifest_path
+        self.manifest_path = str(payload.get("manifest_path", "") if isinstance(payload, dict) else "")
+        if old_manifest and old_manifest != self.manifest_path:
+            self.cleanup_manifest(old_manifest)
+        temp_text = f"; temporary: {self.manifest_path}" if self.manifest_path else ""
+        self.manifest_summary.setText(f"manifest: {count} file(s), {self._format_bytes(size)}{temp_text}" + ("; preview truncated" if truncated else ""))
         self._fill_manifest_table(files if isinstance(files, list) else [])
 
     def _finish_local_verify(self, result: object, error: object, status: str, poll: bool) -> None:
@@ -324,9 +342,12 @@ class UploadPage(BasePage):
         payload = self._result_payload(result)
         if not isinstance(payload, dict):
             return
+        if payload.get("manifest_path"):
+            self.manifest_path = str(payload.get("manifest_path"))
         self.manifest_summary.setText(
             f"local manifest: ok={payload.get('ok')} checked={payload.get('checked', 0)} "
-            f"missing={len(payload.get('missing', []))} mismatched={len(payload.get('mismatched', []))}"
+            f"missing={len(payload.get('missing', []))} mismatched={len(payload.get('mismatched', []))} "
+            f"temporary={payload.get('temporary', False)}"
         )
 
     def _finish_remote_space(self, result: object, error: object, status: str, poll: bool) -> None:
@@ -350,13 +371,15 @@ class UploadPage(BasePage):
             self.remote_path.setText(str(payload.get("path")))
         entries = payload.get("entries", []) if isinstance(payload, dict) else []
         self.remote_summary.setText(f"remote: {self.remote_path.text().strip() or '/'}; entries={len(entries) if isinstance(entries, list) else 0}")
+        self.update_remote_breadcrumbs()
         self.remote_files.setRowCount(len(entries) if isinstance(entries, list) else 0)
         for row, item in enumerate(entries if isinstance(entries, list) else []):
             data = item if isinstance(item, dict) else {}
             values = [data.get("name", ""), "dir" if data.get("is_dir") else "file", data.get("size", "")]
             for col, value in enumerate(values):
                 self.remote_files.setItem(row, col, QTableWidgetItem(str(value)))
-        self.remote_files.resizeColumnsToContents()
+        for col, width in enumerate([320, 70]):
+            self.remote_files.setColumnWidth(col, width)
 
     def _finish_remote_mkdir(self, result: object, error: object, status: str, poll: bool) -> None:
         self._finish_post(result, error, status, poll)
@@ -375,7 +398,8 @@ class UploadPage(BasePage):
             values = [data.get("path", ""), data.get("size_bytes", ""), data.get("sha256", "")]
             for col, value in enumerate(values):
                 self.manifest_table.setItem(row, col, QTableWidgetItem(str(value)))
-        self.manifest_table.resizeColumnsToContents()
+        for col, width in enumerate([420, 110]):
+            self.manifest_table.setColumnWidth(col, width)
 
     def open_remote_row(self, row: int, _column: int) -> None:
         name_item = self.remote_files.item(row, 0)
@@ -385,6 +409,36 @@ class UploadPage(BasePage):
         base = self.remote_path.text().strip().rstrip("/")
         name = name_item.text().strip()
         self.remote_path.setText(f"{base}/{name}" if base else f"/{name}")
+        self.list_remote()
+
+    def _remote_path_parts(self) -> list[tuple[str, str]]:
+        raw = self.remote_path.text().strip() or "/"
+        absolute = raw.startswith("/")
+        parts = [part for part in raw.split("/") if part]
+        crumbs: list[tuple[str, str]] = [("/", "/")] if absolute else []
+        current = "" if absolute else "."
+        for part in parts:
+            current = f"{current.rstrip('/')}/{part}" if current not in {"", "."} else (f"/{part}" if absolute else part)
+            crumbs.append((part, current))
+        if not crumbs:
+            crumbs.append(("/", "/"))
+        return crumbs
+
+    def update_remote_breadcrumbs(self) -> None:
+        while self.path_breadcrumbs.count():
+            item = self.path_breadcrumbs.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        for label, target in self._remote_path_parts():
+            button = QPushButton(label)
+            button.setToolTip(target)
+            button.clicked.connect(lambda _checked=False, path=target: self.jump_remote_path(path))
+            self.path_breadcrumbs.addWidget(button)
+        self.path_breadcrumbs.addStretch(1)
+
+    def jump_remote_path(self, path: str) -> None:
+        self.remote_path.setText(path or "/")
         self.list_remote()
 
     def poll_task(self) -> None:
@@ -470,6 +524,27 @@ class UploadPage(BasePage):
         row.addWidget(self.key_path)
         row.addWidget(browse)
         return widget
+
+    def _breadcrumb_widget(self) -> QWidget:
+        widget = QWidget()
+        widget.setLayout(self.path_breadcrumbs)
+        self.path_breadcrumbs.setContentsMargins(0, 0, 0, 0)
+        return widget
+
+    def cleanup_manifest(self, manifest_path: str) -> None:
+        self.run_async(
+            self.api.post,
+            lambda _result, _error: None,
+            "/api/upload/manifest/cleanup",
+            {"local_path": self.local_path.text().strip(), "manifest_path": manifest_path},
+            timeout=10.0,
+        )
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if self.manifest_path:
+            self.cleanup_manifest(self.manifest_path)
+            self.manifest_path = ""
+        super().closeEvent(event)
 
     def _result_payload(self, result: object) -> dict[str, Any]:
         if not isinstance(result, dict):

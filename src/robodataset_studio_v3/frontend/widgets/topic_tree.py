@@ -21,10 +21,10 @@ class TopicTreeWidget(QTreeWidget):
         self.setWordWrap(False)
         self.setAlternatingRowColors(True)
         self.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.header().setStretchLastSection(False)
+        self.header().setStretchLastSection(True)
         self.header().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.header().setSectionResizeMode(1, QHeaderView.Interactive)
-        self.header().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.header().setSectionResizeMode(2, QHeaderView.Interactive)
         self.header().setMinimumSectionSize(48)
         self.itemChanged.connect(self._handle_item_changed)
 
@@ -66,7 +66,7 @@ class TopicTreeWidget(QTreeWidget):
             parent.setExpanded(checked_count > 0)
         self._fit_topic_column(groups)
         self.resizeColumnToContents(0)
-        self.resizeColumnToContents(2)
+        self.setColumnWidth(2, 260)
         self.blockSignals(False)
         self.selectionChanged.emit()
 
@@ -136,9 +136,9 @@ class TopicTreeWidget(QTreeWidget):
                 if len(topic["topic"]) > len(longest):
                     longest = topic["topic"]
         if not longest:
-            self.setColumnWidth(1, 360)
+            self.setColumnWidth(1, 320)
             return
         metrics = QFontMetrics(self.font())
         desired = metrics.horizontalAdvance(longest) + 52
-        viewport_width = max(self.viewport().width(), 360)
-        self.setColumnWidth(1, max(360, min(desired, viewport_width * 2)))
+        viewport_width = max(self.viewport().width(), 320)
+        self.setColumnWidth(1, max(280, min(desired, int(viewport_width * 0.72))))

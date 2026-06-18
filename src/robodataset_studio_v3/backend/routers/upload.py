@@ -26,6 +26,7 @@ class UploadRequest(ConnectRequest):
 
 class LocalPathRequest(BaseModel):
     local_path: str = ""
+    manifest_path: str = ""
 
 
 class RemotePathRequest(ConnectRequest):
@@ -53,7 +54,12 @@ def manifest(request: LocalPathRequest) -> dict[str, Any]:
 
 @router.post("/manifest/verify", response_model=dict[str, Any])
 def verify_manifest(request: LocalPathRequest) -> dict[str, Any]:
-    return upload_service.verify_local_manifest(request.local_path)
+    return upload_service.verify_local_manifest(request.local_path, request.manifest_path)
+
+
+@router.post("/manifest/cleanup", response_model=dict[str, Any])
+def cleanup_manifest(request: LocalPathRequest) -> dict[str, Any]:
+    return upload_service.cleanup_manifest(request.manifest_path)
 
 
 @router.post("/remote/list", response_model=dict[str, Any])

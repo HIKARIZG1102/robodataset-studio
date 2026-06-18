@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 from PySide6.QtCore import Qt, QThreadPool
-from PySide6.QtWidgets import QLabel, QPlainTextEdit, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QLabel, QPlainTextEdit, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 
 from robodataset_studio_v3.frontend.api_client import ApiClient, ProjectSummary
 from robodataset_studio_v3.frontend.worker import ApiWorker
@@ -17,12 +17,23 @@ class BasePage(QWidget):
         self.project = project
         self.pool = QThreadPool.globalInstance()
         self._workers: list[ApiWorker] = []
-        self.layout = QVBoxLayout(self)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.content = QWidget()
+        self.content.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.layout = QVBoxLayout(self.content)
+        self.layout.setContentsMargins(8, 8, 8, 8)
         self.title = QLabel(title)
         self.output = QPlainTextEdit()
         self.output.setReadOnly(True)
         self.status = QLabel("")
         self.layout.addWidget(self.title)
+        self.scroll.setWidget(self.content)
+        root.addWidget(self.scroll)
 
     def finish_layout(self) -> None:
         self.layout.addWidget(self.output)

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
+    QHeaderView,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -36,10 +38,12 @@ class CollectPage(BasePage):
         self.samples.setSuffix(" samples")
         self.samples.setValue(20)
         self.plan = QLabel("Plan: -")
-        self.session_label = QLabel("Session: -")
+        self.session_label = QLabel("Current session: new session will be created when recording starts")
         self.task_label = QLabel("Task: -")
         self.streams = QTableWidget(0, 6)
         self.streams.setHorizontalHeaderLabels(["Name", "Modality", "Source", "Topic/Endpoint", "Type", "Role"])
+        self.streams.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.streams.horizontalHeader().setStretchLastSection(True)
         self.mode.currentIndexChanged.connect(lambda _index: self.update_mode_ui())
         self.duration.valueChanged.connect(lambda _value: self.update_plan_text())
         self.samples.valueChanged.connect(lambda _value: self.update_plan_text())
@@ -127,7 +131,8 @@ class CollectPage(BasePage):
             ]
             for col, value in enumerate(values):
                 self.streams.setItem(row, col, QTableWidgetItem(str(value)))
-        self.streams.resizeColumnsToContents()
+        for col, width in enumerate([150, 90, 120, 300, 210]):
+            self.streams.setColumnWidth(col, width)
 
     def update_mode_ui(self) -> None:
         mode = str(self.mode.currentData() or "manual")
@@ -183,6 +188,10 @@ class CollectPage(BasePage):
             payload["duration_sec"] = float(self.duration.value())
         if mode == "sample_count":
             payload["target_samples"] = int(self.samples.value())
+        self.active_task_id = ""
+        self.active_session_dir = ""
+        self.session_label.setText(f"Current session: creating from {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        self.task_label.setText("Task: -")
         self.status.setText("Starting recording...")
         self.run_async(
             self.api.post,
@@ -194,6 +203,10 @@ class CollectPage(BasePage):
 
     def simulate_episode(self) -> None:
         payload: dict[str, Any] = {"project_key": self.project_key(), "mode": "simulate", "target_samples": int(self.samples.value())}
+        self.active_task_id = ""
+        self.active_session_dir = ""
+        self.session_label.setText(f"Current session: creating simulated session from {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        self.task_label.setText("Task: -")
         self.status.setText("Writing simulated listener episode...")
         self.run_async(
             self.api.post,
@@ -220,7 +233,7 @@ class CollectPage(BasePage):
         payload = result if isinstance(result, dict) else {}
         self.active_task_id = str(payload.get("task_id") or "")
         self.active_session_dir = str(payload.get("session_dir") or "")
-        self.session_label.setText(f"Session: {self.active_session_dir or '-'}")
+        self.session_label.setText(f"Current session: {self.active_session_dir or '-'}")
         self.task_label.setText(f"Task: {self.active_task_id or '-'}")
         self.show_result(payload, "Recording task started")
         if self.active_task_id:
@@ -260,5 +273,5 @@ class CollectPage(BasePage):
             session_dir = str(result_payload.get("session_dir") or self.active_session_dir)
             if session_dir:
                 self.active_session_dir = session_dir
-                self.session_label.setText(f"Session: {session_dir}")
+                self.session_label.setText(f"Last completed session: {session_dir}")
             self.refresh_plan()

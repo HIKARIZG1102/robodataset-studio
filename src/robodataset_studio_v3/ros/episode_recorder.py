@@ -103,6 +103,7 @@ class RosEpisodeRecorder:
             state_dim = int(config.get("action", {}).get("dim") or 0)
             arrays["robot_obs"] = np.zeros((actual_steps, max(state_dim, 1)), dtype=np.float32)
             primary_state_name = "robot_obs"
+            warnings.append("no JointState state stream captured; placeholder robot_obs/actions were generated")
         if "robot_obs" in arrays and requires_actions:
             actions = self._derive_actions(config, arrays[primary_state_name], actual_steps)
             arrays["rel_actions"] = actions

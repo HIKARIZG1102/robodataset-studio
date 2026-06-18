@@ -37,14 +37,39 @@ def check_session(request: SessionRequest) -> dict[str, Any]:
     return review_service.check_session(request.session_dir)
 
 
+@router.post("/session/report", response_model=dict[str, Any])
+def quality_report(request: SessionRequest) -> dict[str, Any]:
+    return review_service.quality_report(request.session_dir)
+
+
 @router.post("/session/mark", response_model=dict[str, Any])
 def mark(request: MarkRequest) -> dict[str, Any]:
     return review_service.mark(request.session_dir, request.episode, request.status)
 
 
+@router.post("/session/episode", response_model=dict[str, Any])
+def episode_detail(request: MarkRequest) -> dict[str, Any]:
+    return review_service.episode_detail(request.session_dir, request.episode)
+
+
+@router.post("/session/trash", response_model=dict[str, Any])
+def trash_episode(request: MarkRequest) -> dict[str, Any]:
+    return review_service.trash_episode(request.session_dir, request.episode)
+
+
+@router.post("/hdf5/inspect", response_model=dict[str, Any])
+def inspect_hdf5(request: Hdf5Request) -> dict[str, Any]:
+    return review_service.inspect_hdf5(request.hdf5_path)
+
+
 @router.post("/hdf5/check", response_model=dict[str, Any])
 def check_hdf5(request: Hdf5Request) -> dict[str, Any]:
     return review_service.check_hdf5(request.hdf5_path)
+
+
+@router.post("/layout/scan", response_model=dict[str, Any])
+def scan_layout(request: FolderRequest) -> dict[str, Any]:
+    return review_service.scan_layout(request.folder)
 
 
 @router.post("/layout/check", response_model=dict[str, Any])

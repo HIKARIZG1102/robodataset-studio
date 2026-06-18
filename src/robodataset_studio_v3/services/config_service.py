@@ -123,7 +123,6 @@ class ConfigService:
                 "merge_selected_sessions": True,
             },
             "upload": {
-                "enabled": False,
                 "name": "",
                 "host": "",
                 "lan_host": "",
@@ -131,9 +130,7 @@ class ConfigService:
                 "port": 22,
                 "username": "",
                 "auth_mode": "password_or_key",
-                "password": "",
                 "key_path": "",
-                "remote_root": "",
                 "use_rsync": True,
                 "repair_resume_enabled": True,
                 "verify_after_upload": True,
@@ -264,6 +261,8 @@ class ConfigService:
     def save_library_config(self, config_id: str, config: dict[str, Any]) -> dict[str, Any]:
         safe_id = self._safe_id(config_id)
         payload = dict(config or {})
+        if isinstance(payload.get("upload"), dict):
+            payload["upload"].pop("password", None)
         payload.setdefault("config_meta", {})
         payload["config_meta"]["id"] = safe_id
         payload["config_meta"].setdefault("name", safe_id)
@@ -275,6 +274,8 @@ class ConfigService:
     def apply_library_config_to_project(self, project_dir: Path, config_id: str) -> dict[str, Any]:
         payload = self.read_library_config(config_id)
         project_config = dict(payload)
+        if isinstance(project_config.get("upload"), dict):
+            project_config["upload"].pop("password", None)
         dataset_config = project_config.get("dataset_config", {})
         if not isinstance(dataset_config, dict):
             dataset_config = {}
@@ -296,6 +297,8 @@ class ConfigService:
 
     def write_project_config(self, project_dir: Path, config: ProjectConfigDraft) -> None:
         payload = config.model_dump()
+        if isinstance(payload.get("upload"), dict):
+            payload["upload"].pop("password", None)
         payload["dataset_config"] = self._dataset_only(payload.get("dataset_config", {}))
         self.write_yaml(project_dir / "project_config.yaml", payload)
         self.write_yaml(project_dir / "dataset_config.yaml", payload.get("dataset_config", {}))
@@ -332,8 +335,8 @@ class ConfigService:
         warnings = []
         if not dataset.streams:
             warnings.append("no streams selected")
-        if config.upload.get("enabled") and not config.upload.get("host"):
-            warnings.append("upload.enabled is true but upload.host is empty")
+        if config.upload and not config.upload.get("host"):
+            warnings.append("upload.host is empty")
         return ConfigPreview(summary=summary, warnings=warnings, dataset_summary=self._dataset_summary(dataset))
 
     def preview_dataset(self, config: DatasetConfigDraft | dict[str, Any]) -> ConfigPreview:

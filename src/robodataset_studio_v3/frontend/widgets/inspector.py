@@ -278,7 +278,7 @@ class InspectorDock(QWidget):
 
     def refresh_graph(self) -> None:
         self._append(self.echo_log, "refreshing ROS graph...")
-        self._start_worker(self.api.get, self._finish_graph, "/api/ros/graph", timeout=12.0)
+        self._start_worker(self.api.get, self._finish_graph, "/api/ros/graph", timeout=30.0)
 
     def _finish_graph(self, result: object, error: object) -> None:
         if error is not None:

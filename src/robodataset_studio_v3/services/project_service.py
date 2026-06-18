@@ -82,10 +82,12 @@ class ProjectService:
 
     def bind_config(self, key: str, config_id: str) -> ProjectSummary:
         path = self.project_dir(key)
-        if self.has_recorded_data(path):
+        meta = self._project_meta(path)
+        project = meta.get("project", {}) if isinstance(meta.get("project"), dict) else {}
+        current_config_id = str(project.get("config_id") or "")
+        if self.has_recorded_data(path) and config_id != current_config_id:
             raise RuntimeError("project already has recorded data; create a new project version before loading another config")
         self.config_service.apply_library_config_to_project(path, config_id)
-        meta = self._project_meta(path)
         meta.setdefault("project", {})
         meta["project"]["config_id"] = config_id
         (path / "project.yaml").write_text(yaml.safe_dump(meta, sort_keys=False, allow_unicode=True), encoding="utf-8")

@@ -32,37 +32,38 @@ class ConvertService:
         task = task_service.run_instant("convert_scan", f"scanned sessions under {base}", result)
         return {"task_id": task.task_id, "result": result}
 
-    def merge(self, sessions: list[str], output_dir: str) -> dict[str, Any]:
+    def merge(self, sessions: list[str], output_dir: str, output_name: str = "") -> dict[str, Any]:
         task = task_service.create_task("convert_merge", "merge started")
-        Thread(target=self._merge_worker, args=(task.task_id, sessions, output_dir), daemon=True).start()
-        return {"task_id": task.task_id, "sessions": sessions, "output_dir": output_dir}
+        Thread(target=self._merge_worker, args=(task.task_id, sessions, output_dir, output_name), daemon=True).start()
+        return {"task_id": task.task_id, "sessions": sessions, "output_dir": output_dir, "output_name": output_name}
 
-    def hdf5(self, sessions: list[str], output_dir: str) -> dict[str, Any]:
+    def hdf5(self, sessions: list[str], output_dir: str, output_name: str = "") -> dict[str, Any]:
         task = task_service.create_task("convert_hdf5", "HDF5 conversion started")
-        Thread(target=self._hdf5_worker, args=(task.task_id, sessions, output_dir), daemon=True).start()
-        return {"task_id": task.task_id, "sessions": sessions, "output_dir": output_dir}
+        Thread(target=self._hdf5_worker, args=(task.task_id, sessions, output_dir, output_name), daemon=True).start()
+        return {"task_id": task.task_id, "sessions": sessions, "output_dir": output_dir, "output_name": output_name}
 
-    def _merge_worker(self, task_id: str, sessions: list[str], output_dir: str) -> None:
+    def _merge_worker(self, task_id: str, sessions: list[str], output_dir: str, output_name: str = "") -> None:
         try:
-            result = self._merge_sync(sessions, output_dir)
+            result = self._merge_sync(sessions, output_dir, output_name)
             task_service.complete_task(task_id, message="merged sessions", result=result)
         except Exception as exc:
             task_service.fail_task(task_id, message="merge failed", error=str(exc))
 
-    def _hdf5_worker(self, task_id: str, sessions: list[str], output_dir: str) -> None:
+    def _hdf5_worker(self, task_id: str, sessions: list[str], output_dir: str, output_name: str = "") -> None:
         try:
-            result = self._hdf5_sync(sessions, output_dir)
+            result = self._hdf5_sync(sessions, output_dir, output_name)
             task_service.complete_task(task_id, message="converted selected sessions to HDF5", result=result)
         except Exception as exc:
             task_service.fail_task(task_id, message="HDF5 conversion failed", error=str(exc))
 
-    def _merge_sync(self, sessions: list[str], output_dir: str) -> dict[str, Any]:
+    def _merge_sync(self, sessions: list[str], output_dir: str, output_name: str = "") -> dict[str, Any]:
         output = Path(output_dir).expanduser()
         raw_root = self._raw_root_from_sessions(sessions)
-        manifest = self.merger.merge(raw_root, output / "training", selected_sessions=sessions)
-        return {"sessions": sessions, "output_dir": str(output), "manifest": manifest}
+        target_root = self._unique_path(output / self._safe_name(output_name, "merged_calvin"))
+        manifest = self.merger.merge(raw_root, target_root / "training", selected_sessions=sessions)
+        return {"sessions": sessions, "output_dir": str(output), "merged_dir": str(target_root), "manifest": manifest}
 
-    def _hdf5_sync(self, sessions: list[str], output_dir: str) -> dict[str, Any]:
+    def _hdf5_sync(self, sessions: list[str], output_dir: str, output_name: str = "") -> dict[str, Any]:
         output = Path(output_dir).expanduser()
         output.mkdir(parents=True, exist_ok=True)
         episode_paths = []
@@ -71,7 +72,7 @@ class ConvertService:
             episode_paths.extend(sorted((session_path / "training").glob("episode_*.npz")))
         if not episode_paths:
             raise RuntimeError("No episode_*.npz files found for selected sessions")
-        output_path = output / "calvin.hdf5"
+        output_path = self._unique_path(output / self._safe_hdf5_name(output_name))
         self.converter.convert_episode_paths(episode_paths, output_path)
         return {"sessions": sessions, "output_dir": str(output), "hdf5_path": str(output_path), "episode_count": len(episode_paths)}
 
@@ -82,6 +83,26 @@ class ConvertService:
         if first.name.startswith("session_"):
             return first.parent
         return first.parent
+
+    def _safe_name(self, value: str, default: str) -> str:
+        text = "".join(ch if ch.isalnum() or ch in {"_", "-", "."} else "_" for ch in value.strip())
+        return text.strip("._-") or default
+
+    def _safe_hdf5_name(self, value: str) -> str:
+        name = self._safe_name(value, "calvin")
+        if not name.endswith((".hdf5", ".h5")):
+            name = f"{name}.hdf5"
+        return name
+
+    def _unique_path(self, path: Path) -> Path:
+        if not path.exists():
+            return path
+        suffix = 2
+        while True:
+            candidate = path.with_name(f"{path.stem}_{suffix}{path.suffix}")
+            if not candidate.exists():
+                return candidate
+            suffix += 1
 
 
 convert_service = ConvertService()
