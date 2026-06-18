@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import yaml
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox, QTabWidget, QWidget
 
 from robodataset_studio_v3.frontend.api_client import ApiClient, ProjectSummary
@@ -8,6 +9,8 @@ from robodataset_studio_v3.frontend.pages.base import BasePage
 
 
 class SettingsPage(BasePage):
+    settingsSaved = Signal(object)
+
     def __init__(self, api: ApiClient, project: ProjectSummary | None = None) -> None:
         super().__init__("Settings", api, project)
         self.ai_enabled = QCheckBox("Enable AI")
@@ -28,7 +31,9 @@ class SettingsPage(BasePage):
         self.ai_probe_budget.setSingleStep(1000)
         self.ai_probe_budget.setSuffix(" chars")
         self.model_status = QLabel("")
-        self.language = QLineEdit()
+        self.language = QComboBox()
+        self.language.addItem("English", "en")
+        self.language.addItem("中文", "zh")
         self.yaml_editor = self.output
         self.yaml_editor.setReadOnly(False)
         self.settings: dict = {}
@@ -84,7 +89,7 @@ class SettingsPage(BasePage):
             return
         self.settings = result if isinstance(result, dict) else {}
         ai = self.settings.get("ai", {}) if isinstance(self.settings.get("ai"), dict) else {}
-        self.language.setText(str(self.settings.get("language", "en")))
+        self._set_language(str(self.settings.get("language", "en")))
         self.ai_enabled.setChecked(bool(ai.get("enabled", False)))
         self.ai_base_url.setText(str(ai.get("base_url", "")))
         self.ai_api_key.setText(str(ai.get("api_key", "")))
@@ -100,7 +105,7 @@ class SettingsPage(BasePage):
             settings = yaml.safe_load(self.yaml_editor.toPlainText())
             if not isinstance(settings, dict):
                 settings = {}
-            settings["language"] = self.language.text().strip() or "en"
+            settings["language"] = str(self.language.currentData() or "en")
             settings.setdefault("ai", {})
             settings["ai"].update(
                 {
@@ -120,6 +125,7 @@ class SettingsPage(BasePage):
         self.settings = saved if isinstance(saved, dict) else settings
         self.yaml_editor.setPlainText(yaml.safe_dump(self.settings, sort_keys=False, allow_unicode=True))
         self.status.setText("Settings saved")
+        self.settingsSaved.emit(self.settings)
 
     def refresh_models(self) -> None:
         self.save()
@@ -169,6 +175,12 @@ class SettingsPage(BasePage):
             self.ai_model.addItem(text)
         self.ai_model.setCurrentText(text)
 
+    def _set_language(self, language: str) -> None:
+        data = "zh" if language.lower().startswith("zh") else "en"
+        index = self.language.findData(data)
+        if index >= 0:
+            self.language.setCurrentIndex(index)
+
     def _connect_auto_save(self) -> None:
         self.ai_enabled.toggled.connect(lambda _checked: self.save())
         self.ai_base_url.editingFinished.connect(self.save)
@@ -177,4 +189,4 @@ class SettingsPage(BasePage):
         self.ai_timeout.valueChanged.connect(lambda _value: self.save())
         self.ai_prompt_budget.valueChanged.connect(lambda _value: self.save())
         self.ai_probe_budget.valueChanged.connect(lambda _value: self.save())
-        self.language.editingFinished.connect(self.save)
+        self.language.currentIndexChanged.connect(lambda _index: self.save())
