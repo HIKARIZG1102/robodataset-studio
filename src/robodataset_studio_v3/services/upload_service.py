@@ -69,7 +69,7 @@ class UploadService:
         else:
             result["ok"] = deps["paramiko"] if (password or key_path) else deps["ssh"]
             result["message"] = "connection parameters accepted; remote login test runs when listing the remote directory"
-        task = task_service.run_instant("upload_connect", f"checked upload profile {host}", result)
+        task = task_service.run_instant("upload_connect", f"checked upload connection {host}", result)
         return {"task_id": task.task_id, "result": result}
 
     def manifest(self, local_path: str) -> dict[str, Any]:

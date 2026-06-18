@@ -84,6 +84,16 @@ Optional system tools for upload:
 sudo apt install rsync openssh-client
 ```
 
+Upload server fields are stored in the reusable total config under `upload`.
+After a project loads a total config, the Upload page reads host, port,
+username, password/key path, and remote root from that project config. Separate
+server profiles in local settings are no longer used. The Upload page refreshes
+from the current project config while it is open.
+
+ROS listener selections are stored in the reusable total config under `ros`.
+They are not written into `dataset_config.yaml`; the dataset config only keeps
+the derived stream, state, action, recording, and schema description.
+
 ## Backend Startup
 
 The PySide frontend checks `http://127.0.0.1:8765/api/health` on startup. If
@@ -113,13 +123,16 @@ curl http://127.0.0.1:8765/api/health
 If the frontend reports that the backend did not become healthy, check the log
 path shown in the error dialog.
 
-AI calls use OpenAI-compatible endpoints. The API key is read from:
+AI calls use OpenAI-compatible endpoints. Configure them in `Settings -> AI`:
 
-```bash
-export ROBOT_DATA_AI_API_KEY=...
-```
+- Base URL, API key, model, and timeout.
+- Prompt budget, default `120000` characters.
+- Probe stdout budget, default `12000` characters.
 
-The key is not written to project_config.yaml or dataset_config.yaml.
+The key is stored only in local settings and is not written to
+`project_config.yaml`, `dataset_config.yaml`, or reusable total configs. The
+environment variable `ROBOT_DATA_AI_API_KEY` is still accepted as a fallback for
+backend-only debugging.
 
 ## Architecture
 

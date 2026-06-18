@@ -19,6 +19,14 @@ class SettingsPage(BasePage):
         self.ai_timeout = QSpinBox()
         self.ai_timeout.setRange(5, 600)
         self.ai_timeout.setSuffix(" sec")
+        self.ai_prompt_budget = QSpinBox()
+        self.ai_prompt_budget.setRange(20000, 1000000)
+        self.ai_prompt_budget.setSingleStep(10000)
+        self.ai_prompt_budget.setSuffix(" chars")
+        self.ai_probe_budget = QSpinBox()
+        self.ai_probe_budget.setRange(2000, 100000)
+        self.ai_probe_budget.setSingleStep(1000)
+        self.ai_probe_budget.setSuffix(" chars")
         self.model_status = QLabel("")
         self.language = QLineEdit()
         self.yaml_editor = self.output
@@ -50,6 +58,8 @@ class SettingsPage(BasePage):
         model_row.addWidget(refresh_models)
         ai_form.addRow("Default model", model_row)
         ai_form.addRow("Timeout", self.ai_timeout)
+        ai_form.addRow("Prompt budget", self.ai_prompt_budget)
+        ai_form.addRow("Probe stdout budget", self.ai_probe_budget)
         ai_form.addRow("Model status", self.model_status)
         ai_form.addRow(QLabel("AI settings are stored locally and are not written into total_config.yaml."))
 
@@ -80,6 +90,8 @@ class SettingsPage(BasePage):
         self.ai_api_key.setText(str(ai.get("api_key", "")))
         self._set_model_text(str(ai.get("model", "")))
         self.ai_timeout.setValue(int(ai.get("timeout_sec") or 90))
+        self.ai_prompt_budget.setValue(int(ai.get("prompt_char_budget") or 120000))
+        self.ai_probe_budget.setValue(int(ai.get("probe_stdout_budget") or 12000))
         self.yaml_editor.setPlainText(yaml.safe_dump(self.settings, sort_keys=False, allow_unicode=True))
         self.status.setText("Settings loaded")
 
@@ -97,6 +109,8 @@ class SettingsPage(BasePage):
                     "api_key": self.ai_api_key.text().strip(),
                     "model": self.ai_model.currentText().strip(),
                     "timeout_sec": int(self.ai_timeout.value()),
+                    "prompt_char_budget": int(self.ai_prompt_budget.value()),
+                    "probe_stdout_budget": int(self.ai_probe_budget.value()),
                 }
             )
             saved = self.api.put("/api/settings", settings)
@@ -161,4 +175,6 @@ class SettingsPage(BasePage):
         self.ai_api_key.editingFinished.connect(self.save)
         self.ai_model.currentTextChanged.connect(lambda _text: self.save())
         self.ai_timeout.valueChanged.connect(lambda _value: self.save())
+        self.ai_prompt_budget.valueChanged.connect(lambda _value: self.save())
+        self.ai_probe_budget.valueChanged.connect(lambda _value: self.save())
         self.language.editingFinished.connect(self.save)

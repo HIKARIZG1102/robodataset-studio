@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import sys
 import time
 from typing import Any
 
@@ -306,13 +307,17 @@ class InspectorDock(QWidget):
         node = self.node.currentText().strip()
         if not node:
             return
-        self.start_process("node_info", ["ros2", "node", "info", node], self.node_log)
+        self.start_process("node_info", ["ros2", "node", "info", "--no-daemon", node], self.node_log)
 
     def start_topic_process(self, mode: str) -> None:
         topic = self._selected_topic_name()
         if not topic:
             return
-        self.start_process(mode, ["ros2", "topic", mode, topic], self.echo_log if mode == "echo" else self.hz_log)
+        if mode == "echo":
+            command = ["ros2", "topic", "echo", "--no-daemon", "--truncate-length", "512", topic]
+        else:
+            command = ["ros2", "topic", "hz", topic, "--window", "10"]
+        self.start_process(mode, command, self.echo_log if mode == "echo" else self.hz_log)
 
     def start_process(self, role: str, command: list[str], output: InspectorTerminal) -> None:
         self.stop_process(role)
@@ -396,7 +401,7 @@ class InspectorDock(QWidget):
         self._paused = False
         process = QProcess(self)
         command = [
-            "/usr/bin/python3",
+            sys.executable,
             "-m",
             "robodataset_studio_v3.ros.image_preview_cli",
             "--topic",

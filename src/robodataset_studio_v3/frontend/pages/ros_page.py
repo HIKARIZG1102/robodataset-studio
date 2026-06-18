@@ -107,7 +107,7 @@ class RosPage(BasePage):
         if self.project is None:
             return set()
         try:
-            config = self.api.get_dataset_config(self.project.key)
+            config = self.api.get_project_config(self.project.key)
         except Exception:
             return set()
         ros = config.get("ros", {}) if isinstance(config, dict) else {}
@@ -144,23 +144,28 @@ class RosPage(BasePage):
         selected = self.selected_topics()
         try:
             project_config = self.api.get_project_config(self.project.key)
-            dataset = self.api.get_dataset_config(self.project.key)
-            dataset = self._merge_ros_selection(dataset, selected)
+            dataset = project_config.get("dataset_config", {}) if isinstance(project_config.get("dataset_config"), dict) else {}
+            dataset = self._merge_dataset_streams(dataset, selected)
             project_config["dataset_config"] = dataset
+            project_config["ros"] = self._selected_ros_config(selected)
             self.api.put(f"/api/config/project/{self.project.key}", project_config)
         except Exception as exc:
             self.show_error(exc)
             return
-        self.show_result(dataset, f"Applied {len(selected)} selected topic(s) to dataset_config.yaml")
+        self.show_result(project_config, f"Applied {len(selected)} selected topic(s) to project total config")
 
-    def _merge_ros_selection(self, config: dict[str, Any], selected: list[dict[str, str]]) -> dict[str, Any]:
-        config = dict(config or {})
+    def _selected_ros_config(self, selected: list[dict[str, str]]) -> dict[str, Any]:
         graph_topics = self.graph_data.get("topics", []) if isinstance(self.graph_data, dict) else []
         node = self.node_combo.currentText().strip()
-        config.setdefault("ros", {})
-        config["ros"]["selected_nodes"] = [node] if node else []
-        config["ros"]["selected_topics"] = selected
-        config["ros"]["discovery_snapshot"] = graph_topics if isinstance(graph_topics, list) else []
+        return {
+            "selected_nodes": [node] if node else [],
+            "selected_topics": selected,
+            "discovery_snapshot": graph_topics if isinstance(graph_topics, list) else [],
+        }
+
+    def _merge_dataset_streams(self, config: dict[str, Any], selected: list[dict[str, str]]) -> dict[str, Any]:
+        config = dict(config or {})
+        config.pop("ros", None)
 
         streams = []
         state_keys = []

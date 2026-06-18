@@ -33,11 +33,6 @@ class ConfigService:
                 "task_family": "",
                 "success_condition": "",
             },
-            "ros": {
-                "selected_nodes": [],
-                "selected_topics": [],
-                "discovery_snapshot": [],
-            },
             "robot": {
                 "name": "",
                 "model": "",
@@ -129,25 +124,31 @@ class ConfigService:
             },
             "upload": {
                 "enabled": False,
-                "profile_name": "",
+                "name": "",
                 "host": "",
                 "lan_host": "",
                 "wan_host": "",
                 "port": 22,
                 "username": "",
                 "auth_mode": "password_or_key",
+                "password": "",
                 "key_path": "",
                 "remote_root": "",
                 "use_rsync": True,
                 "repair_resume_enabled": True,
                 "verify_after_upload": True,
             },
+            "ros": {
+                "selected_nodes": [],
+                "selected_topics": [],
+                "discovery_snapshot": [],
+            },
             "dataset_config": self.default_dataset_config(),
         }
 
     def write_default_configs(self, project_dir: Path) -> None:
         project_config = self.default_project_config()
-        dataset_config = project_config["dataset_config"]
+        dataset_config = self._dataset_only(project_config["dataset_config"])
         self.write_yaml(project_dir / "project_config.yaml", project_config)
         self.write_yaml(project_dir / "dataset_config.yaml", dataset_config)
 
@@ -277,8 +278,9 @@ class ConfigService:
         dataset_config = project_config.get("dataset_config", {})
         if not isinstance(dataset_config, dict):
             dataset_config = {}
+        project_config["dataset_config"] = self._dataset_only(dataset_config)
         self.write_yaml(project_dir / "project_config.yaml", project_config)
-        self.write_yaml(project_dir / "dataset_config.yaml", dataset_config)
+        self.write_yaml(project_dir / "dataset_config.yaml", project_config["dataset_config"])
         return project_config
 
     def read_project_config(self, project_dir: Path) -> dict[str, Any]:
@@ -290,10 +292,11 @@ class ConfigService:
             return self.read_yaml(dataset_path)
         project_config = self.read_project_config(project_dir)
         dataset_config = project_config.get("dataset_config", {})
-        return dataset_config if isinstance(dataset_config, dict) else {}
+        return self._dataset_only(dataset_config) if isinstance(dataset_config, dict) else {}
 
     def write_project_config(self, project_dir: Path, config: ProjectConfigDraft) -> None:
         payload = config.model_dump()
+        payload["dataset_config"] = self._dataset_only(payload.get("dataset_config", {}))
         self.write_yaml(project_dir / "project_config.yaml", payload)
         self.write_yaml(project_dir / "dataset_config.yaml", payload.get("dataset_config", {}))
 
@@ -305,6 +308,11 @@ class ConfigService:
             return {}
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
+
+    def _dataset_only(self, dataset_config: dict[str, Any]) -> dict[str, Any]:
+        dataset = dict(dataset_config or {})
+        dataset.pop("ros", None)
+        return dataset
 
     def _safe_id(self, value: str) -> str:
         text = "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in value.strip())

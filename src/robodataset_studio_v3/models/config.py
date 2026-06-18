@@ -25,6 +25,7 @@ class ProjectConfigDraft(BaseModel):
     review: dict[str, Any] = Field(default_factory=dict)
     convert: dict[str, Any] = Field(default_factory=dict)
     upload: dict[str, Any] = Field(default_factory=dict)
+    ros: dict[str, Any] = Field(default_factory=dict)
     ui_state: dict[str, Any] = Field(default_factory=dict)
 
 

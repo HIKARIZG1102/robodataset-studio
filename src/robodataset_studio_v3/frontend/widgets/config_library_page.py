@@ -110,7 +110,7 @@ class ConfigLibraryPage(QWidget):
         for spin in [self.crop_x, self.crop_y, self.crop_w, self.crop_h, self.resize_w, self.resize_h]:
             spin.setRange(0, 8192)
 
-        self.upload_enabled = QCheckBox("Enable upload profile")
+        self.upload_enabled = QCheckBox("Enable upload config")
         self.upload_profile = self.editable_combo(["local_lab_server", "internal_gpu_server", "remote_backup", "custom"])
         self.upload_lan_host = QLineEdit()
         self.upload_wan_host = QLineEdit()
@@ -118,6 +118,8 @@ class ConfigLibraryPage(QWidget):
         self.upload_port.setRange(1, 65535)
         self.upload_port.setValue(22)
         self.upload_username = QLineEdit()
+        self.upload_password = QLineEdit()
+        self.upload_password.setEchoMode(QLineEdit.Password)
         self.upload_key_path = QLineEdit()
         self.upload_remote_root = QLineEdit()
         self.upload_rsync = QCheckBox("Use rsync")
@@ -229,6 +231,7 @@ class ConfigLibraryPage(QWidget):
             self.upload_lan_host,
             self.upload_wan_host,
             self.upload_username,
+            self.upload_password,
             self.upload_key_path,
             self.upload_remote_root,
         ]:
@@ -348,11 +351,12 @@ class ConfigLibraryPage(QWidget):
         widget = QWidget()
         form = QFormLayout(widget)
         form.addRow(self.upload_enabled)
-        form.addRow("Profile name", self.upload_profile)
+        form.addRow("Upload config name", self.upload_profile)
         form.addRow("Internal IP / Host", self.upload_lan_host)
         form.addRow("Public IP / Host", self.upload_wan_host)
         form.addRow("Port", self.upload_port)
         form.addRow("Username", self.upload_username)
+        form.addRow("Password", self.upload_password)
         form.addRow("Private key path", self.upload_key_path)
         form.addRow("Remote root", self.upload_remote_root)
         form.addRow(self.upload_rsync)
@@ -573,8 +577,7 @@ class ConfigLibraryPage(QWidget):
             config = self.current_config(default=False)
         except Exception:
             return []
-        dataset = config.get("dataset_config", {}) if isinstance(config.get("dataset_config"), dict) else {}
-        ros = dataset.get("ros", {}) if isinstance(dataset.get("ros"), dict) else {}
+        ros = self.total_ros_config(config)
         rows = ros.get("selected_topics", []) if isinstance(ros.get("selected_topics"), list) else []
         return [dict(row) for row in rows if isinstance(row, dict)]
 
@@ -583,10 +586,17 @@ class ConfigLibraryPage(QWidget):
             config = self.current_config(default=False)
         except Exception:
             return set()
-        dataset = config.get("dataset_config", {}) if isinstance(config.get("dataset_config"), dict) else {}
-        ros = dataset.get("ros", {}) if isinstance(dataset.get("ros"), dict) else {}
+        ros = self.total_ros_config(config)
         rows = ros.get("selected_topics", []) if isinstance(ros.get("selected_topics"), list) else []
         return {str(row.get("topic") or row.get("name") or "") for row in rows if isinstance(row, dict)}
+
+    def total_ros_config(self, config: dict[str, Any]) -> dict[str, Any]:
+        ros = config.get("ros", {}) if isinstance(config.get("ros"), dict) else {}
+        if ros:
+            return ros
+        dataset = config.get("dataset_config", {}) if isinstance(config.get("dataset_config"), dict) else {}
+        legacy_ros = dataset.get("ros", {}) if isinstance(dataset.get("ros"), dict) else {}
+        return legacy_ros if isinstance(legacy_ros, dict) else {}
 
     def _graph_error_summary(self, graph: dict[str, Any]) -> str:
         errors = graph.get("errors", {}) if isinstance(graph, dict) else {}
@@ -614,9 +624,11 @@ class ConfigLibraryPage(QWidget):
     def merge_selected_topics_into_config(self, config: dict[str, Any]) -> None:
         dataset = config.setdefault("dataset_config", {})
         selected = self.selected_topic_rows()
-        dataset.setdefault("ros", {})
-        dataset["ros"]["selected_topics"] = selected
-        dataset["ros"]["discovery_snapshot"] = self.graph_data.get("topics", [])
+        config.setdefault("ros", {})
+        config["ros"]["selected_topics"] = selected
+        config["ros"]["discovery_snapshot"] = self.graph_data.get("topics", [])
+        if isinstance(dataset.get("ros"), dict):
+            dataset.pop("ros", None)
         streams = []
         cameras = []
         state_keys = []
@@ -741,11 +753,12 @@ class ConfigLibraryPage(QWidget):
         self.resize_w.setValue(int(resize.get("width", 0) or 0))
         self.resize_h.setValue(int(resize.get("height", 0) or 0))
         self.upload_enabled.setChecked(bool(upload.get("enabled", False)))
-        self.upload_profile.setCurrentText(str(upload.get("profile_name", "")))
+        self.upload_profile.setCurrentText(str(upload.get("name") or upload.get("profile_name") or ""))
         self.upload_lan_host.setText(str(upload.get("lan_host") or upload.get("host") or ""))
         self.upload_wan_host.setText(str(upload.get("wan_host", "")))
         self.upload_port.setValue(int(upload.get("port") or 22))
         self.upload_username.setText(str(upload.get("username", "")))
+        self.upload_password.setText(str(upload.get("password", "")))
         self.upload_key_path.setText(str(upload.get("key_path", "")))
         self.upload_remote_root.setText(str(upload.get("remote_root", "")))
         self.upload_rsync.setChecked(bool(upload.get("use_rsync", True)))
@@ -801,12 +814,13 @@ class ConfigLibraryPage(QWidget):
                 stream.setdefault("preview", {})["resize"] = dict(resize)
         config["upload"] = {
             "enabled": self.upload_enabled.isChecked(),
-            "profile_name": self.upload_profile.currentText().strip(),
+            "name": self.upload_profile.currentText().strip(),
             "host": self.upload_lan_host.text().strip() or self.upload_wan_host.text().strip(),
             "lan_host": self.upload_lan_host.text().strip(),
             "wan_host": self.upload_wan_host.text().strip(),
             "port": int(self.upload_port.value()),
             "username": self.upload_username.text().strip(),
+            "password": self.upload_password.text(),
             "key_path": self.upload_key_path.text().strip(),
             "remote_root": self.upload_remote_root.text().strip(),
             "use_rsync": self.upload_rsync.isChecked(),
@@ -868,6 +882,10 @@ class ConfigLibraryPage(QWidget):
     def build_prompt_with_ros_probes(self, total_config: dict[str, Any], selected_topics: list[dict[str, str]], timeout: float = 90.0) -> object:
         dataset = total_config.get("dataset_config", {}) if isinstance(total_config.get("dataset_config"), dict) else {}
         dataset = self.ai_safe_dataset_config(dataset)
+        settings = self.api.get("/api/settings", timeout=5.0)
+        ai_settings = settings.get("ai", {}) if isinstance(settings, dict) and isinstance(settings.get("ai"), dict) else {}
+        probe_stdout_budget = int(ai_settings.get("probe_stdout_budget") or 12000)
+        prompt_char_budget = int(ai_settings.get("prompt_char_budget") or 120000)
         topic_probes = []
         per_call_timeout = max(min(timeout / max(len(selected_topics) * 3, 1), 8.0), 2.0)
         for topic in selected_topics:
@@ -881,7 +899,7 @@ class ConfigLibraryPage(QWidget):
                 ("hz", "/api/ros/topic-hz"),
             ]:
                 try:
-                    probe[key] = self.compact_probe_result(self.api.post(path, {"topic": name}, timeout=per_call_timeout))
+                    probe[key] = self.compact_probe_result(self.api.post(path, {"topic": name}, timeout=per_call_timeout), stdout_budget=probe_stdout_budget)
                 except Exception as exc:
                     probe[key] = {"ok": False, "error": str(exc)}
             topic_probes.append(
@@ -896,6 +914,11 @@ class ConfigLibraryPage(QWidget):
             "current_total_config": self.ai_safe_total_config(total_config),
             "selection_policy": "Use only selected_topics and selected_topic_probes. Do not infer dataset streams from unselected graph topics.",
             "required_output": "dataset_config YAML only; do not include upload, config_meta, paths, collection, review, convert, AI API settings, project name, or project version",
+            "prompt_budget": {
+                "char_budget": prompt_char_budget,
+                "probe_stdout_budget": probe_stdout_budget,
+                "note": "structured fields are authoritative; stdout summaries may be truncated first if the prompt grows.",
+            },
         }
         return self.api.post("/api/ai/config-prompt", {"dataset_config": dataset, "ros_context": ros_context}, timeout=30.0)
 
@@ -912,21 +935,22 @@ class ConfigLibraryPage(QWidget):
         safe = json.loads(json.dumps(dataset, ensure_ascii=False, default=str))
         if not isinstance(safe, dict):
             return {}
-        ros = safe.get("ros", {}) if isinstance(safe.get("ros"), dict) else {}
-        ros.pop("discovery_snapshot", None)
-        safe["ros"] = ros
+        safe.pop("ros", None)
         return safe
 
-    def compact_probe_result(self, result: object) -> dict[str, Any]:
+    def compact_probe_result(self, result: object, stdout_budget: int = 12000) -> dict[str, Any]:
         payload = result if isinstance(result, dict) else {}
         compact: dict[str, Any] = {"ok": bool(payload.get("ok"))}
-        for key in ["returncode", "rmw"]:
+        for key in ["returncode", "rmw", "backend", "message_type"]:
             if key in payload:
                 compact[key] = payload[key]
+        structured = payload.get("structured")
+        if isinstance(structured, dict) and structured:
+            compact["structured"] = json.loads(json.dumps(structured, ensure_ascii=False, default=str))
         stdout = str(payload.get("stdout") or "")
         stderr = str(payload.get("stderr") or payload.get("error") or "")
         if stdout:
-            compact["stdout_summary"] = self._probe_summary(stdout)
+            compact["stdout_summary"] = self._probe_summary(stdout, message_type=str(payload.get("message_type") or ""), stdout_budget=stdout_budget)
         if stderr:
             compact["error_summary"] = self._probe_summary(stderr)
         if "error" in payload and not stderr:
@@ -936,7 +960,14 @@ class ConfigLibraryPage(QWidget):
             compact["ok"] = False
         return compact
 
-    def _probe_summary(self, text: str, max_lines: int = 8, max_chars: int = 800) -> str:
+    def _probe_summary(self, text: str, max_lines: int = 8, max_chars: int = 800, message_type: str = "", stdout_budget: int = 12000) -> str:
+        max_chars = max(max_chars, min(max(stdout_budget, 2000), 100000))
+        if message_type == "sensor_msgs/msg/JointState":
+            max_lines = 80
+            max_chars = max(max_chars, min(max(stdout_budget, 4000), 100000))
+        elif message_type == "sensor_msgs/msg/Image":
+            max_lines = 16
+            max_chars = max(1400, min(max(stdout_budget // 4, 1400), 20000))
         clean_lines = []
         for raw in text.splitlines():
             line = re.sub(r"\x1b\[[0-9;]*m", "", raw).strip()
@@ -981,7 +1012,26 @@ class ConfigLibraryPage(QWidget):
             return
         payload = result.get("result", result) if isinstance(result, dict) else {}
         self.ai_prompt.setPlainText(str(payload.get("prompt", "")) if isinstance(payload, dict) else "")
-        self.status.setText("Default AI prompt generated.")
+        if isinstance(payload, dict) and payload.get("prompt_chars"):
+            self.status.setText(f"Default AI prompt generated ({payload.get('prompt_chars')} chars / budget {payload.get('prompt_char_budget', '-')}).")
+            if payload.get("over_budget") or payload.get("truncated"):
+                original = payload.get("original_prompt_chars", payload.get("prompt_chars", "-"))
+                budget = payload.get("prompt_char_budget", "-")
+                compacted = "yes" if payload.get("compacted") else "no"
+                truncated = "yes" if payload.get("truncated") else "no"
+                QMessageBox.warning(
+                    self,
+                    "AI Prompt Budget",
+                    "Generated prompt exceeded the configured budget.\n\n"
+                    f"Original: {original} chars\n"
+                    f"Budget: {budget} chars\n"
+                    f"Final: {payload.get('prompt_chars', '-')} chars\n"
+                    f"Compacted: {compacted}\n"
+                    f"Truncated: {truncated}\n\n"
+                    "Structured ROS fields are preserved first; stdout summaries are compressed before truncation.",
+                )
+        else:
+            self.status.setText("Default AI prompt generated.")
 
     def send_ai_prompt(self) -> None:
         prompt = self.ai_prompt.toPlainText().strip()
@@ -1099,10 +1149,10 @@ class ConfigLibraryPage(QWidget):
         return "static"
 
     def default_upload_config(self) -> dict[str, Any]:
-        return {"enabled": False, "profile_name": "", "host": "", "lan_host": "", "wan_host": "", "port": 22, "username": "", "key_path": "", "remote_root": "", "use_rsync": True, "repair_resume_enabled": True, "verify_after_upload": True}
+        return {"enabled": False, "name": "", "host": "", "lan_host": "", "wan_host": "", "port": 22, "username": "", "password": "", "key_path": "", "remote_root": "", "use_rsync": True, "repair_resume_enabled": True, "verify_after_upload": True}
 
     def default_dataset_config(self) -> dict[str, Any]:
-        return {"environment": {}, "instruction": {}, "ros": {"selected_topics": [], "discovery_snapshot": []}, "robot": {}, "cameras": [], "streams": [], "state": {"keys": []}, "action": {"name": "rel_actions", "source": "", "source_topic": "", "format": "delta_state", "dim": 0, "fields": []}, "recording": {"sample_rate_hz": 10, "stop_mode": "manual", "episode_duration_sec": 0.0, "target_samples": 0}, "dataset": {"output_format": ["npz", "hdf5"], "schema": "calvin_style", "split": "training", "episode_prefix": "episode_", "write_language_annotations": True, "language_annotation_file": "lang_annotations/auto_lang_ann.npy"}}
+        return {"environment": {}, "instruction": {}, "robot": {}, "cameras": [], "streams": [], "state": {"keys": []}, "action": {"name": "rel_actions", "source": "", "source_topic": "", "format": "delta_state", "dim": 0, "fields": []}, "recording": {"sample_rate_hz": 10, "stop_mode": "manual", "episode_duration_sec": 0.0, "target_samples": 0}, "dataset": {"output_format": ["npz", "hdf5"], "schema": "calvin_style", "split": "training", "episode_prefix": "episode_", "write_language_annotations": True, "language_annotation_file": "lang_annotations/auto_lang_ann.npy"}}
 
     def default_total_config(self) -> dict[str, Any]:
         return self.ordered_total_config(
@@ -1113,6 +1163,7 @@ class ConfigLibraryPage(QWidget):
                 "review": {"local_checks_enabled": True, "ai_review_enabled": False, "marks_file": "review/review_marks.json"},
                 "convert": {"default_output_dir": "exports", "write_hdf5": True, "merge_selected_sessions": True},
                 "upload": self.default_upload_config(),
+                "ros": {"selected_topics": [], "discovery_snapshot": []},
                 "dataset_config": self.default_dataset_config(),
             },
             "",
@@ -1129,6 +1180,7 @@ class ConfigLibraryPage(QWidget):
             "review": config.get("review", {}),
             "convert": config.get("convert", {}),
             "upload": config.get("upload", self.default_upload_config()),
+            "ros": config.get("ros", self.total_ros_config(config)),
             "dataset_config": config.get("dataset_config", self.default_dataset_config()),
         }
         return ordered

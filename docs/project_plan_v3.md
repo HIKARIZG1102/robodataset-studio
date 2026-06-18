@@ -127,7 +127,6 @@ src/robodataset_studio_v3/
       open_project_dialog.py
       project_config_dialog.py
       settings_dialog.py
-      server_profile_dialog.py
     pages/
       collect_page.py
       review_page.py
@@ -254,15 +253,21 @@ convert:
 
 upload:
   enabled: false
-  profile_name: ''
+  name: ''
   host: ''
   port: 22
   username: ''
   auth_mode: password_or_key
+  password: ''
   remote_root: ''
   use_rsync: true
   repair_resume_enabled: true
   verify_after_upload: true
+
+ros:
+  selected_nodes: []
+  selected_topics: []
+  discovery_snapshot: []
 
 ui_state:
   last_active_tab: Collect
@@ -293,7 +298,7 @@ ui_state:
 它包含：
 
 - dataset identity snapshot、environment、instruction。dataset identity snapshot 可以从当前项目 `project.yaml` 提取后写入 session 快照，但不作为可移植配置的绑定字段。
-- ROS 选择快照。
+- 不包含 ROS 监听选择快照；监听节点/topic 选择属于 `project_config.yaml` 顶层 `ros`。
 - robot/state/action。
 - streams 和图像预处理。
 - recording 采样策略。
@@ -304,6 +309,7 @@ ui_state:
 
 - `dataset_config.yaml` 不包含服务器上传 IP、用户名、远端路径等部署信息。
 - `dataset_config.yaml` 不包含本机 UI 状态、最近打开路径、窗口布局。
+- `dataset_config.yaml` 不包含被监听的 ROS nodes/topics 列表；它只保留由这些 topic 推导出的 streams/state/action 等数据结构。
 - 采集出的每个 session 都保留一份当时的数据集配置快照。
 - AI 可以生成完整 `dataset_config.yaml`，也可以生成 patch；覆盖到总配置前必须由用户确认。
 - 部分字段从总配置继承，例如 environment、recording、dataset schema。项目名称和版本由当前项目注入到采集 session 快照中。
@@ -355,7 +361,7 @@ dataset_config.yaml
 - 最近使用的页面和窗口布局。
 - AI provider base URL、模型名、是否启用。
 - API key 的保存策略。
-- 服务器 profile。
+- 上传信息随总配置保存，不再使用独立服务器 profile。
 - 上传默认本地目录和远端目录。
 - review 页面最近选择的 session/HDF5/folder。
 
@@ -952,7 +958,7 @@ WS   /ws/tasks/{task_id}
 
 - 选择本地文件或文件夹。
 - browse 本地路径。
-- 选择服务器 profile。
+- 自动加载当前项目总配置中的 upload 字段。
 - 输入远端目录。
 - 远端 browse、mkdir。
 - 普通上传。
@@ -1008,7 +1014,7 @@ AI 设置放在 Settings，不放入项目配置：
 
 作用：
 
-- 根据当前选择的 ROS nodes/topics 生成或补全 `dataset_config.yaml`。
+- 根据当前选择的 ROS nodes/topics 生成或补全 `project_config.yaml.ros`，并同步更新 `dataset_config.yaml` 的 streams/state/action。
 - 从 topic info、echo once、hz、图像 shape、JointState 字段等信息推断配置字段。
 - 不自动发送，先生成默认 prompt。
 - 用户点击发送后才调用 AI。
@@ -1303,7 +1309,7 @@ V3 仍以 CALVIN-style NPZ/HDF5 为基础，但要支持扩展。
 - [x] `Browse Local Folder`：选择本地文件夹上传。
 - [ ] `Remote Browse`：浏览远端目录。
 - [ ] `Remote Mkdir`：创建远端目录。
-- [ ] `Upload`：普通上传。（基础 dependency/profile/task hook 已完成，真实 rsync/scp 执行待接入）
+- [ ] `Upload`：普通上传。（基础 dependency/task hook 已完成；upload 信息随总配置自动加载）
 - [ ] `Verify Remote`：校验远端文件是否完整。（基础 hook 已完成）
 - [ ] `Repair / Resume Verified Upload`：只重传缺失或 hash 不匹配文件。（基础 hook 已完成，真实 rsync 参数待接入）
 - [ ] `Temporary Manifest`：manifest 临时生成，不作为数据上传或长期堆积。（设计已明确，真实 manifest 流程待接入）
@@ -1377,7 +1383,7 @@ V3 仍以 CALVIN-style NPZ/HDF5 为基础，但要支持扩展。
 
 ### Phase 7：Upload
 
-- server profiles。
+- upload 信息完全来自总配置的 `upload` 段。
 - 本地文件/文件夹 browse。
 - 远端 browse/mkdir。
 - 普通上传。
@@ -1398,7 +1404,7 @@ V3 仍以 CALVIN-style NPZ/HDF5 为基础，但要支持扩展。
 需要继续讨论：
 
 - 项目版本创建后是否允许修改版本号。（可以修改，但是如果存在修改后相同的版本号与项目名称，则弹出警告禁止修改）
-- 项目配置是否允许多个 profile，还是严格一个项目一份主配置。（但是一个配置可以Load进多个项目）
+- upload 不允许独立 profile；严格跟随总配置。一个项目 load 一个总配置后，Upload 页面自动使用该配置中的 upload 字段。
 - 图像滤波是否写入保存数据，还是只做 preview。（先不写入）
 - AI key 是否明文保存到本地 settings，还是要求每次输入或使用 keyring。（保存）
 - HDF5 输出按 session、按项目、还是按 export job 管理。（？没看懂）

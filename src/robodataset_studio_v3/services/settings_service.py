@@ -14,8 +14,15 @@ class SettingsService:
         return {
             "language": "en",
             "recent_projects": [],
-            "ai": {"enabled": False, "base_url": "", "api_key": "", "model": "", "timeout_sec": 90},
-            "server_profiles": [],
+            "ai": {
+                "enabled": False,
+                "base_url": "",
+                "api_key": "",
+                "model": "",
+                "timeout_sec": 90,
+                "prompt_char_budget": 120000,
+                "probe_stdout_budget": 12000,
+            },
             "ui": {"last_active_tab": "", "inspector_visible": True, "last_project_path": ""},
         }
 
@@ -27,6 +34,7 @@ class SettingsService:
             return self.default_settings()
         settings = self.default_settings()
         settings.update(data)
+        settings.pop("server_profiles", None)
         if isinstance(data.get("ai"), dict):
             settings["ai"].update(data["ai"])
         if isinstance(data.get("ui"), dict):
@@ -34,6 +42,8 @@ class SettingsService:
         return settings
 
     def write(self, settings: dict[str, Any]) -> dict[str, Any]:
+        settings = dict(settings or {})
+        settings.pop("server_profiles", None)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(yaml.safe_dump(settings, sort_keys=False, allow_unicode=True), encoding="utf-8")
         return settings
