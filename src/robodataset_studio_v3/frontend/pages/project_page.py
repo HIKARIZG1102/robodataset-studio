@@ -12,7 +12,7 @@ from robodataset_studio_v3.frontend.pages.base import BasePage
 
 class ProjectPage(BasePage):
     def __init__(self, api: ApiClient, project: ProjectSummary | None = None) -> None:
-        super().__init__("Project", api, project)
+        super().__init__("Properties", api, project)
         self.info = QPlainTextEdit()
         self.info.setReadOnly(True)
         self.tree = QTreeWidget()

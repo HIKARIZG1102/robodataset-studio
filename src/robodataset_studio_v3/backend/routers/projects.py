@@ -19,6 +19,11 @@ def list_projects() -> list[ProjectSummary]:
     return service.list_projects()
 
 
+@router.get("/default-root", response_model=dict[str, str])
+def default_project_root() -> dict[str, str]:
+    return {"path": str(service.root)}
+
+
 @router.post("", response_model=ProjectSummary)
 def create_project(request: ProjectCreateRequest) -> ProjectSummary:
     try:
@@ -33,6 +38,8 @@ def open_project_path(request: ProjectOpenPathRequest) -> ProjectSummary:
         return service.open_path(request.path)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.put("/{project_key}/config", response_model=ProjectSummary)

@@ -153,7 +153,7 @@ class ConfigLibraryPage(QWidget):
         refresh = QPushButton("Refresh")
         new = QPushButton("New")
         save = QPushButton("Save")
-        copy = QPushButton("Copy")
+        copy = QPushButton("Duplicate")
         delete = QPushButton("Delete")
         refresh.clicked.connect(self.refresh_list)
         new.clicked.connect(self.start_new_config)
@@ -492,7 +492,7 @@ class ConfigLibraryPage(QWidget):
     def copy_selected(self) -> None:
         config_id = self.selected_config_id()
         if not config_id:
-            QMessageBox.information(self, "Copy Config", "Select an existing config first.")
+            QMessageBox.information(self, "Duplicate Config", "Select an existing config first.")
             return
         try:
             config = self.current_config(default=True)
@@ -501,7 +501,7 @@ class ConfigLibraryPage(QWidget):
             config = self.ordered_total_config(config, copy_name)
             saved = self.api.save_config(copy_name, config)
         except Exception as exc:
-            QMessageBox.warning(self, "Copy Config", f"Cannot copy config:\n{exc}")
+            QMessageBox.warning(self, "Duplicate Config", f"Cannot duplicate config:\n{exc}")
             return
         new_id = str(saved.get("id") or "")
         self.config_name.setText(new_id)

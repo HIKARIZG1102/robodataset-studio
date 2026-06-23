@@ -39,16 +39,16 @@
   <h3>1.1 新建或打开项目</h3>
   <ol>
     <li>点击顶部 <b>File</b>。它不是下拉菜单，会在左侧打开 <b>Projects</b> 项目栏。</li>
-    <li>在项目栏点击 <b>New Project</b> 新建项目，或 <b>Open Project Folder</b> 从已有项目目录打开。</li>
-    <li>也可以右键项目列表中的项目，选择 <b>Open Project</b>、<b>Project Info</b>、<b>Current Project Config</b>、<b>Rename</b>、<b>Delete</b>、<b>Permanent Delete</b> 等操作。</li>
+    <li>在项目栏点击 <b>New Project</b> 新建项目，或 <b>Open Project Folder</b> 从已有项目目录打开。打开目录时默认从上一次打开项目的父目录开始；第一次使用时默认从 Studio 的 <code>robodataset/projects</code> 开始。</li>
+    <li>也可以右键项目列表中的项目，选择 <b>Open Project</b>、<b>Properties</b>、<b>Current Project Config</b>、<b>Rename</b>、<b>Delete</b>、<b>Permanent Delete</b> 等操作。</li>
     <li><b>Delete</b> 会把项目目录移动到同级 <code>.deleted_projects</code>，列表中消失但磁盘数据仍可找回；<b>Permanent Delete</b> 会弹出警告确认，并直接从磁盘永久删除该项目目录。</li>
     <li>新建项目时填写项目名、版本、operator、项目根目录，选择一个配置库条目或先留空。</li>
-    <li>创建或打开后，顶部会显示 <b>Project / Config / recorded|editable</b> 摘要；项目打开后固定出现 <b>Project</b>、<b>Collect</b>、<b>Review</b>、<b>Convert</b>、<b>Upload</b> 五个核心标签页，这些标签页不能关闭。</li>
+    <li>创建或打开后，顶部会显示 <b>Project / Config / recorded|editable</b> 摘要，底部状态栏会常驻显示当前 <b>Project folder</b>；项目打开后固定出现 <b>Properties</b>、<b>Collect</b>、<b>Review</b>、<b>Convert</b>、<b>Upload</b> 五个核心标签页，这些标签页不能关闭。</li>
   </ol>
 
-  <h3>1.1.1 Project 页查看项目结构</h3>
+  <h3>1.1.1 Properties 页查看项目结构</h3>
   <ol>
-    <li>打开项目后进入 <b>Project</b> 标签页。</li>
+    <li>打开项目后进入 <b>Properties</b> 标签页。</li>
     <li>上方显示项目名、版本、配置 ID、是否已有记录数据、项目路径、目录大小、修改时间和当前真实目录结构。</li>
     <li>目录结构会用 <code>|--</code>、<code>`--</code> 分支显示当前实际内容，不再显示固定 expected structure。</li>
     <li><code>raw_sessions/session_*</code> 只显示到 session 层，并用文件/目录数量摘要表示内部内容；merged/export 数据目录同样只显示到数据集目录层，避免 episode 文件刷屏。</li>
@@ -59,9 +59,9 @@
 
   <h3>1.2 刷新 ROS 图并选择 topic</h3>
   <ol>
-    <li>点击窗口右上角 <b>Refresh ROS Graph</b>。</li>
+    <li>点击窗口右上角 <b>Refresh Nodes/Topics</b>。</li>
     <li>点击顶部 <b>Config</b>。它不是下拉菜单，会在左侧打开 <b>Configs</b> 配置栏。</li>
-    <li>在配置栏双击配置进入 <b>Config Library</b>；也可以右键配置进行 <b>Open Config</b>、<b>Copy</b>、<b>Rename</b>、<b>Delete</b>、<b>New</b>。</li>
+    <li>在配置栏双击配置进入 <b>Config Library</b>；也可以右键配置进行 <b>Open Config</b>、<b>Duplicate</b>、<b>Rename</b>、<b>Delete</b>、<b>New</b>。</li>
     <li>进入 <b>ROS Topics</b> 标签页，展开 topic 分组。</li>
     <li>勾选本次要记录的 topic，例如：
       <ul>
@@ -166,6 +166,7 @@
   <h3>6.2 Logs</h3>
   <ol>
     <li>点击顶部 <b>Logs</b>。它不是下拉菜单，会打开日志/任务侧边栏。</li>
+    <li><b>File</b>、<b>Config</b>、<b>Logs</b> 三个侧边栏默认合并在左侧同一个 dock tab 组里；点击哪个顶部入口，就切到哪个侧栏。只有手动拖动 dock 标签后，才会分离成独立分屏。</li>
     <li>侧边栏列出当前后端任务；双击任务会打开 <b>Logs</b> 标签并定位到该任务。</li>
     <li><b>Logs</b> 标签左侧同时列出任务和项目中的日志文件，右侧显示任务详情、运行 logs、result，或日志文件内容。</li>
   </ol>
@@ -187,7 +188,7 @@
   <h2>7. 常用任务按键顺序速查</h2>
   <table>
     <tr><th>任务</th><th>按键顺序</th></tr>
-    <tr><td>新建采集配置</td><td>File -> Projects 侧边栏 -> New Project -> Refresh ROS Graph -> Config -> Configs 侧边栏 -> 打开 Config Library -> ROS Topics 勾选 -> Refresh config from selected topics -> Apply form -> YAML -> Save</td></tr>
+    <tr><td>新建采集配置</td><td>File -> Projects 侧边栏 -> New Project -> Refresh Nodes/Topics -> Config -> Configs 侧边栏 -> 打开 Config Library -> ROS Topics 勾选 -> Refresh config from selected topics -> Apply form -> YAML -> Save</td></tr>
     <tr><td>真实手操采集</td><td>Collect -> Refresh Listener Plan -> Check Nodes -> Stop mode: Manual -> Start Recording -> 手操机器人 -> Stop Recording</td></tr>
     <tr><td>检查刚采 session</td><td>Review -> Overview 看项目树 -> Episode Review -> Use Current Session -> Scan Session -> Run Local Checks -> 点击 episode 行查看详情 -> Mark Selected 或 Delete Selected</td></tr>
     <tr><td>导出 HDF5</td><td>Convert -> Browse raw_sessions -> Scan Sessions -> 勾选 sessions -> 设置 Output name -> Convert To HDF5</td></tr>

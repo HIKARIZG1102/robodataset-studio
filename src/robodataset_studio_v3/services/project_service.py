@@ -24,8 +24,8 @@ class ProjectService:
         if not self.root.exists():
             return []
         projects = []
-        for path in sorted(item for item in self.root.iterdir() if item.is_dir()):
-            if path.name.startswith("."):
+        for path in self._discover_project_dirs(self.root):
+            if path.name.startswith(".") or any(part.startswith(".") for part in path.relative_to(self.root).parts):
                 continue
             name, version = self._split_key(path.name)
             self._known_paths[path.name] = path
@@ -43,7 +43,7 @@ class ProjectService:
         return path
 
     def open_path(self, path_text: str) -> ProjectSummary:
-        path = self._resolve_user_path(path_text)
+        path = self._resolve_project_path(path_text)
         if not path.exists() or not path.is_dir():
             raise FileNotFoundError(f"project folder not found: {path}")
         key = path.name
@@ -184,6 +184,41 @@ class ProjectService:
         if not path.is_absolute():
             path = repo_root() / path
         return path
+
+    def _resolve_project_path(self, path_text: str) -> Path:
+        path = self._resolve_user_path(path_text)
+        if (path / "project.yaml").exists():
+            return path
+        candidates = self._discover_project_dirs(path, max_depth=1)
+        if len(candidates) == 1:
+            return candidates[0]
+        if len(candidates) > 1:
+            names = ", ".join(candidate.name for candidate in candidates[:5])
+            raise FileExistsError(f"selected folder contains multiple projects; choose one project folder: {names}")
+        return path
+
+    def _discover_project_dirs(self, root: Path, *, max_depth: int = 2) -> list[Path]:
+        if not root.exists() or not root.is_dir():
+            return []
+        projects: list[Path] = []
+
+        def walk(path: Path, depth: int) -> None:
+            if depth > max_depth:
+                return
+            if path.name.startswith("."):
+                return
+            if (path / "project.yaml").exists():
+                projects.append(path)
+                return
+            try:
+                children = sorted(item for item in path.iterdir() if item.is_dir())
+            except Exception:
+                return
+            for child in children:
+                walk(child, depth + 1)
+
+        walk(root, 0)
+        return projects
 
     def _ensure_deletable_project_path(self, path: Path) -> None:
         resolved = path.resolve()

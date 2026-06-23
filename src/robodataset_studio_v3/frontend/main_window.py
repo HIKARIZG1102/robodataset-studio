@@ -71,6 +71,7 @@ class MainWindow(QMainWindow):
         self.ros_graph_cache: dict | None = None
         self.refresh_graph_button: QPushButton | None = None
         self.project_summary = QLabel("")
+        self.project_folder_status = QLabel("")
         self.settings: dict = {}
         self.language = "en"
         self.ui_scale = 1.0
@@ -125,9 +126,9 @@ class MainWindow(QMainWindow):
         help_menu.addAction("About", self.show_about)
 
     def _build_graph_button(self) -> None:
-        refresh = QPushButton("Refresh ROS Graph")
+        refresh = QPushButton("Refresh Nodes/Topics")
         refresh.setObjectName("refreshGraphButton")
-        refresh.setToolTip("Refresh the global ROS graph for Config, Discovery, and Inspector.")
+        refresh.setToolTip("Refresh the global ROS nodes and topics for Config, Discovery, and Inspector.")
         refresh.setCursor(Qt.PointingHandCursor)
         refresh.clicked.connect(self.refresh_ros_graph)
         refresh.setStyleSheet(
@@ -165,11 +166,14 @@ class MainWindow(QMainWindow):
         self.project_summary.setWordWrap(False)
         toolbar.addWidget(self.project_summary)
         self.addToolBar(Qt.TopToolBarArea, toolbar)
+        self.project_folder_status.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.statusBar().addPermanentWidget(self.project_folder_status, 1)
         self.update_project_summary()
 
     def update_project_summary(self) -> None:
         if self.current_project is None:
             self.project_summary.setText(text("Project: none | Config: none", self.language))
+            self.project_folder_status.setText("Project folder: none")
             return
         state = "recorded" if self.current_project.has_recorded_data else "editable"
         if normalize_language(self.language) == "zh":
@@ -182,6 +186,7 @@ class MainWindow(QMainWindow):
                 f"Project: {self.current_project.name} {self.current_project.version} | "
                 f"Config: {self.current_project.config_id or 'none'} | {state}"
             )
+        self.project_folder_status.setText(f"Project folder: {self.current_project.path}")
 
     def _empty_workspace(self) -> QWidget:
         widget = QWidget()
@@ -193,9 +198,8 @@ class MainWindow(QMainWindow):
 
     def toggle_project_sidebar(self) -> None:
         dock = self._ensure_project_sidebar()
-        dock.setVisible(not dock.isVisible())
-        if dock.isVisible():
-            self.refresh_project_sidebar()
+        self._activate_sidebar_dock(dock)
+        self.refresh_project_sidebar()
 
     def _ensure_project_sidebar(self) -> QDockWidget:
         if self.project_dock is not None:
@@ -222,6 +226,7 @@ class MainWindow(QMainWindow):
         dock.setWidget(widget)
         self.addDockWidget(Qt.LeftDockWidgetArea, dock)
         self.project_dock = dock
+        self._tabify_sidebar_dock(dock)
         self.refresh_project_sidebar()
         apply_i18n(dock, self.language)
         return dock
@@ -257,7 +262,7 @@ class MainWindow(QMainWindow):
         item = self.project_list.itemAt(pos)
         menu = QMenu(self)
         open_action = menu.addAction("Open Project")
-        info_action = menu.addAction("Project Info")
+        info_action = menu.addAction("Properties")
         config_action = menu.addAction("Current Project Config")
         collect_action = menu.addAction("Collect")
         review_action = menu.addAction("Review")
@@ -360,9 +365,8 @@ class MainWindow(QMainWindow):
 
     def toggle_config_sidebar(self) -> None:
         dock = self._ensure_config_sidebar()
-        dock.setVisible(not dock.isVisible())
-        if dock.isVisible():
-            self.refresh_config_sidebar()
+        self._activate_sidebar_dock(dock)
+        self.refresh_config_sidebar()
 
     def _ensure_config_sidebar(self) -> QDockWidget:
         if self.config_dock is not None:
@@ -386,6 +390,7 @@ class MainWindow(QMainWindow):
         dock.setWidget(widget)
         self.addDockWidget(Qt.LeftDockWidgetArea, dock)
         self.config_dock = dock
+        self._tabify_sidebar_dock(dock)
         self.refresh_config_sidebar()
         apply_i18n(dock, self.language)
         return dock
@@ -432,7 +437,7 @@ class MainWindow(QMainWindow):
         item = self.config_list.itemAt(pos)
         menu = QMenu(self)
         open_action = menu.addAction("Open Config")
-        duplicate_action = menu.addAction("Copy")
+        duplicate_action = menu.addAction("Duplicate")
         rename_action = menu.addAction("Rename")
         delete_action = menu.addAction("Delete")
         menu.addSeparator()
@@ -458,7 +463,7 @@ class MainWindow(QMainWindow):
                 self.refresh_config_sidebar()
                 self._refresh_open_config_library(str(copied.get("id") or ""))
             except Exception as exc:
-                QMessageBox.warning(self, "Copy Config", f"Cannot copy config:\n{exc}")
+                QMessageBox.warning(self, "Duplicate Config", f"Cannot duplicate config:\n{exc}")
         elif action is rename_action:
             config_id = str(item.data(Qt.UserRole) or "")
             new_name, ok = QInputDialog.getText(self, "Rename Config", "New config name:", text=config_id)
@@ -487,9 +492,8 @@ class MainWindow(QMainWindow):
 
     def toggle_logs_sidebar(self) -> None:
         dock = self._ensure_logs_sidebar()
-        dock.setVisible(not dock.isVisible())
-        if dock.isVisible():
-            self.refresh_logs_sidebar()
+        self._activate_sidebar_dock(dock)
+        self.refresh_logs_sidebar()
 
     def _ensure_logs_sidebar(self) -> QDockWidget:
         if self.logs_dock is not None:
@@ -511,6 +515,7 @@ class MainWindow(QMainWindow):
         dock.setWidget(widget)
         self.addDockWidget(Qt.LeftDockWidgetArea, dock)
         self.logs_dock = dock
+        self._tabify_sidebar_dock(dock)
         self.refresh_logs_sidebar()
         apply_i18n(dock, self.language)
         return dock
@@ -534,6 +539,17 @@ class MainWindow(QMainWindow):
             item.setToolTip(str(task))
             item.setData(Qt.UserRole, task)
             self.logs_list.addItem(item)
+
+    def _activate_sidebar_dock(self, dock: QDockWidget) -> None:
+        dock.show()
+        dock.raise_()
+
+    def _tabify_sidebar_dock(self, dock: QDockWidget) -> None:
+        for existing in [self.project_dock, self.config_dock, self.logs_dock]:
+            if existing is not None and existing is not dock:
+                self.tabifyDockWidget(existing, dock)
+                dock.raise_()
+                return
 
     def _preview_project_item(self, item: QListWidgetItem | None) -> None:
         if item is None:
@@ -672,7 +688,7 @@ class MainWindow(QMainWindow):
             starter()
 
     def open_project_folder(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "Open Project Folder")
+        path = QFileDialog.getExistingDirectory(self, "Open Project Folder", self._project_folder_start_dir())
         if not path:
             return
         try:
@@ -686,21 +702,57 @@ class MainWindow(QMainWindow):
         self._load_project_workspace()
         self.refresh_project_sidebar()
 
+    def _project_folder_start_dir(self) -> str:
+        ui = self._ui_settings()
+        last_parent = str(ui.get("last_project_parent_path") or "")
+        if last_parent and Path(last_parent).exists():
+            return last_parent
+        if self.current_project is not None:
+            parent = str(Path(self.current_project.path).parent)
+            if Path(parent).exists():
+                return parent
+        try:
+            default_root = self.api.default_project_root()
+        except Exception:
+            default_root = ""
+        return default_root if default_root and Path(default_root).exists() else str(Path.cwd())
+
     def _load_project_workspace(self) -> None:
         if self.current_project is None:
             return
-        container = self._create_workspace_container()
-        self.open_tabs = {}
-        self._restoring_workspace = True
-        for tab_id in ["project", "collect", "review", "convert", "upload"]:
-            self._add_action_tab(tab_id, switch=False)
-        self.setCentralWidget(container)
-        self._restoring_workspace = False
+        if self._has_core_workspace():
+            self._restoring_workspace = True
+            self._sync_open_pages_to_project()
+            self._ensure_core_tabs()
+            self._restoring_workspace = False
+        else:
+            container = self._create_workspace_container()
+            self.open_tabs = {}
+            self._restoring_workspace = True
+            self.setCentralWidget(container)
+            self._ensure_core_tabs()
+            self._restoring_workspace = False
         self._sync_inspector_project()
         self.update_project_summary()
         last_tab = self._ui_settings().get("last_active_tab", "")
         if isinstance(last_tab, str) and last_tab in self.open_tabs:
             self._focus_widget_tab(self.open_tabs[last_tab])
+
+    def _has_core_workspace(self) -> bool:
+        if self.workspace_splitter is None or self.centralWidget() is not self.workspace_splitter:
+            return False
+        return all(tab_id in self.open_tabs for tab_id in ["project", "collect", "review", "convert", "upload"])
+
+    def _ensure_core_tabs(self) -> None:
+        for tab_id in ["project", "collect", "review", "convert", "upload"]:
+            self._add_action_tab(tab_id, switch=False)
+
+    def _sync_open_pages_to_project(self) -> None:
+        for widget in self.open_tabs.values():
+            setattr(widget, "project", self.current_project)
+            refresh = getattr(widget, "on_project_config_changed", None)
+            if callable(refresh):
+                refresh(self.current_project)
 
     def open_project_config_tab(self, *, read_only: bool = False) -> None:
         if self.current_project is None:
@@ -776,7 +828,7 @@ class MainWindow(QMainWindow):
     def _tab_title(self, tab_id: str) -> str:
         return {
             "collect": "Collect",
-            "project": "Project",
+            "project": "Properties",
             "ros": "ROS",
             "review": "Review",
             "convert": "Convert",
@@ -841,7 +893,7 @@ class MainWindow(QMainWindow):
             finally:
                 if self.refresh_graph_button is not None:
                     self.refresh_graph_button.setEnabled(True)
-                    self.refresh_graph_button.setText("Refresh ROS Graph")
+                    self.refresh_graph_button.setText("Refresh Nodes/Topics")
                 if item in self._workers:
                     self._workers.remove(item)
 
@@ -939,6 +991,7 @@ class MainWindow(QMainWindow):
         settings["recent_projects"] = recent[:20]
         settings.setdefault("ui", {})
         settings["ui"]["last_project_path"] = project.path
+        settings["ui"]["last_project_parent_path"] = str(Path(project.path).parent)
         self._write_settings(settings)
 
     def _sync_inspector_project(self) -> None:

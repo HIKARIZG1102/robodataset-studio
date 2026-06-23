@@ -60,6 +60,10 @@ class ApiClient:
             return []
         return [ProjectSummary(**item) for item in data if isinstance(item, dict)]
 
+    def default_project_root(self) -> str:
+        data = self.get("/api/projects/default-root", timeout=5.0)
+        return str(data.get("path") or "") if isinstance(data, dict) else ""
+
     def open_project_path(self, path: str) -> ProjectSummary:
         data = self.post("/api/projects/open-path", {"path": path})
         if not isinstance(data, dict):
