@@ -36,6 +36,7 @@ from robodataset_studio_v3.frontend.widgets.topic_tree import TopicTreeWidget
 
 class ConfigLibraryPage(QWidget):
     projectConfigChanged = Signal(object)
+    libraryChanged = Signal(str)
 
     def __init__(self, api: ApiClient, project: ProjectSummary | None = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -422,6 +423,7 @@ class ConfigLibraryPage(QWidget):
             self.load_selected()
 
     def start_new_config(self) -> None:
+        self.refresh_list()
         self.loaded_config_id = ""
         self.config_name.setText("")
         config = self.default_total_config()
@@ -476,6 +478,7 @@ class ConfigLibraryPage(QWidget):
         saved_id = str(saved.get("id") or name)
         self.status.setText(f"{action} config: {saved_id}")
         self.loaded_config_id = saved_id
+        self.libraryChanged.emit(saved_id)
         if self.project is not None and saved_id == self.project.config_id:
             try:
                 self.project = self.api.bind_project_config(self.project.key, saved_id)
@@ -507,6 +510,7 @@ class ConfigLibraryPage(QWidget):
         self.config_name.setText(new_id)
         self.loaded_config_id = new_id
         self.status.setText(f"Copied config: {config_id} -> {new_id or saved}. Edit it, then click Save for further changes.")
+        self.libraryChanged.emit(new_id)
         self.refresh_list()
         if new_id:
             idx = self.config_select.findData(new_id)
@@ -548,6 +552,7 @@ class ConfigLibraryPage(QWidget):
         self.editor.clear()
         self.preview.clear()
         self.status.setText(f"Deleted config: {config_id}")
+        self.libraryChanged.emit("")
         self.refresh_list()
 
     def set_graph_data(self, graph: dict[str, Any]) -> None:

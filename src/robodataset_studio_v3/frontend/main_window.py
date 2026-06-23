@@ -460,8 +460,7 @@ class MainWindow(QMainWindow):
             config_id = str(item.data(Qt.UserRole) or "")
             try:
                 copied = self.api.duplicate_config(config_id)
-                self.refresh_config_sidebar()
-                self._refresh_open_config_library(str(copied.get("id") or ""))
+                self._config_library_changed(str(copied.get("id") or ""))
             except Exception as exc:
                 QMessageBox.warning(self, "Duplicate Config", f"Cannot duplicate config:\n{exc}")
         elif action is rename_action:
@@ -470,9 +469,8 @@ class MainWindow(QMainWindow):
             if ok and new_name.strip():
                 try:
                     renamed = self.api.rename_config(config_id, new_name.strip())
-                    self.refresh_config_sidebar()
                     new_id = str(renamed.get("id") or new_name.strip())
-                    self._refresh_open_config_library(new_id)
+                    self._config_library_changed(new_id)
                     for row in range(self.config_list.count()):
                         candidate = self.config_list.item(row)
                         if candidate and str(candidate.data(Qt.UserRole) or "") == new_id:
@@ -485,8 +483,7 @@ class MainWindow(QMainWindow):
             if QMessageBox.question(self, "Delete Config", f"Delete config '{config_id}'?") == QMessageBox.Yes:
                 try:
                     self.api.delete_config(config_id)
-                    self.refresh_config_sidebar()
-                    self._refresh_open_config_library()
+                    self._config_library_changed("")
                 except Exception as exc:
                     QMessageBox.warning(self, "Delete Config", f"Cannot delete config:\n{exc}")
 
@@ -575,6 +572,21 @@ class MainWindow(QMainWindow):
         if config_id:
             self.statusBar().showMessage(f"Config selected: {config_id}")
 
+    def _config_library_changed(self, select_config_id: str = "") -> None:
+        self.refresh_config_sidebar()
+        self._refresh_open_config_library(select_config_id)
+        for widget in self.open_tabs.values():
+            refresh_library = getattr(widget, "refresh_library", None)
+            if callable(refresh_library):
+                refresh_library()
+        if select_config_id and self.config_list is not None:
+            for row in range(self.config_list.count()):
+                item = self.config_list.item(row)
+                if item is not None and str(item.data(Qt.UserRole) or "") == select_config_id:
+                    self.config_list.setCurrentItem(item)
+                    break
+        self.statusBar().showMessage("Config library refreshed")
+
     def _preview_log_item(self, item: QListWidgetItem | None) -> None:
         if item is None:
             return
@@ -659,6 +671,7 @@ class MainWindow(QMainWindow):
         self._remember_project(project)
         self.update_project_summary()
         self._load_project_workspace()
+        self.refresh_project_sidebar()
 
     def open_config_library_tab(self) -> None:
         self._ensure_workspace(allow_empty=True)
@@ -669,6 +682,7 @@ class MainWindow(QMainWindow):
             return
         page = ConfigLibraryPage(self.api, self.current_project)
         page.projectConfigChanged.connect(self._project_config_changed)
+        page.libraryChanged.connect(self._config_library_changed)
         if self.ros_graph_cache:
             page.set_graph_data(self.ros_graph_cache)
         self.open_tabs[tab_id] = page
