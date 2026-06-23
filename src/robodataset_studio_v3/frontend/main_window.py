@@ -8,13 +8,18 @@ from PySide6.QtGui import QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QDockWidget,
+    QFileDialog,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMenu,
     QMessageBox,
+    QInputDialog,
     QPushButton,
     QSplitter,
     QToolBar,
+    QTabBar,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -23,10 +28,10 @@ from PySide6.QtWidgets import (
 from robodataset_studio_v3.frontend.api_client import ApiClient, ProjectSummary
 from robodataset_studio_v3.frontend.backend_process import BackendProcess
 from robodataset_studio_v3.frontend.i18n import apply_i18n, normalize_language, text
-from robodataset_studio_v3.frontend.pages.ai_page import AiPage
 from robodataset_studio_v3.frontend.pages.collect_page import CollectPage
 from robodataset_studio_v3.frontend.pages.convert_page import ConvertPage
 from robodataset_studio_v3.frontend.pages.logs_page import LogsPage
+from robodataset_studio_v3.frontend.pages.project_page import ProjectPage
 from robodataset_studio_v3.frontend.pages.review_page import ReviewPage
 from robodataset_studio_v3.frontend.pages.ros_page import RosPage
 from robodataset_studio_v3.frontend.pages.settings_page import SettingsPage
@@ -35,7 +40,6 @@ from robodataset_studio_v3.frontend.pages.upload_page import UploadPage
 from robodataset_studio_v3.frontend.widgets.config_library_page import ConfigLibraryPage
 from robodataset_studio_v3.frontend.widgets.inspector import InspectorDock
 from robodataset_studio_v3.frontend.widgets.project_config_page import ProjectConfigPage
-from robodataset_studio_v3.frontend.widgets.project_browser import ProjectBrowserDialog
 from robodataset_studio_v3.frontend.widgets.project_dialog import NewProjectDialog
 from robodataset_studio_v3.frontend.worker import ApiWorker
 
@@ -58,6 +62,12 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.empty)
         self.inspector: InspectorDock | None = None
         self.inspector_dock: QDockWidget | None = None
+        self.project_dock: QDockWidget | None = None
+        self.config_dock: QDockWidget | None = None
+        self.logs_dock: QDockWidget | None = None
+        self.project_list: QListWidget | None = None
+        self.config_list: QListWidget | None = None
+        self.logs_list: QListWidget | None = None
         self.ros_graph_cache: dict | None = None
         self.refresh_graph_button: QPushButton | None = None
         self.project_summary = QLabel("")
@@ -87,24 +97,14 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Backend connected")
 
     def _build_menu(self) -> None:
-        file_menu = self.menuBar().addMenu("File")
-        new_project = file_menu.addAction("New Project")
-        open_project = file_menu.addAction("Open Project")
-        file_menu.addSeparator()
-        file_menu.addAction("Exit", self.close)
-        new_project.triggered.connect(self.new_project)
-        open_project.triggered.connect(self.open_project)
-
-        config_menu = self.menuBar().addMenu("Config")
-        config_menu.addAction("Config Library", self.open_config_library_tab)
-        config_menu.addAction("Current Project Config", self.open_project_config_tab)
+        self.menuBar().addAction("File", self.toggle_project_sidebar)
+        self.menuBar().addAction("Config", self.toggle_config_sidebar)
 
         tools_menu = self.menuBar().addMenu("Tools")
         tools_menu.addAction("Collect", lambda: self.open_action_tab("collect"))
         tools_menu.addAction("Data Review", lambda: self.open_action_tab("review"))
         tools_menu.addAction("Convert", lambda: self.open_action_tab("convert"))
         tools_menu.addAction("Upload", lambda: self.open_action_tab("upload"))
-        tools_menu.addAction("Logs", lambda: self.open_action_tab("logs"))
 
         self.menuBar().addAction("Inspector", self.toggle_inspector)
 
@@ -118,11 +118,14 @@ class MainWindow(QMainWindow):
         reset_zoom = settings_menu.addAction("Reset Zoom", self.reset_zoom)
         reset_zoom.setShortcut(QKeySequence("Ctrl+0"))
 
+        self.menuBar().addAction("Logs", self.toggle_logs_sidebar)
+
         help_menu = self.menuBar().addMenu("Help")
         help_menu.addAction("Tutorial", self.open_tutorial_guide)
+        help_menu.addAction("About", self.show_about)
 
     def _build_graph_button(self) -> None:
-        refresh = QPushButton("Refresh Graph")
+        refresh = QPushButton("Refresh ROS Graph")
         refresh.setObjectName("refreshGraphButton")
         refresh.setToolTip("Refresh the global ROS graph for Config, Discovery, and Inspector.")
         refresh.setCursor(Qt.PointingHandCursor)
@@ -187,6 +190,392 @@ class MainWindow(QMainWindow):
         label.setAlignment(Qt.AlignCenter)
         layout.addWidget(label)
         return widget
+
+    def toggle_project_sidebar(self) -> None:
+        dock = self._ensure_project_sidebar()
+        dock.setVisible(not dock.isVisible())
+        if dock.isVisible():
+            self.refresh_project_sidebar()
+
+    def _ensure_project_sidebar(self) -> QDockWidget:
+        if self.project_dock is not None:
+            return self.project_dock
+        dock = QDockWidget("Projects", self)
+        dock.setAllowedAreas(Qt.LeftDockWidgetArea)
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        new_button = QPushButton("New Project")
+        open_button = QPushButton("Open Project Folder")
+        refresh_button = QPushButton("Refresh")
+        self.project_list = QListWidget()
+        self.project_list.currentItemChanged.connect(lambda item, _prev: self._preview_project_item(item))
+        self.project_list.itemDoubleClicked.connect(self._open_project_item)
+        self.project_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.project_list.customContextMenuRequested.connect(self._show_project_context_menu)
+        new_button.clicked.connect(self.new_project)
+        open_button.clicked.connect(self.open_project_folder)
+        refresh_button.clicked.connect(self.refresh_project_sidebar)
+        layout.addWidget(new_button)
+        layout.addWidget(open_button)
+        layout.addWidget(refresh_button)
+        layout.addWidget(self.project_list, 1)
+        dock.setWidget(widget)
+        self.addDockWidget(Qt.LeftDockWidgetArea, dock)
+        self.project_dock = dock
+        self.refresh_project_sidebar()
+        apply_i18n(dock, self.language)
+        return dock
+
+    def refresh_project_sidebar(self) -> None:
+        if self.project_list is None:
+            return
+        self.project_list.clear()
+        try:
+            projects = self.api.list_projects()
+        except Exception as exc:
+            self.statusBar().showMessage(f"Cannot list projects: {exc}")
+            return
+        for project in projects:
+            item = QListWidgetItem(f"{project.name} {project.version}")
+            item.setToolTip(project.path)
+            item.setData(Qt.UserRole, project)
+            self.project_list.addItem(item)
+            if self.current_project is not None and project.key == self.current_project.key:
+                self.project_list.setCurrentItem(item)
+
+    def _open_project_item(self, item: QListWidgetItem) -> None:
+        project = item.data(Qt.UserRole)
+        if isinstance(project, ProjectSummary):
+            self.current_project = project
+            self._remember_project(project)
+            self.update_project_summary()
+            self._load_project_workspace()
+
+    def _show_project_context_menu(self, pos) -> None:
+        if self.project_list is None:
+            return
+        item = self.project_list.itemAt(pos)
+        menu = QMenu(self)
+        open_action = menu.addAction("Open Project")
+        info_action = menu.addAction("Project Info")
+        config_action = menu.addAction("Current Project Config")
+        collect_action = menu.addAction("Collect")
+        review_action = menu.addAction("Review")
+        convert_action = menu.addAction("Convert")
+        upload_action = menu.addAction("Upload")
+        menu.addSeparator()
+        rename_action = menu.addAction("Rename")
+        delete_action = menu.addAction("Delete")
+        permanent_delete_action = menu.addAction("Permanent Delete")
+        menu.addSeparator()
+        new_action = menu.addAction("New Project")
+        if item is None:
+            for action in [
+                open_action,
+                info_action,
+                config_action,
+                collect_action,
+                review_action,
+                convert_action,
+                upload_action,
+                rename_action,
+                delete_action,
+                permanent_delete_action,
+            ]:
+                action.setEnabled(False)
+        action = menu.exec(self.project_list.mapToGlobal(pos))
+        if action is None:
+            return
+        if action is new_action:
+            self.new_project()
+            return
+        if item is None:
+            return
+        if action is open_action:
+            self._open_project_item(item)
+        elif action is info_action:
+            self._open_project_item(item)
+            self.open_action_tab("project")
+        elif action is config_action:
+            self._open_project_item(item)
+            self.open_project_config_tab(read_only=True)
+        elif action is collect_action:
+            self._open_project_item(item)
+            self.open_action_tab("collect")
+        elif action is review_action:
+            self._open_project_item(item)
+            self.open_action_tab("review")
+        elif action is convert_action:
+            self._open_project_item(item)
+            self.open_action_tab("convert")
+        elif action is upload_action:
+            self._open_project_item(item)
+            self.open_action_tab("upload")
+        elif action is rename_action:
+            project = item.data(Qt.UserRole)
+            if isinstance(project, ProjectSummary):
+                new_name, ok = QInputDialog.getText(self, "Rename Project", "New project key:", text=project.key)
+                if ok and new_name.strip():
+                    try:
+                        renamed = self.api.rename_project(project.key, new_name.strip())
+                        if self.current_project and self.current_project.key == project.key:
+                            self.current_project = renamed
+                            self._load_project_workspace()
+                        self.refresh_project_sidebar()
+                    except Exception as exc:
+                        QMessageBox.warning(self, "Rename Project", f"Cannot rename project:\n{exc}")
+        elif action is delete_action:
+            project = item.data(Qt.UserRole)
+            if isinstance(project, ProjectSummary):
+                if QMessageBox.question(self, "Delete Project", f"Move project '{project.key}' to .deleted_projects?") == QMessageBox.Yes:
+                    try:
+                        self.api.delete_project(project.key)
+                        if self.current_project and self.current_project.key == project.key:
+                            self._clear_current_project_workspace()
+                        self.refresh_project_sidebar()
+                    except Exception as exc:
+                        QMessageBox.warning(self, "Delete Project", f"Cannot delete project:\n{exc}")
+        elif action is permanent_delete_action:
+            project = item.data(Qt.UserRole)
+            if isinstance(project, ProjectSummary):
+                message = (
+                    f"Permanently delete project '{project.key}'?\n\n"
+                    f"This will remove the project directory from disk and cannot be undone:\n{project.path}"
+                )
+                answer = QMessageBox.warning(
+                    self,
+                    "Permanent Delete Project",
+                    message,
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No,
+                )
+                if answer == QMessageBox.Yes:
+                    try:
+                        self.api.permanently_delete_project(project.key)
+                        if self.current_project and self.current_project.key == project.key:
+                            self._clear_current_project_workspace()
+                        self.refresh_project_sidebar()
+                    except Exception as exc:
+                        QMessageBox.warning(self, "Permanent Delete Project", f"Cannot permanently delete project:\n{exc}")
+
+    def toggle_config_sidebar(self) -> None:
+        dock = self._ensure_config_sidebar()
+        dock.setVisible(not dock.isVisible())
+        if dock.isVisible():
+            self.refresh_config_sidebar()
+
+    def _ensure_config_sidebar(self) -> QDockWidget:
+        if self.config_dock is not None:
+            return self.config_dock
+        dock = QDockWidget("Configs", self)
+        dock.setAllowedAreas(Qt.LeftDockWidgetArea)
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        new_button = QPushButton("New")
+        refresh_button = QPushButton("Refresh")
+        self.config_list = QListWidget()
+        self.config_list.currentItemChanged.connect(lambda item, _prev: self._preview_config_item(item))
+        self.config_list.itemDoubleClicked.connect(self._open_config_item)
+        self.config_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.config_list.customContextMenuRequested.connect(self._show_config_context_menu)
+        new_button.clicked.connect(lambda: (self.open_config_library_tab(), self.new_config()))
+        refresh_button.clicked.connect(self.refresh_config_sidebar)
+        layout.addWidget(new_button)
+        layout.addWidget(refresh_button)
+        layout.addWidget(self.config_list, 1)
+        dock.setWidget(widget)
+        self.addDockWidget(Qt.LeftDockWidgetArea, dock)
+        self.config_dock = dock
+        self.refresh_config_sidebar()
+        apply_i18n(dock, self.language)
+        return dock
+
+    def refresh_config_sidebar(self) -> None:
+        if self.config_list is None:
+            return
+        self.config_list.clear()
+        try:
+            configs = self.api.list_configs()
+        except Exception as exc:
+            self.statusBar().showMessage(f"Cannot list configs: {exc}")
+            return
+        for config in configs:
+            config_id = str(config.get("id") or "")
+            item = QListWidgetItem(config_id)
+            item.setData(Qt.UserRole, config_id)
+            self.config_list.addItem(item)
+
+    def _refresh_open_config_library(self, select_config_id: str = "") -> None:
+        page = self.open_tabs.get("config_library")
+        if not isinstance(page, ConfigLibraryPage):
+            return
+        page.refresh_list()
+        if select_config_id:
+            index = page.config_select.findData(select_config_id)
+            if index >= 0:
+                page.config_select.setCurrentIndex(index)
+                page.load_selected()
+
+    def _open_config_item(self, item: QListWidgetItem) -> None:
+        config_id = str(item.data(Qt.UserRole) or "")
+        self.open_config_library_tab()
+        page = self.open_tabs.get("config_library")
+        if isinstance(page, ConfigLibraryPage):
+            index = page.config_select.findData(config_id)
+            if index >= 0:
+                page.config_select.setCurrentIndex(index)
+                page.load_selected()
+
+    def _show_config_context_menu(self, pos) -> None:
+        if self.config_list is None:
+            return
+        item = self.config_list.itemAt(pos)
+        menu = QMenu(self)
+        open_action = menu.addAction("Open Config")
+        duplicate_action = menu.addAction("Copy")
+        rename_action = menu.addAction("Rename")
+        delete_action = menu.addAction("Delete")
+        menu.addSeparator()
+        new_action = menu.addAction("New")
+        if item is None:
+            for action in [open_action, duplicate_action, rename_action, delete_action]:
+                action.setEnabled(False)
+        action = menu.exec(self.config_list.mapToGlobal(pos))
+        if action is None:
+            return
+        if action is new_action:
+            self.open_config_library_tab()
+            self.new_config()
+            return
+        if item is None:
+            return
+        if action is open_action:
+            self._open_config_item(item)
+        elif action is duplicate_action:
+            config_id = str(item.data(Qt.UserRole) or "")
+            try:
+                copied = self.api.duplicate_config(config_id)
+                self.refresh_config_sidebar()
+                self._refresh_open_config_library(str(copied.get("id") or ""))
+            except Exception as exc:
+                QMessageBox.warning(self, "Copy Config", f"Cannot copy config:\n{exc}")
+        elif action is rename_action:
+            config_id = str(item.data(Qt.UserRole) or "")
+            new_name, ok = QInputDialog.getText(self, "Rename Config", "New config name:", text=config_id)
+            if ok and new_name.strip():
+                try:
+                    renamed = self.api.rename_config(config_id, new_name.strip())
+                    self.refresh_config_sidebar()
+                    new_id = str(renamed.get("id") or new_name.strip())
+                    self._refresh_open_config_library(new_id)
+                    for row in range(self.config_list.count()):
+                        candidate = self.config_list.item(row)
+                        if candidate and str(candidate.data(Qt.UserRole) or "") == new_id:
+                            self.config_list.setCurrentItem(candidate)
+                            break
+                except Exception as exc:
+                    QMessageBox.warning(self, "Rename Config", f"Cannot rename config:\n{exc}")
+        elif action is delete_action:
+            config_id = str(item.data(Qt.UserRole) or "")
+            if QMessageBox.question(self, "Delete Config", f"Delete config '{config_id}'?") == QMessageBox.Yes:
+                try:
+                    self.api.delete_config(config_id)
+                    self.refresh_config_sidebar()
+                    self._refresh_open_config_library()
+                except Exception as exc:
+                    QMessageBox.warning(self, "Delete Config", f"Cannot delete config:\n{exc}")
+
+    def toggle_logs_sidebar(self) -> None:
+        dock = self._ensure_logs_sidebar()
+        dock.setVisible(not dock.isVisible())
+        if dock.isVisible():
+            self.refresh_logs_sidebar()
+
+    def _ensure_logs_sidebar(self) -> QDockWidget:
+        if self.logs_dock is not None:
+            return self.logs_dock
+        dock = QDockWidget("Logs", self)
+        dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        open_button = QPushButton("Open Logs")
+        refresh_button = QPushButton("Refresh")
+        self.logs_list = QListWidget()
+        self.logs_list.currentItemChanged.connect(lambda item, _prev: self._preview_log_item(item))
+        self.logs_list.itemDoubleClicked.connect(self._open_log_item)
+        open_button.clicked.connect(lambda: self.open_action_tab("logs"))
+        refresh_button.clicked.connect(self.refresh_logs_sidebar)
+        layout.addWidget(open_button)
+        layout.addWidget(refresh_button)
+        layout.addWidget(self.logs_list, 1)
+        dock.setWidget(widget)
+        self.addDockWidget(Qt.LeftDockWidgetArea, dock)
+        self.logs_dock = dock
+        self.refresh_logs_sidebar()
+        apply_i18n(dock, self.language)
+        return dock
+
+    def refresh_logs_sidebar(self) -> None:
+        if self.logs_list is None:
+            return
+        self.logs_list.clear()
+        try:
+            tasks = self.api.list_tasks()
+        except Exception as exc:
+            self.statusBar().showMessage(f"Cannot list logs/tasks: {exc}")
+            return
+        for task in tasks:
+            if not isinstance(task, dict):
+                continue
+            task_id = str(task.get("id") or task.get("task_id") or "-")
+            status = str(task.get("status") or "-")
+            kind = str(task.get("kind") or task.get("name") or task.get("action") or "task")
+            item = QListWidgetItem(f"{status} | {kind} | {task_id}")
+            item.setToolTip(str(task))
+            item.setData(Qt.UserRole, task)
+            self.logs_list.addItem(item)
+
+    def _preview_project_item(self, item: QListWidgetItem | None) -> None:
+        if item is None:
+            return
+        project = item.data(Qt.UserRole)
+        if isinstance(project, ProjectSummary):
+            status = "recorded" if project.has_recorded_data else "editable"
+            self.statusBar().showMessage(f"{project.key} | config={project.config_id or '-'} | {status} | {project.path}")
+
+    def _clear_current_project_workspace(self) -> None:
+        self.current_project = None
+        self.open_tabs = {}
+        self.workspace_panes = []
+        self.workspace_splitter = None
+        self.setCentralWidget(self.empty)
+        self.update_project_summary()
+        self._sync_inspector_project()
+
+    def _preview_config_item(self, item: QListWidgetItem | None) -> None:
+        if item is None:
+            return
+        config_id = str(item.data(Qt.UserRole) or "")
+        if config_id:
+            self.statusBar().showMessage(f"Config selected: {config_id}")
+
+    def _preview_log_item(self, item: QListWidgetItem | None) -> None:
+        if item is None:
+            return
+        task = item.data(Qt.UserRole)
+        if isinstance(task, dict):
+            self.statusBar().showMessage(
+                f"Task selected: {task.get('task_id', '-')} | {task.get('status', '-')} | {task.get('message', '')}"
+            )
+
+    def _open_log_item(self, item: QListWidgetItem) -> None:
+        self.open_action_tab("logs")
+        page = self.open_tabs.get("logs")
+        selector = getattr(page, "select_task", None)
+        task = item.data(Qt.UserRole)
+        task_id = str(task.get("task_id") or "") if isinstance(task, dict) else ""
+        if task_id and callable(selector):
+            selector(task_id)
 
     def _new_workspace_pane(self) -> QTabWidget:
         pane = QTabWidget()
@@ -271,6 +660,7 @@ class MainWindow(QMainWindow):
         index = target.insertTab(0, page, "Config Library")
         apply_i18n(page, self.language)
         target.setTabText(index, self._translated_tab_title(tab_id))
+        self._apply_tab_close_policy(target, tab_id, index)
         target.setCurrentIndex(index)
         self.workspace = target
 
@@ -281,32 +671,20 @@ class MainWindow(QMainWindow):
         if callable(starter):
             starter()
 
-    def open_project(self) -> None:
+    def open_project_folder(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Open Project Folder")
+        if not path:
+            return
         try:
-            projects = self.api.list_projects()
+            project = self.api.open_project_path(path)
         except Exception as exc:
-            QMessageBox.warning(self, "Open Project", f"Cannot list projects:\n{exc}")
+            QMessageBox.warning(self, "Open Project Folder", f"Cannot open project folder:\n{exc}")
             return
-        if not projects:
-            QMessageBox.information(self, "Open Project", "No projects found. Create a project first.")
-            return
-        dialog = ProjectBrowserDialog(projects, self)
-        if not dialog.exec():
-            return
-        selected = dialog.selected_project()
-        if selected is None:
-            QMessageBox.information(self, "Open Project", "Select a project first.")
-            return
-        if dialog.browsed_project is not None:
-            try:
-                selected = self.api.open_project_path(dialog.browsed_project.path)
-            except Exception as exc:
-                QMessageBox.warning(self, "Open Project", f"Cannot open project folder:\n{exc}")
-                return
-        self.current_project = selected
-        self._remember_project(selected)
+        self.current_project = project
+        self._remember_project(project)
         self.update_project_summary()
         self._load_project_workspace()
+        self.refresh_project_sidebar()
 
     def _load_project_workspace(self) -> None:
         if self.current_project is None:
@@ -314,7 +692,7 @@ class MainWindow(QMainWindow):
         container = self._create_workspace_container()
         self.open_tabs = {}
         self._restoring_workspace = True
-        for tab_id in ["collect", "review", "convert", "upload", "logs"]:
+        for tab_id in ["project", "collect", "review", "convert", "upload"]:
             self._add_action_tab(tab_id, switch=False)
         self.setCentralWidget(container)
         self._restoring_workspace = False
@@ -324,23 +702,24 @@ class MainWindow(QMainWindow):
         if isinstance(last_tab, str) and last_tab in self.open_tabs:
             self._focus_widget_tab(self.open_tabs[last_tab])
 
-    def open_project_config_tab(self) -> None:
+    def open_project_config_tab(self, *, read_only: bool = False) -> None:
         if self.current_project is None:
             QMessageBox.information(self, "Project Config", "Open or create a project first.")
             return
         self._ensure_workspace()
-        tab_id = "project_config"
+        tab_id = "project_config_readonly" if read_only else "project_config"
         existing = self.open_tabs.get(tab_id)
         if existing is not None:
             self._focus_widget_tab(existing)
             return
-        page = ProjectConfigPage(self.api, self.current_project)
+        page = ProjectConfigPage(self.api, self.current_project, read_only=read_only)
         page.projectConfigChanged.connect(self._project_config_changed)
         self.open_tabs[tab_id] = page
         target = self._active_workspace()
         index = target.insertTab(0, page, "Project Config")
         apply_i18n(page, self.language)
         target.setTabText(index, self._translated_tab_title(tab_id))
+        self._apply_tab_close_policy(target, tab_id, index)
         target.setCurrentIndex(index)
         self.workspace = target
 
@@ -369,12 +748,15 @@ class MainWindow(QMainWindow):
         index = target.addTab(page, self._tab_title(tab_id))
         apply_i18n(page, self.language)
         target.setTabText(index, self._translated_tab_title(tab_id))
+        self._apply_tab_close_policy(target, tab_id, index)
         if switch:
             target.setCurrentIndex(index)
             self.workspace = target
 
     def _make_action_page(self, tab_id: str) -> QWidget:
         project = self.current_project
+        if tab_id == "project":
+            return ProjectPage(self.api, project)
         if tab_id == "collect":
             return CollectPage(self.api, project)
         if tab_id == "ros":
@@ -385,8 +767,6 @@ class MainWindow(QMainWindow):
             return ConvertPage(self.api, project)
         if tab_id == "upload":
             return UploadPage(self.api, project)
-        if tab_id == "ai":
-            return AiPage(self.api, project)
         if tab_id == "settings":
             return SettingsPage(self.api, project)
         if tab_id == "tutorial":
@@ -396,14 +776,15 @@ class MainWindow(QMainWindow):
     def _tab_title(self, tab_id: str) -> str:
         return {
             "collect": "Collect",
+            "project": "Project",
             "ros": "ROS",
             "review": "Review",
             "convert": "Convert",
             "upload": "Upload",
-            "ai": "AI",
             "settings": "Settings",
             "tutorial": "Tutorial",
             "logs": "Logs",
+            "project_config_readonly": "Project Config",
         }.get(tab_id, tab_id.title())
 
     def _translated_tab_title(self, tab_id: str) -> str:
@@ -460,7 +841,7 @@ class MainWindow(QMainWindow):
             finally:
                 if self.refresh_graph_button is not None:
                     self.refresh_graph_button.setEnabled(True)
-                    self.refresh_graph_button.setText("Refresh Graph")
+                    self.refresh_graph_button.setText("Refresh ROS Graph")
                 if item in self._workers:
                     self._workers.remove(item)
 
@@ -502,6 +883,10 @@ class MainWindow(QMainWindow):
         if not isinstance(pane, QTabWidget):
             pane = self.workspace
         widget = pane.widget(index)
+        tab_id = self._tab_id_for_widget(widget)
+        if tab_id in {"project", "collect", "review", "convert", "upload"}:
+            self.statusBar().showMessage("Core project tabs cannot be closed.")
+            return
         for tab_id, tab_widget in list(self.open_tabs.items()):
             if tab_widget is widget:
                 self.open_tabs.pop(tab_id, None)
@@ -569,6 +954,11 @@ class MainWindow(QMainWindow):
         widget.tabBar().setContextMenuPolicy(Qt.CustomContextMenu)
         widget.tabBar().customContextMenuRequested.connect(lambda pos, pane=widget: self._show_tab_context_menu(pane, pos))
 
+    def _apply_tab_close_policy(self, pane: QTabWidget, tab_id: str, index: int) -> None:
+        if tab_id in {"project", "collect", "review", "convert", "upload"}:
+            pane.tabBar().setTabButton(index, QTabBar.ButtonPosition.RightSide, None)
+            pane.tabBar().setTabButton(index, QTabBar.ButtonPosition.LeftSide, None)
+
     def _show_tab_context_menu(self, pane: QTabWidget, pos) -> None:
         index = pane.tabBar().tabAt(pos)
         if index < 0:
@@ -580,14 +970,19 @@ class MainWindow(QMainWindow):
         split_right = menu.addAction("Split Right")
         split_up = menu.addAction("Split Up")
         split_down = menu.addAction("Split Down")
+        menu.addSeparator()
+        merge_all = menu.addAction("Merge All Panes")
         if len(self.workspace_panes) >= 3:
             for action in [split_left, split_right, split_up, split_down]:
                 action.setEnabled(False)
                 action.setToolTip("Maximum 3 panes")
+        if len(self.workspace_panes) <= 1:
+            merge_all.setEnabled(False)
         split_left.triggered.connect(lambda: self.split_current_tab("left"))
         split_right.triggered.connect(lambda: self.split_current_tab("right"))
         split_up.triggered.connect(lambda: self.split_current_tab("up"))
         split_down.triggered.connect(lambda: self.split_current_tab("down"))
+        merge_all.triggered.connect(self.merge_workspace_panes)
         apply_i18n(menu, self.language)
         menu.exec(pane.tabBar().mapToGlobal(pos))
 
@@ -606,14 +1001,37 @@ class MainWindow(QMainWindow):
         title = source.tabText(index)
         source.removeTab(index)
         target = self._new_workspace_pane()
-        target.addTab(widget, title)
+        new_index = target.addTab(widget, title)
         target.setCurrentWidget(widget)
         self._insert_workspace_pane(target, direction, source)
         self.workspace = target
         if tab_id:
-            target.setTabText(target.indexOf(widget), self._translated_tab_title(tab_id))
+            target.setTabText(new_index, self._translated_tab_title(tab_id))
+            self._apply_tab_close_policy(target, tab_id, new_index)
         self._rebalance_workspace_panes()
         self.statusBar().showMessage(f"Split tab {direction}; panes={len(self.workspace_panes)}/3")
+
+    def merge_workspace_panes(self) -> None:
+        if not self.workspace_panes:
+            return
+        target = self.workspace_panes[0]
+        for pane in list(self.workspace_panes[1:]):
+            while pane.count():
+                widget = pane.widget(0)
+                title = pane.tabText(0)
+                tab_id = self._tab_id_for_widget(widget)
+                pane.removeTab(0)
+                index = target.addTab(widget, self._translated_tab_title(tab_id) if tab_id else title)
+                if tab_id:
+                    self._apply_tab_close_policy(target, tab_id, index)
+            self.workspace_panes.remove(pane)
+            pane.setParent(None)
+            pane.deleteLater()
+        self.workspace = target
+        if self.workspace_splitter is not None:
+            self.workspace_splitter.setOrientation(Qt.Horizontal)
+        self._rebalance_workspace_panes()
+        self.statusBar().showMessage("Workspace panes merged.")
 
     def _insert_workspace_pane(self, pane: QTabWidget, direction: str, source: QTabWidget) -> None:
         if self.workspace_splitter is None:
@@ -688,6 +1106,25 @@ class MainWindow(QMainWindow):
             return
         self.open_action_tab("tutorial")
 
+    def show_about(self) -> None:
+        QMessageBox.about(
+            self,
+            "About RoboDataset Studio V3",
+            "\n".join(
+                [
+                    "RoboDataset Studio V3",
+                    "Copyright (c) 2026 RoboDataset Studio contributors.",
+                    "",
+                    "Developers:",
+                    "  HIKARIZG1102",
+                    "  RoboDataset Studio contributors",
+                    "",
+                    "Purpose: ROS2 listener-only robot dataset collection, review, conversion, and upload.",
+                    "License/copyright: project-local repository metadata applies.",
+                ]
+            ),
+        )
+
     def _settings_changed(self, settings: object) -> None:
         if isinstance(settings, dict):
             self.settings = settings
@@ -707,6 +1144,12 @@ class MainWindow(QMainWindow):
                     pane.setTabText(index, self._translated_tab_title(tab_id))
         if self.inspector_dock is not None:
             apply_i18n(self.inspector_dock, self.language)
+        if self.project_dock is not None:
+            apply_i18n(self.project_dock, self.language)
+        if self.config_dock is not None:
+            apply_i18n(self.config_dock, self.language)
+        if self.logs_dock is not None:
+            apply_i18n(self.logs_dock, self.language)
         self.update_project_summary()
 
     def _project_config_changed(self, project: object) -> None:

@@ -48,6 +48,14 @@ class ConvertPage(BasePage):
         self.layout.addWidget(self.session_table)
         self.finish_layout()
 
+    def on_project_config_changed(self, project: ProjectSummary | None) -> None:
+        self.project = project
+        self.active_task_id = ""
+        self.session_table.setRowCount(0)
+        if project is not None:
+            self.root.setText(f"{project.path}/raw_sessions")
+            self.output_dir.setText(f"{project.path}/exports")
+
     def scan(self) -> None:
         self.status.setText("Scanning sessions...")
         self.run_async(self.api.post, self._finish_scan, "/api/convert/scan", {"root": self.root.text().strip()}, timeout=60.0)

@@ -92,6 +92,16 @@ class CollectPage(BasePage):
         self.finish_layout()
         self.update_mode_ui()
 
+    def on_project_config_changed(self, project: ProjectSummary | None) -> None:
+        self.project = project
+        self.active_task_id = ""
+        self.active_session_dir = ""
+        self.session_label.setText("Current session: new session will be created when recording starts")
+        self.task_label.setText("Task: -")
+        if project is not None:
+            self.title.setText(f"Collect - {project.key}")
+            self.refresh_plan()
+
     def refresh_plan(self) -> None:
         self.status.setText("Refreshing listener plan...")
         self.run_async(self.api.get_dataset_config, self._finish_refresh_plan, self.project_key())

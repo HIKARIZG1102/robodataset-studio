@@ -98,6 +98,20 @@ class ApiClient:
             raise RuntimeError("backend returned invalid project response")
         return ProjectSummary(**data)
 
+    def rename_project(self, project_key: str, name: str) -> ProjectSummary:
+        data = self.post(f"/api/projects/{project_key}/rename", {"name": name}, timeout=10.0)
+        if not isinstance(data, dict):
+            raise RuntimeError("backend returned invalid project response")
+        return ProjectSummary(**data)
+
+    def delete_project(self, project_key: str) -> dict[str, Any]:
+        data = self.delete(f"/api/projects/{project_key}", timeout=10.0)
+        return data if isinstance(data, dict) else {}
+
+    def permanently_delete_project(self, project_key: str) -> dict[str, Any]:
+        data = self.delete(f"/api/projects/{project_key}/permanent", timeout=20.0)
+        return data if isinstance(data, dict) else {}
+
     def list_configs(self) -> list[dict[str, Any]]:
         data = self.get("/api/config/library")
         return data if isinstance(data, list) else []

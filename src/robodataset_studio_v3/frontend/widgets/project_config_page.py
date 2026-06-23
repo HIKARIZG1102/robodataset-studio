@@ -10,10 +10,11 @@ from robodataset_studio_v3.frontend.api_client import ApiClient, ProjectSummary
 class ProjectConfigPage(QWidget):
     projectConfigChanged = Signal(object)
 
-    def __init__(self, api: ApiClient, project: ProjectSummary, parent: QWidget | None = None) -> None:
+    def __init__(self, api: ApiClient, project: ProjectSummary, parent: QWidget | None = None, *, read_only: bool = False) -> None:
         super().__init__(parent)
         self.api = api
         self.project = project
+        self.read_only = read_only
         self.config_select = QComboBox()
         self.configs: list[dict] = []
         self.project_yaml = QPlainTextEdit()
@@ -30,7 +31,7 @@ class ProjectConfigPage(QWidget):
         content = QWidget()
         content.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout = QVBoxLayout(content)
-        title = QLabel(f"Project Config: {self.project.key}")
+        self.title = QLabel(self._title_text())
         refresh = QPushButton("Refresh From Project")
         refresh.clicked.connect(self.refresh)
         refresh_library = QPushButton("Refresh Library")
@@ -41,21 +42,25 @@ class ProjectConfigPage(QWidget):
         preview.clicked.connect(self.preview)
         save = QPushButton("Save Project Config")
         save.clicked.connect(self.save)
+        self.project_yaml.setReadOnly(self.read_only)
+        self.dataset_yaml.setReadOnly(True)
 
         tabs = QTabWidget()
         tabs.addTab(self.project_yaml, "project_config.yaml")
         tabs.addTab(self.dataset_yaml, "dataset_config.yaml")
 
         buttons = QHBoxLayout()
-        buttons.addWidget(QLabel("Library config"))
-        buttons.addWidget(self.config_select, 2)
-        buttons.addWidget(refresh_library)
-        buttons.addWidget(load_config)
+        if not self.read_only:
+            buttons.addWidget(QLabel("Library config"))
+            buttons.addWidget(self.config_select, 2)
+            buttons.addWidget(refresh_library)
+            buttons.addWidget(load_config)
         buttons.addWidget(refresh)
         buttons.addWidget(preview)
-        buttons.addWidget(save)
+        if not self.read_only:
+            buttons.addWidget(save)
 
-        layout.addWidget(title)
+        layout.addWidget(self.title)
         layout.addLayout(buttons)
         layout.addWidget(tabs)
         layout.addWidget(self.status)
@@ -82,6 +87,15 @@ class ProjectConfigPage(QWidget):
                 self.config_select.setCurrentIndex(index)
         self.config_select.blockSignals(False)
 
+    def on_project_config_changed(self, project: ProjectSummary | None) -> None:
+        if project is not None:
+            self.project = project
+        self.title.setText(self._title_text())
+        self.refresh()
+
+    def _title_text(self) -> str:
+        return f"Project Config: {self.project.key}" + (" (read only)" if self.read_only else "")
+
     def refresh(self) -> None:
         try:
             project_config = self.api.get_project_config(self.project.key)
@@ -92,9 +106,13 @@ class ProjectConfigPage(QWidget):
         self.project_yaml.setPlainText(yaml.safe_dump(project_config, sort_keys=False, allow_unicode=True))
         self.dataset_yaml.setPlainText(yaml.safe_dump(dataset_config, sort_keys=False, allow_unicode=True))
         self.status.setText("Loaded project_config.yaml and dataset_config.yaml")
-        self.refresh_library()
+        if not self.read_only:
+            self.refresh_library()
 
     def load_config_into_project(self) -> None:
+        if self.read_only:
+            self.status.setText("Project config is read only in this view.")
+            return
         config_id = str(self.config_select.currentData() or "")
         if not config_id:
             QMessageBox.information(self, "Load Config", "Select a library config first.")
@@ -125,6 +143,9 @@ class ProjectConfigPage(QWidget):
         self.status.setText(str(result))
 
     def save(self) -> None:
+        if self.read_only:
+            self.status.setText("Project config is read only in this view.")
+            return
         if self.project.has_recorded_data:
             QMessageBox.warning(
                 self,

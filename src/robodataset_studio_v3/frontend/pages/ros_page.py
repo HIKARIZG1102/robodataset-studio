@@ -39,7 +39,7 @@ class RosPage(BasePage):
         save.clicked.connect(self.apply_selection_to_config)
         node_info = QPushButton("Node Details")
         node_info.clicked.connect(self.node_details)
-        controls.addWidget(QLabel("Use the top toolbar Refresh Graph button to update the global ROS graph."))
+        controls.addWidget(QLabel("Use the top toolbar Refresh ROS Graph button to update the global ROS graph."))
         controls.addWidget(save)
         controls.addStretch(1)
 
@@ -103,7 +103,7 @@ class RosPage(BasePage):
         self._selected_topics_changed()
         if not topics:
             error_text = self._graph_error_summary(graph)
-            self.status.setText(error_text or "No ROS topics found. Check ROS setup and running nodes, then Refresh Graph.")
+            self.status.setText(error_text or "No ROS topics found. Check ROS setup and running nodes, then Refresh ROS Graph.")
 
     def _configured_selected_topic_names(self) -> set[str]:
         return {str(topic.get("name") or topic.get("topic") or "") for topic in self._configured_selected_topic_rows()}

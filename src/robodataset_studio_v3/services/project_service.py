@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
+from datetime import datetime
 
 import yaml
 
@@ -23,6 +25,8 @@ class ProjectService:
             return []
         projects = []
         for path in sorted(item for item in self.root.iterdir() if item.is_dir()):
+            if path.name.startswith("."):
+                continue
             name, version = self._split_key(path.name)
             self._known_paths[path.name] = path
             projects.append(self._summary_for_path(path))
@@ -46,6 +50,39 @@ class ProjectService:
         name, version = self._split_key(key)
         self._known_paths[key] = path
         return self._summary_for_path(path)
+
+    def rename_project(self, key: str, new_key: str) -> ProjectSummary:
+        old_path = self.project_dir(key)
+        safe_key = self._safe_project_key(new_key)
+        new_path = old_path.parent / safe_key
+        if new_path.exists():
+            raise FileExistsError(f"project already exists: {safe_key}")
+        old_path.rename(new_path)
+        self._known_paths.pop(self._safe_part(key), None)
+        self._known_paths[safe_key] = new_path
+        name, version = self._split_key(safe_key)
+        meta = self._project_meta(new_path)
+        meta.setdefault("project", {})
+        meta["project"]["name"] = name
+        meta["project"]["version"] = version
+        (new_path / "project.yaml").write_text(yaml.safe_dump(meta, sort_keys=False, allow_unicode=True), encoding="utf-8")
+        return self._summary_for_path(new_path)
+
+    def delete_project(self, key: str) -> dict[str, str]:
+        path = self.project_dir(key)
+        deleted_root = path.parent / ".deleted_projects"
+        deleted_root.mkdir(exist_ok=True)
+        target = deleted_root / f"{path.name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        path.rename(target)
+        self._known_paths.pop(self._safe_part(key), None)
+        return {"status": "moved", "path": str(target)}
+
+    def permanently_delete_project(self, key: str) -> dict[str, str]:
+        path = self.project_dir(key)
+        self._ensure_deletable_project_path(path)
+        shutil.rmtree(path)
+        self._known_paths.pop(self._safe_part(key), None)
+        return {"status": "deleted", "path": str(path)}
 
     def create_project(self, request: ProjectCreateRequest) -> ProjectSummary:
         name = self._safe_part(request.name or "untitled_project")
@@ -130,6 +167,12 @@ class ProjectService:
         text = "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in value.strip())
         return text.strip("_-") or "untitled"
 
+    def _safe_project_key(self, value: str) -> str:
+        safe = self._safe_part(value)
+        if "_" not in safe:
+            safe = f"{safe}_v1"
+        return safe
+
     def _split_key(self, key: str) -> tuple[str, str]:
         if "_v" in key:
             name, version = key.rsplit("_", 1)
@@ -141,6 +184,16 @@ class ProjectService:
         if not path.is_absolute():
             path = repo_root() / path
         return path
+
+    def _ensure_deletable_project_path(self, path: Path) -> None:
+        resolved = path.resolve()
+        projects_root = self.root.resolve()
+        try:
+            resolved.relative_to(projects_root)
+        except ValueError as exc:
+            raise ValueError(f"refusing to permanently delete project outside project root: {resolved}") from exc
+        if resolved == projects_root or resolved.name.startswith("."):
+            raise ValueError(f"refusing to permanently delete protected path: {resolved}")
 
 
 project_service = ProjectService()

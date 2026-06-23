@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import Qt
@@ -18,6 +19,8 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -32,6 +35,11 @@ class ReviewPage(BasePage):
         self._review_rows: list[dict[str, Any]] = []
         self._visible_rows: list[dict[str, Any]] = []
         self._last_report: dict[str, Any] = {}
+        self.overview_tree = QTreeWidget()
+        self.overview_tree.setHeaderLabels(["Name", "Type", "Size"])
+        self.overview_detail = QPlainTextEdit()
+        self.overview_detail.setReadOnly(True)
+        self.overview_tree.currentItemChanged.connect(lambda item, _prev: self.show_overview_item(item))
 
         self.session_dir = QLineEdit()
         self.session_dir.setReadOnly(True)
@@ -71,24 +79,48 @@ class ReviewPage(BasePage):
         self.hdf5_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.hdf5_table.horizontalHeader().setStretchLastSection(True)
 
-        self.folder = QLineEdit()
-        self.folder.setReadOnly(True)
-        self.layout_table = QTableWidget(0, 4)
-        self.layout_table.setHorizontalHeaderLabels(["Path", "Status", "Issue", "Detail"])
-        self.layout_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
-        self.layout_table.horizontalHeader().setStretchLastSection(True)
-
         if project is not None:
             self.session_dir.setText(f"{project.path}/raw_sessions")
-            self.folder.setText(project.path)
             self.hdf5_path.setText(f"{project.path}/exports/calvin.hdf5")
 
         tabs = QTabWidget()
+        tabs.addTab(self._overview_tab(), "Overview")
         tabs.addTab(self._episode_tab(), "Episode Review")
         tabs.addTab(self._hdf5_tab(), "HDF5 Inspect")
-        tabs.addTab(self._layout_tab(), "CALVIN Layout")
         self.layout.addWidget(tabs, 1)
         self.finish_layout()
+
+    def on_project_config_changed(self, project: ProjectSummary | None) -> None:
+        self.project = project
+        self._review_rows = []
+        self._visible_rows = []
+        self.episodes.setRowCount(0)
+        self.detail.clear()
+        self.summary.clear()
+        self.hdf5_summary.clear()
+        self.hdf5_check_summary.clear()
+        self.hdf5_table.setRowCount(0)
+        if project is not None:
+            self.session_dir.setText(f"{project.path}/raw_sessions")
+            self.hdf5_path.setText(f"{project.path}/exports/calvin.hdf5")
+        self.refresh_overview()
+
+    def _overview_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        buttons = QHBoxLayout()
+        refresh = QPushButton("Refresh Overview")
+        refresh.clicked.connect(self.refresh_overview)
+        buttons.addWidget(refresh)
+        buttons.addStretch(1)
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(self.overview_tree)
+        splitter.addWidget(self.overview_detail)
+        splitter.setSizes([520, 620])
+        layout.addLayout(buttons)
+        layout.addWidget(splitter, 1)
+        self.refresh_overview()
+        return widget
 
     def _episode_tab(self) -> QWidget:
         widget = QWidget()
@@ -180,24 +212,6 @@ class ReviewPage(BasePage):
         layout.addWidget(self.hdf5_table, 1)
         return widget
 
-    def _layout_tab(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        form = QFormLayout()
-        form.addRow("Dataset/session folder", self._path_row(self.folder, self.browse_folder))
-        layout.addLayout(form)
-        buttons = QHBoxLayout()
-        scan = QPushButton("Scan CALVIN Layout")
-        scan.clicked.connect(self.scan_layout)
-        check = QPushButton("Run Layout Checks")
-        check.clicked.connect(self.check_layout)
-        buttons.addWidget(scan)
-        buttons.addWidget(check)
-        buttons.addStretch(1)
-        layout.addLayout(buttons)
-        layout.addWidget(self.layout_table, 1)
-        return widget
-
     def use_current_session(self) -> None:
         if self.project is not None:
             self.session_dir.setText(f"{self.project.path}/raw_sessions")
@@ -218,11 +232,87 @@ class ReviewPage(BasePage):
     def check_hdf5(self) -> None:
         self._post("/api/review/hdf5/check", {"hdf5_path": self.hdf5_path.text().strip()}, "HDF5 checked", self._finish_hdf5_check)
 
-    def scan_layout(self) -> None:
-        self._post("/api/review/layout/scan", {"folder": self.folder.text().strip()}, "Layout scanned", self._finish_layout_rows)
+    def refresh_overview(self) -> None:
+        self.overview_tree.clear()
+        if self.project is None:
+            return
+        root = Path(self.project.path)
+        if not root.exists():
+            return
+        root_item = QTreeWidgetItem([root.name, "dir", self._format_bytes(self._path_size(root, max_files=2000))])
+        root_item.setData(0, Qt.UserRole, str(root))
+        self.overview_tree.addTopLevelItem(root_item)
+        self._add_overview_children(root_item, root, depth=0)
+        root_item.setExpanded(True)
 
-    def check_layout(self) -> None:
-        self._post("/api/review/layout/check", {"folder": self.folder.text().strip()}, "Layout checked", self._finish_layout_rows)
+    def _add_overview_children(self, parent: QTreeWidgetItem, path: Path, *, depth: int) -> None:
+        if depth >= 4:
+            return
+        try:
+            children = sorted(path.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower()))
+        except Exception:
+            return
+        for child in children[:400]:
+            kind = "dir" if child.is_dir() else child.suffix.lstrip(".") or "file"
+            size = self._format_bytes(self._path_size(child, max_files=1000))
+            item = QTreeWidgetItem([child.name, kind, size])
+            item.setData(0, Qt.UserRole, str(child))
+            parent.addChild(item)
+            if child.is_dir():
+                self._add_overview_children(item, child, depth=depth + 1)
+
+    def show_overview_item(self, item: QTreeWidgetItem | None) -> None:
+        if item is None:
+            self.overview_detail.clear()
+            return
+        path = Path(str(item.data(0, Qt.UserRole) or ""))
+        if not path.exists():
+            self.overview_detail.clear()
+            return
+        if self.project is not None and not self._is_within_project(path):
+            self.overview_detail.setPlainText(f"path: {path}\n\noutside current project")
+            return
+        lines = [f"path: {path}", f"type: {'dir' if path.is_dir() else 'file'}", f"size: {self._format_bytes(self._path_size(path, max_files=2000))}"]
+        if path.is_file() and path.suffix.lower() in {".yaml", ".yml", ".json", ".txt"}:
+            try:
+                lines.extend(["", path.read_text(encoding="utf-8", errors="replace")[:20000]])
+            except Exception as exc:
+                lines.append(f"cannot read file: {exc}")
+        self.overview_detail.setPlainText("\n".join(lines))
+
+    def _path_size(self, path: Path, *, max_files: int = 10000) -> int:
+        try:
+            if path.is_file():
+                return path.stat().st_size
+            total = 0
+            count = 0
+            for item in path.rglob("*"):
+                if count >= max_files:
+                    break
+                if item.is_file():
+                    total += item.stat().st_size
+                    count += 1
+            return total
+        except Exception:
+            return 0
+
+    def _is_within_project(self, path: Path) -> bool:
+        if self.project is None:
+            return False
+        try:
+            path.resolve().relative_to(Path(self.project.path).resolve())
+            return True
+        except ValueError:
+            return False
+
+    @staticmethod
+    def _format_bytes(value: int) -> str:
+        size = float(value)
+        for unit in ["B", "KB", "MB", "GB", "TB"]:
+            if size < 1024:
+                return f"{int(size)} B" if unit == "B" else f"{size:.1f} {unit}"
+            size /= 1024
+        return f"{size:.1f} PB"
 
     def build_ai_review_prompt(self) -> None:
         report = self._last_report if self._last_report else {"episodes": self._review_rows, "total": len(self._review_rows)}
@@ -300,14 +390,6 @@ class ReviewPage(BasePage):
         rows = payload.get("rows", [])
         self._populate_issue_table(self.hdf5_table, rows if isinstance(rows, list) else [], ["scope", "status", "issue", "detail"])
         self.show_result(result, "HDF5 checked")
-
-    def _finish_layout_rows(self, result: object, error: object) -> None:
-        payload = self._payload_or_error(result, error)
-        if not payload:
-            return
-        rows = payload.get("rows", [])
-        self._populate_issue_table(self.layout_table, rows if isinstance(rows, list) else [], ["path", "status", "issue", "detail"])
-        self.show_result(result, "Layout updated")
 
     def _finish_ai_prompt(self, result: object, error: object) -> None:
         payload = self._payload_or_error(result, error)
@@ -492,9 +574,6 @@ class ReviewPage(BasePage):
         path, _ = QFileDialog.getOpenFileName(self, "Select HDF5 file", self.hdf5_path.text().strip(), "HDF5 (*.hdf5 *.h5);;All files (*)")
         if path:
             self.hdf5_path.setText(path)
-
-    def browse_folder(self) -> None:
-        self._browse_dir(self.folder, "Select CALVIN layout folder")
 
     def _browse_dir(self, target: QLineEdit, title: str) -> None:
         path = QFileDialog.getExistingDirectory(self, title, target.text().strip())

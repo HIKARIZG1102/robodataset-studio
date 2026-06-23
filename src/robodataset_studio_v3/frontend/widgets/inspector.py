@@ -164,6 +164,7 @@ class InspectorDock(QWidget):
         self.playback_fps.setValue(15)
         self.playback_fps.setSuffix(" fps")
         self._topic_types: dict[str, str] = {}
+        self._project_image_topics: list[str] = []
         self._workers: list[ApiWorker] = []
         self._processes: dict[str, QProcess] = {}
         self._closing = False
@@ -295,7 +296,7 @@ class InspectorDock(QWidget):
         topic_names = [str(item.get("name") or item.get("topic") or "") for item in topics]
         self._fill_combo(self.node, nodes)
         self._fill_combo(self.topic, topic_names)
-        self._fill_combo(self.image_topic, [name for name in topic_names if self._topic_types.get(name) == "sensor_msgs/msg/Image"])
+        self._fill_combo(self.image_topic, self._image_topic_names(topic_names))
         if topic_names:
             self._append(self.echo_log, f"graph refreshed: {len(topic_names)} topics, {len(nodes)} nodes")
         else:
@@ -434,7 +435,11 @@ class InspectorDock(QWidget):
             self._append(self.preview_log, f"project monitor config error: {error}")
             return
         config = result if isinstance(result, dict) else {}
-        topic = self._first_project_image_topic(config)
+        project_topics = self._project_image_topics_from_config(config)
+        self._project_image_topics = project_topics
+        self._fill_combo(self.image_topic, self._image_topic_names(list(self._topic_types)))
+        current = self._selected_image_topic_name()
+        topic = current if self._is_monitorable_image_topic(current, project_topics) else self._first_project_image_topic(config)
         if not topic:
             self.preview_status.setText("preview error: current project config has no image topic")
             return
@@ -447,6 +452,13 @@ class InspectorDock(QWidget):
         self.start_image_preview()
 
     def _first_project_image_topic(self, config: dict[str, Any]) -> str:
+        topics = self._project_image_topics_from_config(config)
+        if topics:
+            return topics[0]
+        return ""
+
+    def _project_image_topics_from_config(self, config: dict[str, Any]) -> list[str]:
+        topics: list[str] = []
         streams = config.get("streams", [])
         if isinstance(streams, list):
             for item in streams:
@@ -455,18 +467,28 @@ class InspectorDock(QWidget):
                 message_type = str(item.get("message_type") or item.get("type") or "")
                 topic = str(item.get("topic") or "")
                 if topic and message_type == "sensor_msgs/msg/Image":
-                    return topic
+                    topics.append(topic)
             for item in streams:
                 if isinstance(item, dict) and item.get("topic"):
                     topic = str(item.get("topic") or "")
                     if self._topic_types.get(topic) == "sensor_msgs/msg/Image":
-                        return topic
+                        topics.append(topic)
         cameras = config.get("cameras", [])
         if isinstance(cameras, list):
             for item in cameras:
                 if isinstance(item, dict) and item.get("topic"):
-                    return str(item.get("topic"))
-        return ""
+                    topics.append(str(item.get("topic")))
+        return list(dict.fromkeys(topic for topic in topics if topic))
+
+    def _image_topic_names(self, graph_topic_names: list[str]) -> list[str]:
+        graph_images = [name for name in graph_topic_names if self._topic_types.get(name) == "sensor_msgs/msg/Image"]
+        return list(dict.fromkeys([*graph_images, *self._project_image_topics]))
+
+    def _is_monitorable_image_topic(self, topic: str, project_topics: list[str]) -> bool:
+        if not topic:
+            return False
+        topic_type = self._topic_types.get(topic, "")
+        return topic_type == "sensor_msgs/msg/Image" or topic in project_topics
 
     def stop_image_preview(self, clear_display: bool = True) -> None:
         process = self._preview_process
@@ -657,6 +679,17 @@ class InspectorDock(QWidget):
 
     def set_project(self, project: ProjectSummary | None) -> None:
         self.project = project
+        self._project_image_topics = []
+        if project is not None:
+            self._start_worker(self.api.get_dataset_config, self._finish_project_topics_config, project.key)
+
+    def _finish_project_topics_config(self, result: object, error: object) -> None:
+        if error is not None:
+            return
+        config = result if isinstance(result, dict) else {}
+        self._project_image_topics = self._project_image_topics_from_config(config)
+        self._fill_combo(self.image_topic, self._image_topic_names(list(self._topic_types)))
+        self.update_image_topic_type(self.image_topic.currentText())
 
     def stop_workers(self) -> None:
         self._closing = True
