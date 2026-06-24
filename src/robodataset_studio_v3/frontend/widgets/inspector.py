@@ -13,6 +13,7 @@ from PySide6.QtCore import QProcess, QProcessEnvironment, QTimer, Qt, QThreadPoo
 from PySide6.QtGui import QImage, QPainter, QPixmap, QTextCursor
 from PySide6.QtWidgets import (
     QComboBox,
+    QCheckBox,
     QHBoxLayout,
     QLabel,
     QPlainTextEdit,
@@ -162,6 +163,8 @@ class InspectorDock(QWidget):
         self.preview_fps = QLabel("preview fps: 0.0")
         self.camera_fps = QLabel("source fps: 0.0")
         self.sample = QLabel("sample: x=- y=- rgb=(-, -, -)")
+        self.auto_contrast = QCheckBox("Auto contrast preview")
+        self.auto_contrast.setChecked(True)
         self.playback_fps = QSpinBox()
         self.playback_fps.setRange(1, 120)
         self.playback_fps.setValue(15)
@@ -182,6 +185,7 @@ class InspectorDock(QWidget):
         self._last_source_fps_at = time.time()
         self._last_source_received = 0
         self._paused = False
+        self._low_light_warned = False
         self._preview_watchdog = QTimer(self)
         self._preview_watchdog.setSingleShot(True)
         self._preview_watchdog.timeout.connect(self._check_preview_started)
@@ -272,6 +276,7 @@ class InspectorDock(QWidget):
         controls.addWidget(stop)
         controls.addWidget(pause)
         controls.addWidget(stats)
+        controls.addWidget(self.auto_contrast)
         controls.addWidget(self.playback_fps)
         preview_row = QHBoxLayout()
         preview_row.addWidget(self.preview, 3)
@@ -439,6 +444,7 @@ class InspectorDock(QWidget):
         self._last_display_fps_at = time.time()
         self._last_source_fps_at = time.time()
         self._last_source_received = 0
+        self._low_light_warned = False
         self._paused = False
         process = QProcess(self)
         command = [
@@ -645,10 +651,35 @@ class InspectorDock(QWidget):
         self._latest_frame = frame
         self._latest_meta = meta
         self._latest_sequence = received
-        self.preview.set_frame(frame)
+        self._warn_if_low_light(frame, meta)
+        self.preview.set_frame(self._display_frame(frame))
         self._displayed_sequence = received
         self._displayed_frames += 1
         self._update_fps_labels()
+
+    def _display_frame(self, frame: np.ndarray) -> np.ndarray:
+        if not self.auto_contrast.isChecked():
+            return frame
+        values = frame.astype(np.float32)
+        low = float(np.percentile(values, 1))
+        high = float(np.percentile(values, 99))
+        if high <= low + 1.0:
+            return frame
+        return np.clip((values - low) * 255.0 / (high - low), 0, 255).astype(np.uint8)
+
+    def _warn_if_low_light(self, frame: np.ndarray, meta: dict[str, Any]) -> None:
+        luminance = 0.2126 * frame[:, :, 0] + 0.7152 * frame[:, :, 1] + 0.0722 * frame[:, :, 2]
+        mean = float(luminance.mean())
+        maximum = float(luminance.max())
+        meta["luminance_mean"] = round(mean, 2)
+        meta["luminance_max"] = round(maximum, 2)
+        if self._low_light_warned or mean >= 30.0:
+            return
+        self._low_light_warned = True
+        self._append(
+            self.preview_log,
+            f"low-light frame detected: luminance mean={mean:.1f}, max={maximum:.1f}; Auto contrast preview is display-only and does not change recorded data",
+        )
 
     def _frame_from_preview_payload(self, payload: dict[str, Any], meta: dict[str, Any]) -> np.ndarray | None:
         raw_rgb = str(payload.get("rgb_base64") or "")
@@ -696,7 +727,8 @@ class InspectorDock(QWidget):
             self._last_source_fps_at = now
         if self._latest_meta:
             self.image_meta.setText(
-                f"image: {self._latest_meta.get('width')}x{self._latest_meta.get('height')} {self._latest_meta.get('encoding')}"
+                f"image: {self._latest_meta.get('width')}x{self._latest_meta.get('height')} {self._latest_meta.get('encoding')} "
+                f"luma={self._latest_meta.get('luminance_mean', '-')}"
             )
 
     def toggle_pause(self) -> None:
