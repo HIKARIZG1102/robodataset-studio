@@ -180,7 +180,7 @@ class InspectorDock(QWidget):
         self.auto_contrast.setChecked(True)
         self.playback_fps = QSpinBox()
         self.playback_fps.setRange(1, 120)
-        self.playback_fps.setValue(15)
+        self.playback_fps.setValue(8)
         self.playback_fps.setSuffix(" fps")
         self._topic_types: dict[str, str] = {}
         self._project_image_topics: list[str] = []

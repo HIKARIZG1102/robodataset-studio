@@ -25,6 +25,7 @@ def main() -> None:
     parser.add_argument("--topic", required=True)
     parser.add_argument("--message-type", default="sensor_msgs/msg/Image")
     parser.add_argument("--max-fps", type=float, default=15.0)
+    parser.add_argument("--include-ppm", action="store_true")
     args = parser.parse_args()
 
     try:
@@ -59,16 +60,16 @@ def main() -> None:
             last_emit = now
             contiguous = np.ascontiguousarray(frame)
             h, w, _ = contiguous.shape
-            ppm = f"P6\n{w} {h}\n255\n".encode("ascii") + contiguous.tobytes()
             published += 1
-            emit(
-                {
-                    "type": "frame",
-                    "meta": {**meta, "rgb_width": int(w), "rgb_height": int(h), "published": int(published)},
-                    "rgb_base64": base64.b64encode(contiguous.tobytes()).decode("ascii"),
-                    "ppm_base64": base64.b64encode(ppm).decode("ascii"),
-                }
-            )
+            payload = {
+                "type": "frame",
+                "meta": {**meta, "rgb_width": int(w), "rgb_height": int(h), "published": int(published)},
+                "rgb_base64": base64.b64encode(contiguous.tobytes()).decode("ascii"),
+            }
+            if args.include_ppm:
+                ppm = f"P6\n{w} {h}\n255\n".encode("ascii") + contiguous.tobytes()
+                payload["ppm_base64"] = base64.b64encode(ppm).decode("ascii")
+            emit(payload)
 
         def on_image(msg: Image) -> None:
             nonlocal received, published, last_emit, last_status
