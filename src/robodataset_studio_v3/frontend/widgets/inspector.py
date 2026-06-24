@@ -180,7 +180,7 @@ class InspectorDock(QWidget):
         self.auto_contrast.setChecked(True)
         self.playback_fps = QSpinBox()
         self.playback_fps.setRange(1, 120)
-        self.playback_fps.setValue(8)
+        self.playback_fps.setValue(30)
         self.playback_fps.setSuffix(" fps")
         self._topic_types: dict[str, str] = {}
         self._project_image_topics: list[str] = []
@@ -197,6 +197,10 @@ class InspectorDock(QWidget):
         self._last_display_fps_at = time.time()
         self._last_source_fps_at = time.time()
         self._last_source_received = 0
+        self._source_fps_window_at = 0.0
+        self._source_fps_window_received = 0
+        self._max_observed_source_fps = 0.0
+        self._auto_tuning_fps = False
         self._paused = False
         self._low_light_warned = False
         self._preview_watchdog = QTimer(self)
@@ -463,6 +467,9 @@ class InspectorDock(QWidget):
         self._last_display_fps_at = time.time()
         self._last_source_fps_at = time.time()
         self._last_source_received = 0
+        self._source_fps_window_at = time.time()
+        self._source_fps_window_received = 0
+        self._max_observed_source_fps = 0.0
         self._low_light_warned = False
         self._paused = False
         process = QProcess(self)
@@ -651,6 +658,7 @@ class InspectorDock(QWidget):
             text = str(payload.get("text") or "")
             self.preview_status.setText(text)
             self._append(self.preview_log, text)
+            self._update_source_fps_from_status(payload)
             return
         if kind == "error":
             text = str(payload.get("error") or "preview error")
@@ -777,6 +785,35 @@ class InspectorDock(QWidget):
                 f"luma={self._latest_meta.get('luminance_mean', '-')}"
             )
 
+    def _update_source_fps_from_status(self, payload: dict[str, Any]) -> None:
+        received = int(payload.get("received", 0) or 0)
+        now = time.time()
+        if received <= 0:
+            self._source_fps_window_at = now
+            self._source_fps_window_received = received
+            return
+        if self._source_fps_window_at <= 0:
+            self._source_fps_window_at = now
+            self._source_fps_window_received = received
+            return
+        elapsed = now - self._source_fps_window_at
+        delta = received - self._source_fps_window_received
+        if elapsed < 2.0 or delta <= 0:
+            return
+        fps = delta / max(elapsed, 0.001)
+        self._source_fps_window_at = now
+        self._source_fps_window_received = received
+        if fps <= self._max_observed_source_fps + 0.05:
+            return
+        self._max_observed_source_fps = fps
+        target = max(1, int(round(fps)) - 1)
+        if target == self.playback_fps.value():
+            return
+        self._auto_tuning_fps = True
+        self.playback_fps.setValue(target)
+        self._auto_tuning_fps = False
+        self._append(self.preview_log, f"auto preview fps set to {target} from max observed source fps {fps:.1f}")
+
     def toggle_pause(self) -> None:
         self._paused = not self._paused
         self.preview_status.setText("preview: paused" if self._paused else "preview: playing")
@@ -805,6 +842,8 @@ class InspectorDock(QWidget):
         self.sample.setText(f"sample: x={x} y={y} rgb=({r}, {g}, {b})")
 
     def _update_display_timer(self) -> None:
+        if self._auto_tuning_fps:
+            return
         process = self._preview_process
         if process is not None:
             topic = self._selected_image_topic_name()
