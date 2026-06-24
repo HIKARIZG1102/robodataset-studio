@@ -84,6 +84,7 @@ def main() -> None:
                 {
                     "type": "frame",
                     "meta": {**meta, "rgb_width": int(w), "rgb_height": int(h), "published": int(published)},
+                    "rgb_base64": base64.b64encode(contiguous.tobytes()).decode("ascii"),
                     "ppm_base64": base64.b64encode(ppm).decode("ascii"),
                 }
             )

@@ -6,6 +6,7 @@ import shlex
 import sys
 import time
 from typing import Any
+import base64
 
 import numpy as np
 from PySide6.QtCore import QProcess, QProcessEnvironment, Qt, QThreadPool, Signal
@@ -574,16 +575,10 @@ class InspectorDock(QWidget):
         received = int(meta.get("received", 0) or 0)
         if received <= self._displayed_sequence:
             return
-        pixmap = QPixmap()
-        pixmap.loadFromData(__import__("base64").b64decode(str(payload.get("ppm_base64") or "")), "PPM")
-        if pixmap.isNull():
+        frame = self._frame_from_preview_payload(payload, meta)
+        if frame is None:
             self._append(self.preview_log, "preview frame decode failed")
             return
-        image = pixmap.toImage().convertToFormat(QImage.Format_RGB888)
-        width = image.width()
-        height = image.height()
-        ptr = image.constBits()
-        frame = np.frombuffer(ptr, dtype=np.uint8).reshape((height, image.bytesPerLine()))[:, : width * 3].reshape((height, width, 3)).copy()
         self._latest_frame = frame
         self._latest_meta = meta
         self._latest_sequence = received
@@ -591,6 +586,38 @@ class InspectorDock(QWidget):
         self._displayed_sequence = received
         self._displayed_frames += 1
         self._update_fps_labels()
+
+    def _frame_from_preview_payload(self, payload: dict[str, Any], meta: dict[str, Any]) -> np.ndarray | None:
+        raw_rgb = str(payload.get("rgb_base64") or "")
+        width = int(meta.get("rgb_width") or meta.get("width") or 0)
+        height = int(meta.get("rgb_height") or meta.get("height") or 0)
+        if raw_rgb and width > 0 and height > 0:
+            try:
+                data = base64.b64decode(raw_rgb)
+                expected = width * height * 3
+                if len(data) == expected:
+                    return np.frombuffer(data, dtype=np.uint8).reshape((height, width, 3)).copy()
+                self._append(self.preview_log, f"preview rgb payload has {len(data)} bytes, expected {expected}")
+            except Exception as exc:
+                self._append(self.preview_log, f"preview rgb decode failed: {exc}")
+
+        ppm = str(payload.get("ppm_base64") or "")
+        if not ppm:
+            return None
+        try:
+            image_data = base64.b64decode(ppm)
+        except Exception as exc:
+            self._append(self.preview_log, f"preview ppm base64 decode failed: {exc}")
+            return None
+        pixmap = QPixmap()
+        pixmap.loadFromData(image_data, "PPM")
+        if pixmap.isNull():
+            return None
+        image = pixmap.toImage().convertToFormat(QImage.Format_RGB888)
+        width = image.width()
+        height = image.height()
+        ptr = image.constBits()
+        return np.frombuffer(ptr, dtype=np.uint8).reshape((height, image.bytesPerLine()))[:, : width * 3].reshape((height, width, 3)).copy()
 
     def _update_fps_labels(self) -> None:
         now = time.time()
