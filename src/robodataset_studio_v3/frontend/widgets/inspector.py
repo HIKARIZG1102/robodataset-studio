@@ -186,6 +186,7 @@ class InspectorDock(QWidget):
         self._preview_watchdog.setSingleShot(True)
         self._preview_watchdog.timeout.connect(self._check_preview_started)
         self._build()
+        self._append(self.preview_log, "Inspector image monitor ready. Click Refresh topics, then Start image monitor.")
 
     def _build(self) -> None:
         layout = QVBoxLayout(self)
@@ -251,12 +252,14 @@ class InspectorDock(QWidget):
         controls = QHBoxLayout()
         project_monitor = QPushButton("Monitor project image")
         refresh = QPushButton("Refresh topics")
+        auto_start = QPushButton("Auto start first image")
         start = QPushButton("Start image monitor")
         stop = QPushButton("Stop image monitor")
         pause = QPushButton("Pause / Resume")
         stats = QPushButton("Frame stats")
         project_monitor.clicked.connect(self.start_project_image_monitor)
         refresh.clicked.connect(self.refresh_graph)
+        auto_start.clicked.connect(self.auto_start_first_image)
         start.clicked.connect(self.start_image_preview)
         stop.clicked.connect(self.stop_image_preview)
         pause.clicked.connect(self.toggle_pause)
@@ -264,6 +267,7 @@ class InspectorDock(QWidget):
         self.playback_fps.valueChanged.connect(self._update_display_timer)
         controls.addWidget(project_monitor)
         controls.addWidget(refresh)
+        controls.addWidget(auto_start)
         controls.addWidget(start)
         controls.addWidget(stop)
         controls.addWidget(pause)
@@ -288,6 +292,7 @@ class InspectorDock(QWidget):
 
     def refresh_graph(self) -> None:
         self._append(self.echo_log, "refreshing ROS graph...")
+        self._append(self.preview_log, "refreshing ROS graph for image topics...")
         self._start_worker(self.api.get, self._finish_graph, "/api/ros/graph", timeout=30.0)
 
     def _finish_graph(self, result: object, error: object) -> None:
@@ -305,13 +310,31 @@ class InspectorDock(QWidget):
         topic_names = [str(item.get("name") or item.get("topic") or "") for item in topics]
         self._fill_combo(self.node, nodes)
         self._fill_combo(self.topic, topic_names)
-        self._fill_combo(self.image_topic, self._image_topic_names(topic_names), keep_missing=False)
+        image_topics = self._image_topic_names(topic_names)
+        self._fill_combo(self.image_topic, image_topics, keep_missing=False)
         if topic_names:
             self._append(self.echo_log, f"graph refreshed: {len(topic_names)} topics, {len(nodes)} nodes")
         else:
             self._append(self.echo_log, self._graph_error_summary(graph) or f"graph refreshed: 0 topics, {len(nodes)} nodes")
+        if image_topics:
+            self._append(self.preview_log, "image topics: " + ", ".join(image_topics))
+            if not self._selected_image_topic_name():
+                self.image_topic.setCurrentIndex(0)
+        else:
+            summary = self._graph_error_summary(graph)
+            self._append(self.preview_log, summary or "no image topics found in current ROS graph")
         self.update_topic_type(self.topic.currentText())
         self.update_image_topic_type(self.image_topic.currentText())
+
+    def auto_start_first_image(self) -> None:
+        if self.image_topic.count() <= 0:
+            self._append(self.preview_log, "auto start requested but no image topic is loaded; refreshing graph")
+            self.refresh_graph()
+            return
+        self.image_topic.setCurrentIndex(0)
+        topic = self._selected_image_topic_name()
+        self._append(self.preview_log, f"auto start selected {topic}")
+        self.start_image_preview()
 
     def start_node_info(self) -> None:
         node = self.node.currentText().strip()
