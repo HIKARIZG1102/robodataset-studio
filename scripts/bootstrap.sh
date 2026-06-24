@@ -128,7 +128,7 @@ case "${ENV_BACKEND}" in
     ;;
 esac
 
-"${ENV_PYTHON}" -m pip install setuptools wheel || true
+"${ENV_PYTHON}" -m pip install --upgrade pip "setuptools>=68,<80" wheel || true
 if ! "${ENV_PYTHON}" -m pip install -e "${ROOT_DIR}[dev,upload]"; then
   echo "Editable install failed, retrying without build isolation." >&2
   "${ENV_PYTHON}" -m pip install --no-build-isolation -e "${ROOT_DIR}[dev,upload]"
