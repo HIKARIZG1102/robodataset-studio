@@ -5,6 +5,7 @@ import os
 import shlex
 import sys
 import time
+from pathlib import Path
 from typing import Any
 import base64
 
@@ -87,25 +88,34 @@ class ImagePreviewWidget(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self.setMouseTracking(True)
-        self.setMinimumHeight(280)
+        self.setMinimumSize(320, 240)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setStyleSheet("background-color: #101010; border: 1px solid #555;")
         self._frame: np.ndarray | None = None
         self._image: QImage | None = None
+        self._image_bytes: bytes = b""
         self._target_rect: tuple[int, int, int, int] | None = None
+        self._paint_count = 0
+        self._placeholder = "preview not started"
 
-    def set_frame(self, frame: np.ndarray) -> None:
+    def set_frame(self, frame: np.ndarray) -> bool:
         if frame.ndim != 3 or frame.shape[2] != 3:
-            return
-        contiguous = np.ascontiguousarray(frame)
+            return False
+        contiguous = np.ascontiguousarray(frame.astype(np.uint8, copy=False))
         h, w, _ = contiguous.shape
-        image = QImage(contiguous.data, w, h, contiguous.strides[0], QImage.Format_RGB888)
+        self._image_bytes = contiguous.tobytes()
+        image = QImage(self._image_bytes, w, h, w * 3, QImage.Format_RGB888)
+        if image.isNull():
+            return False
         self._frame = contiguous.copy()
-        self._image = image.copy()
+        self._image = image.convertToFormat(QImage.Format_RGB888)
         self.update()
+        return True
 
     def clear_frame(self) -> None:
         self._frame = None
         self._image = None
+        self._image_bytes = b""
         self._target_rect = None
         self.update()
 
@@ -113,6 +123,8 @@ class ImagePreviewWidget(QWidget):
         painter = QPainter(self)
         painter.fillRect(self.rect(), Qt.black)
         if self._image is None or self._image.isNull():
+            painter.setPen(Qt.white)
+            painter.drawText(self.rect(), Qt.AlignCenter, self._placeholder)
             painter.end()
             return
         scaled = self._image.scaled(self.size(), Qt.KeepAspectRatio, Qt.FastTransformation)
@@ -120,6 +132,7 @@ class ImagePreviewWidget(QWidget):
         y = int((self.height() - scaled.height()) / 2)
         self._target_rect = (x, y, scaled.width(), scaled.height())
         painter.drawImage(x, y, scaled)
+        self._paint_count += 1
         painter.end()
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt API
@@ -189,6 +202,7 @@ class InspectorDock(QWidget):
         self._preview_watchdog = QTimer(self)
         self._preview_watchdog.setSingleShot(True)
         self._preview_watchdog.timeout.connect(self._check_preview_started)
+        self._auto_started_first_image = False
         self._build()
         self._append(self.preview_log, "Inspector image monitor ready. Click Refresh topics, then Start image monitor.")
 
@@ -325,6 +339,9 @@ class InspectorDock(QWidget):
             self._append(self.preview_log, "image topics: " + ", ".join(image_topics))
             if not self._selected_image_topic_name():
                 self.image_topic.setCurrentIndex(0)
+            if not self._auto_started_first_image and self._preview_process is None:
+                self._auto_started_first_image = True
+                QTimer.singleShot(250, self.auto_start_first_image)
         else:
             summary = self._graph_error_summary(graph)
             self._append(self.preview_log, summary or "no image topics found in current ROS graph")
@@ -436,6 +453,8 @@ class InspectorDock(QWidget):
         if not topic_type:
             self._append(self.preview_log, f"topic type for {topic} is unknown; assuming sensor_msgs/msg/Image")
         self.stop_image_preview(clear_display=False)
+        self.preview._placeholder = f"starting {topic}"
+        self.preview.update()
         self._latest_frame = None
         self._latest_meta = {}
         self._latest_sequence = 0
@@ -652,7 +671,11 @@ class InspectorDock(QWidget):
         self._latest_meta = meta
         self._latest_sequence = received
         self._warn_if_low_light(frame, meta)
-        self.preview.set_frame(self._display_frame(frame))
+        display_frame = self._display_frame(frame)
+        if not self.preview.set_frame(display_frame):
+            self._append(self.preview_log, "preview QImage creation failed for RGB888 display frame")
+            return
+        self._log_display_frame_stats(display_frame, meta)
         self._displayed_sequence = received
         self._displayed_frames += 1
         self._update_fps_labels()
@@ -679,6 +702,29 @@ class InspectorDock(QWidget):
         self._append(
             self.preview_log,
             f"low-light frame detected: luminance mean={mean:.1f}, max={maximum:.1f}; Auto contrast preview is display-only and does not change recorded data",
+        )
+
+    def _log_display_frame_stats(self, frame: np.ndarray, meta: dict[str, Any]) -> None:
+        published = int(meta.get("published", 0) or 0)
+        if published not in {1, 30, 120}:
+            return
+        luminance = 0.2126 * frame[:, :, 0] + 0.7152 * frame[:, :, 1] + 0.0722 * frame[:, :, 2]
+        path_text = ""
+        if published == 1:
+            try:
+                path = Path("/tmp/robodataset_inspector_display_frame.png")
+                self.preview._image.save(str(path), "PNG")
+                path_text = f"; saved display frame: {path}"
+            except Exception as exc:
+                path_text = f"; display frame save failed: {exc}"
+        self._append(
+            self.preview_log,
+            "display frame stats: "
+            f"shape={frame.shape[1]}x{frame.shape[0]} "
+            f"rgb_mean={frame.mean(axis=(0, 1)).round(1).tolist()} "
+            f"luma_mean={float(luminance.mean()):.1f} luma_max={float(luminance.max()):.1f} "
+            f"widget={self.preview.width()}x{self.preview.height()} paints={self.preview._paint_count}"
+            + path_text,
         )
 
     def _frame_from_preview_payload(self, payload: dict[str, Any], meta: dict[str, Any]) -> np.ndarray | None:
