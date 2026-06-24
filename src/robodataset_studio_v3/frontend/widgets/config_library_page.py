@@ -34,6 +34,7 @@ from robodataset_studio_v3.frontend.ui_helpers import make_path_field
 from robodataset_studio_v3.frontend.worker import ApiWorker
 from robodataset_studio_v3.frontend.widgets.topic_tree import TopicTreeWidget
 from robodataset_studio_v3.ros.image_conversion import is_image_message_type
+from robodataset_studio_v3.ros.message_conversion import message_type_to_stream_defaults, unsupported_message_type_warning
 from robodataset_studio_v3.services.config_service import ConfigService
 
 
@@ -709,6 +710,7 @@ class ConfigLibraryPage(QWidget):
         used_stream_names: set[str] = set()
         used_state_names: set[str] = set()
         primary_state_name = ""
+        unsupported_topics: list[str] = []
         for topic in selected:
             name = str(topic.get("topic") or topic.get("name") or "")
             msg_type = str(topic.get("type") or topic.get("message_type") or "")
@@ -731,8 +733,17 @@ class ConfigLibraryPage(QWidget):
                 if not primary_state_name:
                     primary_state_name = state_name
                 state_keys.append({"name": state_name, "source_topic": name, "type": msg_type, "output_dim": int(self.robot_joint_count.value()), "fields": ["joint_position"], "joint_order": self.split_csv(self.robot_joint_order.text())})
+            else:
+                defaults = message_type_to_stream_defaults(msg_type, name)
+                if defaults is None:
+                    unsupported_topics.append(unsupported_message_type_warning(name, msg_type))
+                    continue
+                stream_name = self.unique_name(self.generic_stream_name_from_topic(name, len(streams)), used_stream_names)
+                used_stream_names.add(stream_name)
+                streams.append({"name": stream_name, "source": "ros2_topic", "topic": name, "message_type": msg_type, **defaults})
         dataset["cameras"] = cameras
         dataset["streams"] = streams
+        dataset.setdefault("warnings", {})["unsupported_topics"] = unsupported_topics
         dataset.setdefault("state", {})["keys"] = state_keys
         dataset.setdefault("robot", {})["joint_state_topic"] = joint_topic
         dataset.setdefault("action", {})
@@ -1242,6 +1253,11 @@ class ConfigLibraryPage(QWidget):
         parts = [part for part in lower.split("/") if part and part not in {"joint_states", "joint_state"}]
         suffix = parts[-1] if parts else str(index)
         return "robot_obs_" + re.sub(r"[^a-z0-9_]+", "_", suffix).strip("_")
+
+    def generic_stream_name_from_topic(self, topic: str, index: int) -> str:
+        del index
+        clean = re.sub(r"[^a-zA-Z0-9_]+", "_", topic.strip("/")).strip("_").lower()
+        return clean or "ros_stream"
 
     def unique_name(self, base: str, used: set[str]) -> str:
         name = base or "stream"

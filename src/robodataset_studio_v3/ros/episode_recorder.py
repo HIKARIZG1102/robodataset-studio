@@ -13,6 +13,11 @@ import numpy as np
 
 from robodataset_studio_v3.core.runtime_env import apply_ros_environment, select_rmw
 from robodataset_studio_v3.ros.image_conversion import compressed_image_to_rgb, image_bytes_to_array, is_image_message_type
+from robodataset_studio_v3.ros.message_conversion import (
+    is_supported_generic_message_type,
+    ros_message_to_array,
+    unsupported_message_type_warning,
+)
 
 
 @dataclass
@@ -40,13 +45,31 @@ class RosEpisodeRecorder:
             for stream in config.get("streams", [])
             if stream.get("source") == "ros2_topic" and is_image_message_type(str(stream.get("message_type") or ""))
         ]
-        if not image_streams:
-            raise RuntimeError("collection_config.yaml has no ROS image streams")
+        generic_streams = [
+            stream
+            for stream in config.get("streams", [])
+            if stream.get("source") == "ros2_topic"
+            and not is_image_message_type(str(stream.get("message_type") or ""))
+            and str(stream.get("message_type") or "") != "sensor_msgs/msg/JointState"
+        ]
+        unsupported_streams = [
+            stream
+            for stream in generic_streams
+            if not is_supported_generic_message_type(str(stream.get("message_type") or ""))
+        ]
+        if unsupported_streams:
+            details = [
+                unsupported_message_type_warning(str(stream.get("topic") or stream.get("name") or ""), str(stream.get("message_type") or ""))
+                for stream in unsupported_streams
+            ]
+            raise RuntimeError("; ".join(details))
         joint_streams = [
             key
             for key in config.get("state", {}).get("keys", [])
             if key.get("type") == "sensor_msgs/msg/JointState" and key.get("source_topic")
         ]
+        if not image_streams and not generic_streams and not joint_streams:
+            raise RuntimeError("collection_config.yaml has no supported ROS streams")
 
         recording = config.get("recording", {})
         sample_rate = float(recording.get("sample_rate_hz") or 10)
@@ -63,15 +86,16 @@ class RosEpisodeRecorder:
             duration = float(duration_sec if duration_sec is not None else recording.get("episode_duration_sec") or 2.0)
             steps = max(int(round(sample_rate * duration)), min_steps)
 
-        frames, states = self._capture_streams(
+        frames, states, diagnostics = self._capture_streams(
             image_streams,
             joint_streams,
+            generic_streams,
             steps,
             sample_rate,
             min_steps=min_steps,
             cancel_event=cancel_event,
         )
-        warnings: list[str] = []
+        warnings: list[str] = list(diagnostics.get("warnings", []))
         arrays: dict[str, np.ndarray] = {}
         for stream in image_streams:
             name = str(stream.get("name") or stream.get("topic") or "image").strip("/")
@@ -81,9 +105,17 @@ class RosEpisodeRecorder:
                 warnings.append(f"no frames captured for {name}")
                 continue
             arrays[output_key] = np.stack(stream_frames, axis=0)
-
-        if not arrays:
-            raise RuntimeError("no image frames were captured from configured ROS2 streams")
+        for stream in generic_streams:
+            name = str(stream.get("name") or stream.get("topic") or "stream").strip("/")
+            output_key = self._stream_output_key(stream)
+            values = frames.get(name, [])
+            if not values:
+                warnings.append(f"no messages captured for {name} [{stream.get('message_type', '')}]")
+                continue
+            try:
+                arrays[output_key] = np.stack(values, axis=0)
+            except ValueError as exc:
+                raise RuntimeError(f"inconsistent sample shape for {name} [{stream.get('message_type', '')}]: {exc}") from exc
 
         captured_state_names: list[str] = []
         for stream in joint_streams:
@@ -94,6 +126,9 @@ class RosEpisodeRecorder:
                 captured_state_names.append(name)
             else:
                 warnings.append(f"no JointState messages captured for {stream.get('source_topic')}")
+
+        if not arrays:
+            raise RuntimeError("no samples were captured from configured ROS2 streams; " + "; ".join(warnings))
 
         actual_steps = min(array.shape[0] for array in arrays.values())
         for name, array in list(arrays.items()):
@@ -112,11 +147,12 @@ class RosEpisodeRecorder:
             arrays["rel_actions"] = actions
             arrays["actions"] = actions.copy()
 
-        metadata = self._metadata_payload(config, actual_steps, image_streams, joint_streams, warnings)
+        metadata = self._metadata_payload(config, actual_steps, image_streams, joint_streams, generic_streams, warnings)
         metadata["steps"] = actual_steps
         metadata["captured_streams"] = list(arrays)
         metadata["state_topics"] = [stream.get("source_topic", "") for stream in joint_streams]
         metadata["warnings"] = warnings
+        metadata["diagnostics"] = self._json_clean(diagnostics)
         metadata["source"] = "ros2_listener"
         metadata["mock"] = False
         metadata["runtime"] = config.get("runtime", {})
@@ -133,6 +169,7 @@ class RosEpisodeRecorder:
             "instruction": config.get("instruction", {}),
             "dataset": config.get("dataset", {}),
             "warnings": warnings,
+            "diagnostics": self._json_clean(diagnostics),
         }
         metadata.setdefault("legacy", legacy_metadata)
         episodes_dir.mkdir(parents=True, exist_ok=True)
@@ -163,7 +200,8 @@ class RosEpisodeRecorder:
             if not stream.get("name"):
                 stream["name"] = stream.get("calvin_key") or str(stream.get("topic", "image")).strip("/").replace("/", "_")
             modality = str(stream.get("modality") or "").lower()
-            if not stream.get("calvin_key") and modality != "depth":
+            message_type = str(stream.get("message_type") or "")
+            if not stream.get("calvin_key") and is_image_message_type(message_type) and modality not in {"depth", "generic"}:
                 stream["calvin_key"] = stream.get("name")
             stream.setdefault("source", "ros2_topic")
 
@@ -194,6 +232,7 @@ class RosEpisodeRecorder:
         actual_steps: int,
         image_streams: list[dict],
         joint_streams: list[dict],
+        generic_streams: list[dict],
         warnings: list[str],
     ) -> dict:
         project = self._json_clean(config.get("project", {}))
@@ -221,6 +260,7 @@ class RosEpisodeRecorder:
             "selected": {
                 "image_topics": [stream.get("topic", "") for stream in image_streams],
                 "state_topics": [stream.get("source_topic", "") for stream in joint_streams],
+                "generic_topics": [stream.get("topic", "") for stream in generic_streams],
             },
             "stats": {
                 "synchronized_samples": int(actual_steps),
@@ -366,12 +406,13 @@ class RosEpisodeRecorder:
         self,
         image_streams: list[dict],
         joint_streams: list[dict],
+        generic_streams: list[dict],
         steps: int | None,
         sample_rate: float,
         *,
         min_steps: int = 1,
         cancel_event: Event | None = None,
-    ) -> tuple[dict[str, list[np.ndarray]], dict[str, list[np.ndarray]]]:
+    ) -> tuple[dict[str, list[np.ndarray]], dict[str, list[np.ndarray]], dict[str, object]]:
         if os.environ.get("ROBODATASET_DISABLE_FASTDDS_SHM", "1") == "1":
             profile = Path(__file__).resolve().parents[3] / "config" / "fastdds_no_shm.xml"
             if profile.exists():
@@ -383,6 +424,7 @@ class RosEpisodeRecorder:
         import rclpy
         from rclpy.executors import SingleThreadedExecutor
         from rclpy.qos import qos_profile_sensor_data
+        from rosidl_runtime_py.utilities import get_message
         from sensor_msgs.msg import CompressedImage
         from sensor_msgs.msg import Image
         from sensor_msgs.msg import JointState
@@ -394,8 +436,23 @@ class RosEpisodeRecorder:
         executor.add_node(node)
         latest: dict[str, tuple[bytes, dict[str, object]]] = {}
         captured: dict[str, list[np.ndarray]] = {str(stream.get("name") or stream.get("topic")): [] for stream in image_streams}
+        latest_generic: dict[str, object] = {}
+        captured_generic: dict[str, list[np.ndarray]] = {str(stream.get("name") or stream.get("topic")): [] for stream in generic_streams}
         latest_states: dict[str, np.ndarray] = {}
         captured_states: dict[str, list[np.ndarray]] = {str(stream.get("name") or "robot_obs"): [] for stream in joint_streams}
+        diagnostics: dict[str, object] = {"warnings": [], "decode_errors": {}, "subscribed": []}
+
+        def warn_once(text: str) -> None:
+            warnings_list = diagnostics.setdefault("warnings", [])
+            if isinstance(warnings_list, list) and text not in warnings_list:
+                warnings_list.append(text)
+
+        def add_decode_error(stream_name: str, text: str) -> None:
+            errors = diagnostics.setdefault("decode_errors", {})
+            if isinstance(errors, dict):
+                values = errors.setdefault(stream_name, [])
+                if isinstance(values, list) and text not in values:
+                    values.append(text)
 
         def make_callback(stream_name: str):
             def on_image(msg: Image) -> None:
@@ -440,6 +497,12 @@ class RosEpisodeRecorder:
 
             return on_joint_state
 
+        def make_generic_callback(stream_name: str):
+            def on_message(msg: object) -> None:
+                latest_generic[stream_name] = msg
+
+            return on_message
+
         try:
             for stream in image_streams:
                 stream_name = str(stream.get("name") or stream.get("topic"))
@@ -449,6 +512,20 @@ class RosEpisodeRecorder:
                         node.create_subscription(CompressedImage, topic, make_compressed_callback(stream_name), qos_profile_sensor_data)
                     else:
                         node.create_subscription(Image, topic, make_callback(stream_name), qos_profile_sensor_data)
+                    diagnostics["subscribed"].append({"stream": stream_name, "topic": topic, "message_type": stream.get("message_type", "")})
+            for stream in generic_streams:
+                stream_name = str(stream.get("name") or stream.get("topic"))
+                topic = str(stream.get("topic") or "")
+                message_type = str(stream.get("message_type") or "")
+                if not topic:
+                    warn_once(f"generic stream {stream_name} has no topic")
+                    continue
+                try:
+                    msg_cls = get_message(message_type)
+                except Exception as exc:
+                    raise RuntimeError(f"cannot load ROS message class for {topic} [{message_type}]: {exc}") from exc
+                node.create_subscription(msg_cls, topic, make_generic_callback(stream_name), qos_profile_sensor_data)
+                diagnostics["subscribed"].append({"stream": stream_name, "topic": topic, "message_type": message_type})
             for stream in joint_streams:
                 stream_name = str(stream.get("name") or "robot_obs")
                 topic = str(stream.get("source_topic") or "")
@@ -462,6 +539,7 @@ class RosEpisodeRecorder:
                         make_joint_callback(stream_name, output_dim, fields, joint_order),
                         qos_profile_sensor_data,
                     )
+                    diagnostics["subscribed"].append({"stream": stream_name, "topic": topic, "message_type": "sensor_msgs/msg/JointState"})
 
             deadline = time.time() + (max(steps / max(sample_rate, 1.0) + 3.0, 5.0) if steps is not None else 24 * 60 * 60)
             next_sample_at = time.time()
@@ -484,14 +562,32 @@ class RosEpisodeRecorder:
                     )
                     if frame is not None:
                         captured[stream_name].append(frame)
+                    else:
+                        add_decode_error(
+                            stream_name,
+                            f"image decode failed for encoding={meta.get('encoding') or meta.get('format')} type={meta.get('message_type')}",
+                        )
+                for stream in generic_streams:
+                    stream_name = str(stream.get("name") or stream.get("topic"))
+                    message = latest_generic.get(stream_name)
+                    if message is None:
+                        continue
+                    result = ros_message_to_array(message, str(stream.get("message_type") or ""))
+                    if result.array is not None:
+                        captured_generic[stream_name].append(result.array)
+                    if result.error:
+                        add_decode_error(stream_name, result.error)
+                    if result.warning:
+                        warn_once(result.warning)
                 for stream_name in list(captured_states):
                     state = latest_states.get(stream_name)
                     if state is not None:
                         captured_states[stream_name].append(state.copy())
                 target = steps if steps is not None else min_steps
                 image_ready = all(len(values) >= target for values in captured.values() if values is not None)
+                generic_ready = all(len(values) >= target for values in captured_generic.values() if values is not None)
                 state_ready = all(len(values) >= target for values in captured_states.values() if values is not None)
-                if steps is not None and image_ready and state_ready:
+                if steps is not None and image_ready and generic_ready and state_ready:
                     break
                 next_sample_at = now + 1.0 / max(sample_rate, 1.0)
         finally:
@@ -502,7 +598,13 @@ class RosEpisodeRecorder:
             node.destroy_node()
             context.try_shutdown()
 
-        return captured, captured_states
+        for stream in generic_streams:
+            stream_name = str(stream.get("name") or stream.get("topic"))
+            captured[stream_name] = captured_generic.get(stream_name, [])
+        for stream_name, errors in (diagnostics.get("decode_errors", {}) if isinstance(diagnostics.get("decode_errors"), dict) else {}).items():
+            if errors:
+                warn_once(f"{stream_name}: " + "; ".join(str(item) for item in errors[:3]))
+        return captured, captured_states, diagnostics
 
 
 def joint_state_to_robot_obs(

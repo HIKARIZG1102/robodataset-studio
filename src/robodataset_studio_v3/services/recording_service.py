@@ -15,6 +15,7 @@ import yaml
 from robodataset_studio_v3.services.config_service import ConfigService
 from robodataset_studio_v3.core.runtime_env import apply_ros_environment, default_ros_setup
 from robodataset_studio_v3.ros.image_conversion import is_image_message_type
+from robodataset_studio_v3.ros.message_conversion import is_supported_generic_message_type, unsupported_message_type_warning
 from robodataset_studio_v3.services.project_service import project_service
 from robodataset_studio_v3.services.ros_service import ros_service
 from robodataset_studio_v3.services.task_service import task_service
@@ -40,6 +41,18 @@ class RecordingService:
         requires_actions = bool(dataset.get("requires_actions", True))
         if requires_actions and not state_keys:
             warnings.append("dataset requires actions but no JointState state key is configured; recording will use placeholder robot_obs/actions")
+        config_warnings = dataset_config.get("warnings", {}) if isinstance(dataset_config.get("warnings"), dict) else {}
+        unsupported_config_topics = config_warnings.get("unsupported_topics", [])
+        if isinstance(unsupported_config_topics, list):
+            warnings.extend(str(item) for item in unsupported_config_topics if item)
+        for stream in streams if isinstance(streams, list) else []:
+            if not isinstance(stream, dict):
+                continue
+            msg_type = str(stream.get("message_type") or "")
+            topic = str(stream.get("topic") or stream.get("name") or "")
+            if is_image_message_type(msg_type) or msg_type == "sensor_msgs/msg/JointState" or is_supported_generic_message_type(msg_type):
+                continue
+            warnings.append(unsupported_message_type_warning(topic, msg_type))
         topic_checks = []
         topics: list[str] = []
         for stream in streams if isinstance(streams, list) else []:
