@@ -9,7 +9,7 @@ from typing import Any
 import base64
 
 import numpy as np
-from PySide6.QtCore import QProcess, QProcessEnvironment, Qt, QThreadPool, Signal
+from PySide6.QtCore import QProcess, QProcessEnvironment, QTimer, Qt, QThreadPool, Signal
 from PySide6.QtGui import QImage, QPainter, QPixmap, QTextCursor
 from PySide6.QtWidgets import (
     QComboBox,
@@ -182,6 +182,9 @@ class InspectorDock(QWidget):
         self._last_source_fps_at = time.time()
         self._last_source_received = 0
         self._paused = False
+        self._preview_watchdog = QTimer(self)
+        self._preview_watchdog.setSingleShot(True)
+        self._preview_watchdog.timeout.connect(self._check_preview_started)
         self._build()
 
     def _build(self) -> None:
@@ -247,17 +250,20 @@ class InspectorDock(QWidget):
         self.image_topic.currentTextChanged.connect(self.update_image_topic_type)
         controls = QHBoxLayout()
         project_monitor = QPushButton("Monitor project image")
+        refresh = QPushButton("Refresh topics")
         start = QPushButton("Start image monitor")
         stop = QPushButton("Stop image monitor")
         pause = QPushButton("Pause / Resume")
         stats = QPushButton("Frame stats")
         project_monitor.clicked.connect(self.start_project_image_monitor)
+        refresh.clicked.connect(self.refresh_graph)
         start.clicked.connect(self.start_image_preview)
         stop.clicked.connect(self.stop_image_preview)
         pause.clicked.connect(self.toggle_pause)
         stats.clicked.connect(self.show_frame_stats)
         self.playback_fps.valueChanged.connect(self._update_display_timer)
         controls.addWidget(project_monitor)
+        controls.addWidget(refresh)
         controls.addWidget(start)
         controls.addWidget(stop)
         controls.addWidget(pause)
@@ -390,11 +396,17 @@ class InspectorDock(QWidget):
     def start_image_preview(self) -> None:
         topic = self._selected_image_topic_name()
         if not topic:
+            self.preview_status.setText("preview error: no image topic selected")
+            self._append(self.preview_log, "no image topic selected; click Refresh topics and choose an image topic")
+            self.refresh_graph()
             return
         topic_type = self._topic_types.get(topic, "")
         if topic_type and not is_image_message_type(topic_type):
             self.preview_status.setText(f"preview error: expected image topic, got {topic_type}")
+            self._append(self.preview_log, f"refusing non-image topic {topic} [{topic_type}]")
             return
+        if not topic_type:
+            self._append(self.preview_log, f"topic type for {topic} is unknown; assuming sensor_msgs/msg/Image")
         self.stop_image_preview(clear_display=False)
         self._latest_frame = None
         self._latest_meta = {}
@@ -424,11 +436,15 @@ class InspectorDock(QWidget):
         process.setProcessEnvironment(self._process_environment())
         process.readyReadStandardOutput.connect(self._read_preview_stdout)
         process.readyReadStandardError.connect(self._read_preview_stderr)
+        process.started.connect(lambda item=topic: self._preview_process_started(item))
+        process.errorOccurred.connect(self._preview_process_error)
         process.finished.connect(self._preview_process_finished)
         self._preview_process = process
         self._preview_buffer = ""
         process.start()
+        self.preview_status.setText(f"preview: starting {topic}")
         self._append(self.preview_log, f"$ image-monitor subscribe {topic}")
+        self._preview_watchdog.start(5000)
 
     def start_project_image_monitor(self) -> None:
         if self.project is None:
@@ -519,6 +535,7 @@ class InspectorDock(QWidget):
         process = self._preview_process
         self._preview_process = None
         if process is not None:
+            self._preview_watchdog.stop()
             process.terminate()
             if not process.waitForFinished(1500):
                 process.kill()
@@ -555,10 +572,30 @@ class InspectorDock(QWidget):
             self._append(self.preview_log, text)
 
     def _preview_process_finished(self, code: int, status) -> None:
+        self._preview_watchdog.stop()
         if self._preview_process is not None:
             self._append(self.preview_log, f"[preview exited] code={code} status={status}")
             self._preview_process = None
         self.preview_status.setText("preview: stopped")
+
+    def _preview_process_started(self, topic: str) -> None:
+        self._append(self.preview_log, f"preview process started for {topic}")
+
+    def _preview_process_error(self, error) -> None:
+        process = self._preview_process
+        detail = process.errorString() if process is not None else str(error)
+        self.preview_status.setText(f"preview error: process failed: {detail}")
+        self._append(self.preview_log, f"preview process error: {detail}")
+
+    def _check_preview_started(self) -> None:
+        if self._preview_process is None or self._latest_frame is not None:
+            return
+        topic = self._selected_image_topic_name()
+        self.preview_status.setText("preview warning: subscribed but no frame received yet")
+        self._append(
+            self.preview_log,
+            f"no image frame received after 5s for {topic or '(empty topic)'}; check topic selection, publisher, ROS_DOMAIN_ID, and RMW",
+        )
 
     def _handle_preview_payload(self, payload: dict[str, Any]) -> None:
         kind = str(payload.get("type") or "")
