@@ -14,6 +14,7 @@ import yaml
 
 from robodataset_studio_v3.services.config_service import ConfigService
 from robodataset_studio_v3.core.runtime_env import apply_ros_environment, default_ros_setup
+from robodataset_studio_v3.ros.image_conversion import is_image_message_type
 from robodataset_studio_v3.services.project_service import project_service
 from robodataset_studio_v3.services.ros_service import ros_service
 from robodataset_studio_v3.services.task_service import task_service
@@ -251,7 +252,7 @@ class RecordingService:
             requires_actions = bool(dataset.get("requires_actions", True))
             transition_count = samples - 1 if requires_actions else samples
             streams = [item for item in dataset_config.get("streams", []) if isinstance(item, dict)]
-            image_streams = [item for item in streams if item.get("message_type") == "sensor_msgs/msg/Image"]
+            image_streams = [item for item in streams if is_image_message_type(str(item.get("message_type") or ""))]
             state_keys = [
                 item
                 for item in dataset_config.get("state", {}).get("keys", [])

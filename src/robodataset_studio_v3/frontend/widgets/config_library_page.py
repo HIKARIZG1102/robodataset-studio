@@ -33,6 +33,7 @@ from robodataset_studio_v3.frontend.api_client import ApiClient, ProjectSummary
 from robodataset_studio_v3.frontend.ui_helpers import make_path_field
 from robodataset_studio_v3.frontend.worker import ApiWorker
 from robodataset_studio_v3.frontend.widgets.topic_tree import TopicTreeWidget
+from robodataset_studio_v3.ros.image_conversion import is_image_message_type
 from robodataset_studio_v3.services.config_service import ConfigService
 
 
@@ -713,7 +714,7 @@ class ConfigLibraryPage(QWidget):
             msg_type = str(topic.get("type") or topic.get("message_type") or "")
             if not name:
                 continue
-            if msg_type == "sensor_msgs/msg/Image":
+            if is_image_message_type(msg_type):
                 stream_name = self.unique_name(self.stream_name_from_topic(name, len(streams)), used_stream_names)
                 used_stream_names.add(stream_name)
                 modality = self.image_modality_from_topic(name)
@@ -1047,7 +1048,7 @@ class ConfigLibraryPage(QWidget):
         if message_type == "sensor_msgs/msg/JointState":
             max_lines = 80
             max_chars = max(max_chars, min(max(stdout_budget, 4000), 100000))
-        elif message_type == "sensor_msgs/msg/Image":
+        elif is_image_message_type(message_type):
             max_lines = 16
             max_chars = max(1400, min(max(stdout_budget // 4, 1400), 20000))
         clean_lines = []

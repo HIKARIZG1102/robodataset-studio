@@ -18,6 +18,7 @@ from robodataset_studio_v3.frontend.api_client import ApiClient, ProjectSummary
 from robodataset_studio_v3.frontend.pages.base import BasePage
 from robodataset_studio_v3.frontend.worker import ApiWorker
 from robodataset_studio_v3.frontend.widgets.topic_tree import TopicTreeWidget
+from robodataset_studio_v3.ros.image_conversion import is_image_message_type
 
 
 class RosPage(BasePage):
@@ -185,7 +186,7 @@ class RosPage(BasePage):
         for topic in selected:
             name = topic.get("name", "")
             msg_type = topic.get("type", "")
-            if msg_type == "sensor_msgs/msg/Image":
+            if is_image_message_type(msg_type):
                 stream_name = self._stream_name_from_topic(name)
                 streams.append(
                     {

@@ -12,7 +12,7 @@ from uuid import uuid4
 import numpy as np
 
 from robodataset_studio_v3.core.runtime_env import apply_ros_environment, select_rmw
-from robodataset_studio_v3.ros.image_conversion import image_bytes_to_array
+from robodataset_studio_v3.ros.image_conversion import compressed_image_to_rgb, image_bytes_to_array, is_image_message_type
 
 
 @dataclass
@@ -38,10 +38,10 @@ class RosEpisodeRecorder:
         image_streams = [
             stream
             for stream in config.get("streams", [])
-            if stream.get("source") == "ros2_topic" and stream.get("message_type") == "sensor_msgs/msg/Image"
+            if stream.get("source") == "ros2_topic" and is_image_message_type(str(stream.get("message_type") or ""))
         ]
         if not image_streams:
-            raise RuntimeError("collection_config.yaml has no sensor_msgs/msg/Image streams")
+            raise RuntimeError("collection_config.yaml has no ROS image streams")
         joint_streams = [
             key
             for key in config.get("state", {}).get("keys", [])
@@ -383,6 +383,7 @@ class RosEpisodeRecorder:
         import rclpy
         from rclpy.executors import SingleThreadedExecutor
         from rclpy.qos import qos_profile_sensor_data
+        from sensor_msgs.msg import CompressedImage
         from sensor_msgs.msg import Image
         from sensor_msgs.msg import JointState
 
@@ -405,6 +406,21 @@ class RosEpisodeRecorder:
                         "width": int(msg.width),
                         "height": int(msg.height),
                         "step": int(msg.step),
+                        "is_bigendian": int(msg.is_bigendian),
+                        "message_type": "sensor_msgs/msg/Image",
+                    },
+                )
+
+            return on_image
+
+        def make_compressed_callback(stream_name: str):
+            def on_image(msg: CompressedImage) -> None:
+                latest[stream_name] = (
+                    bytes(msg.data),
+                    {
+                        "format": str(msg.format),
+                        "compressed_size": len(msg.data),
+                        "message_type": "sensor_msgs/msg/CompressedImage",
                     },
                 )
 
@@ -429,7 +445,10 @@ class RosEpisodeRecorder:
                 stream_name = str(stream.get("name") or stream.get("topic"))
                 topic = str(stream.get("topic") or "")
                 if topic:
-                    node.create_subscription(Image, topic, make_callback(stream_name), qos_profile_sensor_data)
+                    if stream.get("message_type") == "sensor_msgs/msg/CompressedImage":
+                        node.create_subscription(CompressedImage, topic, make_compressed_callback(stream_name), qos_profile_sensor_data)
+                    else:
+                        node.create_subscription(Image, topic, make_callback(stream_name), qos_profile_sensor_data)
             for stream in joint_streams:
                 stream_name = str(stream.get("name") or "robot_obs")
                 topic = str(stream.get("source_topic") or "")
@@ -458,7 +477,11 @@ class RosEpisodeRecorder:
                     if sample is None:
                         continue
                     data, meta = sample
-                    frame = image_bytes_to_array(data, meta)
+                    frame = (
+                        compressed_image_to_rgb(data, meta)
+                        if meta.get("message_type") == "sensor_msgs/msg/CompressedImage"
+                        else image_bytes_to_array(data, meta)
+                    )
                     if frame is not None:
                         captured[stream_name].append(frame)
                 for stream_name in list(captured_states):

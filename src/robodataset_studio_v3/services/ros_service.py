@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from robodataset_studio_v3.ros.image_conversion import image_bytes_to_rgb
+from robodataset_studio_v3.ros.image_conversion import compressed_image_to_rgb, image_bytes_to_rgb
 from robodataset_studio_v3.core.runtime_env import apply_ros_environment, available_rmw_implementations, default_ros_setup, select_rmw
 from robodataset_studio_v3.services.task_service import task_service
 
@@ -166,6 +166,7 @@ class RosService:
             import rclpy
             from rclpy.executors import SingleThreadedExecutor
             from rclpy.qos import qos_profile_sensor_data
+            from sensor_msgs.msg import CompressedImage
             from sensor_msgs.msg import Image
         except Exception as exc:
             return {"ok": False, "error": f"ROS image preview requires rclpy and sensor_msgs: {exc}"}
@@ -183,6 +184,7 @@ class RosService:
             def on_image(msg: Image) -> None:
                 captured["data"] = bytes(msg.data)
                 captured["meta"] = {
+                    "message_type": "sensor_msgs/msg/Image",
                     "height": int(msg.height),
                     "width": int(msg.width),
                     "encoding": str(msg.encoding),
@@ -190,22 +192,44 @@ class RosService:
                     "step": int(msg.step),
                 }
 
-            node.create_subscription(Image, topic, on_image, qos_profile_sensor_data)
+            def on_compressed_image(msg: CompressedImage) -> None:
+                captured["data"] = bytes(msg.data)
+                captured["meta"] = {
+                    "message_type": "sensor_msgs/msg/CompressedImage",
+                    "format": str(msg.format),
+                    "compressed_size": len(msg.data),
+                }
+
+            message_type = self._discover_topic_type(node, executor, topic, timeout=1.5)
+            if message_type == "sensor_msgs/msg/CompressedImage":
+                node.create_subscription(CompressedImage, topic, on_compressed_image, qos_profile_sensor_data)
+            else:
+                node.create_subscription(Image, topic, on_image, qos_profile_sensor_data)
             deadline = time.time() + timeout
             while time.time() < deadline and "data" not in captured:
                 executor.spin_once(timeout_sec=0.1)
             if "data" not in captured:
                 return {"ok": False, "error": f"no image received from {topic} before timeout"}
             meta = captured["meta"]
-            frame = image_bytes_to_rgb(captured["data"], meta)
+            frame = (
+                compressed_image_to_rgb(captured["data"], meta)
+                if meta.get("message_type") == "sensor_msgs/msg/CompressedImage"
+                else image_bytes_to_rgb(captured["data"], meta)
+            )
             if frame is None:
-                return {"ok": False, "error": f"unsupported image encoding: {meta.get('encoding')}", "meta": meta}
+                return {"ok": False, "error": f"unsupported image encoding: {meta.get('encoding') or meta.get('format')}", "meta": meta}
             height, width = int(frame.shape[0]), int(frame.shape[1])
             ppm = f"P6\n{width} {height}\n255\n".encode("ascii") + frame.tobytes()
             meta["rgb_width"] = width
             meta["rgb_height"] = height
             meta["mean_brightness"] = float(frame.mean())
-            return {"ok": True, "topic": topic, "meta": meta, "image_ppm_base64": base64.b64encode(ppm).decode("ascii")}
+            return {
+                "ok": True,
+                "topic": topic,
+                "meta": meta,
+                "image_rgb_base64": base64.b64encode(frame.tobytes()).decode("ascii"),
+                "image_ppm_base64": base64.b64encode(ppm).decode("ascii"),
+            }
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
         finally:
@@ -422,6 +446,18 @@ class RosService:
                     f"data_preview: {data}",
                 ]
             )
+        if msg_type == "sensor_msgs/msg/CompressedImage":
+            data = list(bytes(getattr(msg, "data", b""))[:32])
+            return "\n".join(
+                [
+                    "header:",
+                    f"  stamp: {getattr(getattr(msg, 'header', None), 'stamp', '')}",
+                    f"  frame_id: {getattr(getattr(msg, 'header', None), 'frame_id', '')}",
+                    f"format: {getattr(msg, 'format', '')}",
+                    f"data_length: {len(getattr(msg, 'data', []))}",
+                    f"data_preview: {data}",
+                ]
+            )
         try:
             from rosidl_runtime_py import message_to_yaml
 
@@ -439,6 +475,13 @@ class RosService:
                 "encoding": str(getattr(msg, "encoding", "") or ""),
                 "is_bigendian": int(getattr(msg, "is_bigendian", 0) or 0),
                 "step": int(getattr(msg, "step", 0) or 0),
+                "data_length": len(getattr(msg, "data", []) or []),
+            }
+        if msg_type == "sensor_msgs/msg/CompressedImage":
+            return {
+                "message_type": msg_type,
+                "header": self._header_structured(getattr(msg, "header", None)),
+                "format": str(getattr(msg, "format", "") or ""),
                 "data_length": len(getattr(msg, "data", []) or []),
             }
         if msg_type == "sensor_msgs/msg/JointState":

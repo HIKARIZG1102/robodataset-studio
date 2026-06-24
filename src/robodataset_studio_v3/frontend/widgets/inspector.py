@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 from robodataset_studio_v3.frontend.api_client import ApiClient, ProjectSummary
 from robodataset_studio_v3.frontend.worker import ApiWorker
 from robodataset_studio_v3.core.runtime_env import select_rmw
+from robodataset_studio_v3.ros.image_conversion import is_image_message_type
 
 
 class InspectorTerminal(QPlainTextEdit):
@@ -391,8 +392,8 @@ class InspectorDock(QWidget):
         if not topic:
             return
         topic_type = self._topic_types.get(topic, "")
-        if topic_type and topic_type != "sensor_msgs/msg/Image":
-            self.preview_status.setText(f"preview error: expected sensor_msgs/msg/Image, got {topic_type}")
+        if topic_type and not is_image_message_type(topic_type):
+            self.preview_status.setText(f"preview error: expected image topic, got {topic_type}")
             return
         self.stop_image_preview(clear_display=False)
         self._latest_frame = None
@@ -411,6 +412,8 @@ class InspectorDock(QWidget):
             "robodataset_studio_v3.ros.image_preview_cli",
             "--topic",
             topic,
+            "--message-type",
+            topic_type or "sensor_msgs/msg/Image",
             "--max-fps",
             str(self.playback_fps.value()),
         ]
@@ -442,7 +445,7 @@ class InspectorDock(QWidget):
         project_topics = self._project_image_topics_from_config(config)
         self._project_image_topics = project_topics
         self._fill_combo(self.image_topic, self._image_topic_names(list(self._topic_types)), keep_missing=False)
-        graph_images = {topic for topic, msg_type in self._topic_types.items() if msg_type == "sensor_msgs/msg/Image"}
+        graph_images = {topic for topic, msg_type in self._topic_types.items() if is_image_message_type(msg_type)}
         config_only = [topic for topic in project_topics if topic not in graph_images]
         if config_only:
             self._append(self.preview_log, "project config image topics not in current ROS graph: " + ", ".join(config_only))
@@ -475,12 +478,12 @@ class InspectorDock(QWidget):
                     continue
                 message_type = str(item.get("message_type") or item.get("type") or "")
                 topic = str(item.get("topic") or "")
-                if topic and message_type == "sensor_msgs/msg/Image":
+                if topic and is_image_message_type(message_type):
                     topics.append(topic)
             for item in streams:
                 if isinstance(item, dict) and item.get("topic"):
                     topic = str(item.get("topic") or "")
-                    if self._topic_types.get(topic) == "sensor_msgs/msg/Image":
+                    if is_image_message_type(self._topic_types.get(topic, "")):
                         topics.append(topic)
         cameras = dataset_config.get("cameras", [])
         if isinstance(cameras, list):
@@ -497,20 +500,20 @@ class InspectorDock(QWidget):
                     continue
                 topic = str(item.get("topic") or item.get("name") or "")
                 message_type = str(item.get("message_type") or item.get("type") or "")
-                if topic and message_type == "sensor_msgs/msg/Image":
+                if topic and is_image_message_type(message_type):
                     topics.append(topic)
                     self._topic_types.setdefault(topic, message_type)
         return list(dict.fromkeys(topic for topic in topics if topic))
 
     def _image_topic_names(self, graph_topic_names: list[str]) -> list[str]:
-        graph_images = [name for name in graph_topic_names if self._topic_types.get(name) == "sensor_msgs/msg/Image"]
+        graph_images = [name for name in graph_topic_names if is_image_message_type(self._topic_types.get(name, ""))]
         return list(dict.fromkeys([*graph_images, *self._project_image_topics]))
 
     def _is_monitorable_image_topic(self, topic: str, project_topics: list[str]) -> bool:
         if not topic:
             return False
         topic_type = self._topic_types.get(topic, "")
-        return topic_type == "sensor_msgs/msg/Image" or topic in project_topics
+        return is_image_message_type(topic_type) or topic in project_topics
 
     def stop_image_preview(self, clear_display: bool = True) -> None:
         process = self._preview_process
