@@ -11,7 +11,7 @@ from uuid import uuid4
 
 import numpy as np
 
-from robodataset_studio_v3.ros.image_conversion import image_bytes_to_rgb
+from robodataset_studio_v3.ros.image_conversion import image_bytes_to_array
 
 
 @dataclass
@@ -74,22 +74,23 @@ class RosEpisodeRecorder:
         arrays: dict[str, np.ndarray] = {}
         for stream in image_streams:
             name = str(stream.get("name") or stream.get("topic") or "image").strip("/")
+            output_key = self._stream_output_key(stream)
             stream_frames = frames.get(name, [])
             if not stream_frames:
                 warnings.append(f"no frames captured for {name}")
                 continue
-            arrays[name] = np.stack(stream_frames, axis=0)
+            arrays[output_key] = np.stack(stream_frames, axis=0)
 
         if not arrays:
             raise RuntimeError("no image frames were captured from configured ROS2 streams")
 
-        primary_state_name = "robot_obs"
+        captured_state_names: list[str] = []
         for stream in joint_streams:
             name = str(stream.get("name") or "robot_obs")
             values = states.get(name, [])
             if values:
                 arrays[name] = np.stack(values, axis=0).astype(np.float32)
-                primary_state_name = name
+                captured_state_names.append(name)
             else:
                 warnings.append(f"no JointState messages captured for {stream.get('source_topic')}")
 
@@ -99,12 +100,13 @@ class RosEpisodeRecorder:
 
         dataset_cfg = config.get("dataset", {})
         requires_actions = bool(dataset_cfg.get("requires_actions", True))
-        if "robot_obs" not in arrays and requires_actions:
+        primary_state_name = self._action_source_state_name(config, joint_streams, captured_state_names)
+        if requires_actions and not primary_state_name:
             state_dim = int(config.get("action", {}).get("dim") or 0)
             arrays["robot_obs"] = np.zeros((actual_steps, max(state_dim, 1)), dtype=np.float32)
             primary_state_name = "robot_obs"
             warnings.append("no JointState state stream captured; placeholder robot_obs/actions were generated")
-        if "robot_obs" in arrays and requires_actions:
+        if requires_actions and primary_state_name in arrays:
             actions = self._derive_actions(config, arrays[primary_state_name], actual_steps)
             arrays["rel_actions"] = actions
             arrays["actions"] = actions.copy()
@@ -159,9 +161,31 @@ class RosEpisodeRecorder:
                 continue
             if not stream.get("name"):
                 stream["name"] = stream.get("calvin_key") or str(stream.get("topic", "image")).strip("/").replace("/", "_")
-            if not stream.get("calvin_key"):
+            modality = str(stream.get("modality") or "").lower()
+            if not stream.get("calvin_key") and modality != "depth":
                 stream["calvin_key"] = stream.get("name")
             stream.setdefault("source", "ros2_topic")
+
+    def _action_source_state_name(self, config: dict, joint_streams: list[dict], captured_state_names: list[str]) -> str:
+        action_cfg = config.get("action", {}) if isinstance(config.get("action"), dict) else {}
+        configured_state = str(action_cfg.get("source_state_key") or "").strip()
+        if configured_state and configured_state in captured_state_names:
+            return configured_state
+        source_topic = str(action_cfg.get("source_topic") or "").strip()
+        if source_topic:
+            for stream in joint_streams:
+                name = str(stream.get("name") or "robot_obs")
+                if name in captured_state_names and str(stream.get("source_topic") or "").strip() == source_topic:
+                    return name
+        if "robot_obs" in captured_state_names:
+            return "robot_obs"
+        return captured_state_names[0] if captured_state_names else ""
+
+    def _stream_output_key(self, stream: dict) -> str:
+        calvin_key = stream.get("calvin_key")
+        if calvin_key is not None and str(calvin_key).strip():
+            return str(calvin_key).strip()
+        return str(stream.get("name") or stream.get("topic") or "image").strip("/").replace("/", "_")
 
     def _metadata_payload(
         self,
@@ -431,7 +455,7 @@ class RosEpisodeRecorder:
                     if sample is None:
                         continue
                     data, meta = sample
-                    frame = image_bytes_to_rgb(data, meta)
+                    frame = image_bytes_to_array(data, meta)
                     if frame is not None:
                         captured[stream_name].append(frame)
                 for stream_name in list(captured_states):

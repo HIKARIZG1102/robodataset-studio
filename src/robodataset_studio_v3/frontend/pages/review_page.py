@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 
 from robodataset_studio_v3.frontend.api_client import ApiClient, ProjectSummary
 from robodataset_studio_v3.frontend.pages.base import BasePage
+from robodataset_studio_v3.frontend.ui_helpers import make_path_field, make_path_label
 
 
 class ReviewPage(BasePage):
@@ -44,6 +45,8 @@ class ReviewPage(BasePage):
         self.session_dir = QLineEdit()
         self.session_dir.setReadOnly(True)
         self.session_summary = QLabel("")
+        make_path_field(self.session_dir)
+        make_path_label(self.session_summary)
         self.status_filter = QComboBox()
         self.status_filter.addItems(["all", "uncheck", "ok", "warning", "error"])
         self.status_filter.currentTextChanged.connect(self.apply_review_filter)
@@ -69,6 +72,7 @@ class ReviewPage(BasePage):
 
         self.hdf5_path = QLineEdit()
         self.hdf5_path.setReadOnly(True)
+        make_path_field(self.hdf5_path)
         self.hdf5_summary = QPlainTextEdit()
         self.hdf5_summary.setReadOnly(True)
         self.hdf5_check_summary = QPlainTextEdit()

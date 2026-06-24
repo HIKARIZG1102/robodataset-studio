@@ -5,10 +5,11 @@ from pathlib import Path
 from PySide6.QtWidgets import QFileDialog, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout, QLineEdit, QPushButton, QVBoxLayout, QWidget
 
 from robodataset_studio_v3.frontend.api_client import ApiClient
+from robodataset_studio_v3.frontend.ui_helpers import make_path_field
 
 
 class NewProjectDialog(QDialog):
-    def __init__(self, api: ApiClient | None = None, parent=None) -> None:
+    def __init__(self, api: ApiClient | None = None, parent=None, default_root: str = "") -> None:
         super().__init__(parent)
         self.setWindowTitle("New Project")
         self.api = api
@@ -16,7 +17,8 @@ class NewProjectDialog(QDialog):
         self.name = QLineEdit()
         self.version = QLineEdit("v1")
         self.operator = QLineEdit()
-        self.root_path = QLineEdit("robodataset/projects")
+        self.root_path = QLineEdit(default_root or "robodataset/projects")
+        make_path_field(self.root_path)
         self.config_combo = QComboBox()
         self.config_combo.setMinimumWidth(260)
         browse = QPushButton("Browse")

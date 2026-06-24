@@ -19,23 +19,39 @@ class ProjectService:
         self.root = root or repo_root() / "robodataset" / "projects"
         self.config_service = ConfigService()
         self._known_paths: dict[str, Path] = {}
+        self._index_path = self.root / ".project_index.yaml"
 
     def list_projects(self) -> list[ProjectSummary]:
-        if not self.root.exists():
-            return []
         projects = []
-        for path in self._discover_project_dirs(self.root):
-            if path.name.startswith(".") or any(part.startswith(".") for part in path.relative_to(self.root).parts):
+        self._known_paths = {}
+        paths_by_resolved: dict[Path, Path] = {}
+        if self.root.exists():
+            for path in self._discover_project_dirs(self.root):
+                paths_by_resolved[path.resolve()] = path
+        for indexed in self._load_project_index().values():
+            path = Path(indexed)
+            if path.exists() and path.is_dir() and (path / "project.yaml").exists():
+                paths_by_resolved.setdefault(path.resolve(), path)
+        for path in sorted(paths_by_resolved.values(), key=lambda item: (item.name.lower(), str(item))):
+            if path.name.startswith("."):
                 continue
-            name, version = self._split_key(path.name)
-            self._known_paths[path.name] = path
+            try:
+                if self.root.exists() and any(part.startswith(".") for part in path.relative_to(self.root).parts):
+                    continue
+            except ValueError:
+                pass
+            key = self._safe_part(path.name)
+            if key in self._known_paths:
+                continue
+            self._known_paths[key] = path
             projects.append(self._summary_for_path(path))
         return projects
 
     def project_dir(self, key: str) -> Path:
         safe_key = self._safe_part(key)
-        known = self._known_paths.get(safe_key)
+        known = self._project_path_for_key(safe_key)
         if known is not None and known.exists() and known.is_dir():
+            self._known_paths[safe_key] = known
             return known
         path = self.root / safe_key
         if not path.exists() or not path.is_dir():
@@ -47,19 +63,27 @@ class ProjectService:
         if not path.exists() or not path.is_dir():
             raise FileNotFoundError(f"project folder not found: {path}")
         key = path.name
-        name, version = self._split_key(key)
+        existing = self._project_path_for_key(key)
+        if existing is not None and existing.resolve() != path.resolve():
+            raise FileExistsError(f"project key already opened from another path: {key} ({existing})")
         self._known_paths[key] = path
+        self._register_project_path(key, path)
         return self._summary_for_path(path)
 
     def rename_project(self, key: str, new_key: str) -> ProjectSummary:
         old_path = self.project_dir(key)
         safe_key = self._safe_project_key(new_key)
         new_path = old_path.parent / safe_key
+        existing = self._project_path_for_key(safe_key)
+        if existing is not None and existing.resolve() != old_path.resolve():
+            raise FileExistsError(f"project already exists: {safe_key} ({existing})")
         if new_path.exists():
             raise FileExistsError(f"project already exists: {safe_key}")
         old_path.rename(new_path)
         self._known_paths.pop(self._safe_part(key), None)
         self._known_paths[safe_key] = new_path
+        self._unregister_project_path(self._safe_part(key))
+        self._register_project_path(safe_key, new_path)
         name, version = self._split_key(safe_key)
         meta = self._project_meta(new_path)
         meta.setdefault("project", {})
@@ -75,6 +99,7 @@ class ProjectService:
         target = deleted_root / f"{path.name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         path.rename(target)
         self._known_paths.pop(self._safe_part(key), None)
+        self._unregister_project_path(self._safe_part(key))
         return {"status": "moved", "path": str(target)}
 
     def permanently_delete_project(self, key: str) -> dict[str, str]:
@@ -82,6 +107,7 @@ class ProjectService:
         self._ensure_deletable_project_path(path)
         shutil.rmtree(path)
         self._known_paths.pop(self._safe_part(key), None)
+        self._unregister_project_path(self._safe_part(key))
         return {"status": "deleted", "path": str(path)}
 
     def create_project(self, request: ProjectCreateRequest) -> ProjectSummary:
@@ -89,11 +115,21 @@ class ProjectService:
         version = self._safe_part(request.version or "v1")
         key = f"{name}_{version}"
         root = self._resolve_user_path(request.root_path) if request.root_path.strip() else self.root
+        existing = self._project_path_for_key(key)
+        if existing is not None:
+            raise FileExistsError(f"project already exists: {key} ({existing})")
+        if (root / "project.yaml").exists():
+            raise FileExistsError(f"selected root is already a project folder: {root}")
         path = root / key
+        nested_projects = self._discover_project_dirs(root, max_depth=1) if root.exists() else []
+        same_key_nested = [item for item in nested_projects if item.name == key]
+        if same_key_nested:
+            raise FileExistsError(f"project already exists: {key} ({same_key_nested[0]})")
         if path.exists():
             raise FileExistsError(f"project already exists: {key}")
         path.mkdir(parents=True, exist_ok=False)
         self._known_paths[key] = path
+        self._register_project_path(key, path)
         for child in ["raw_sessions", "review", "exports", "logs"]:
             (path / child).mkdir(exist_ok=True)
         config_id = request.config_id or "default_calvin"
@@ -196,6 +232,58 @@ class ProjectService:
             names = ", ".join(candidate.name for candidate in candidates[:5])
             raise FileExistsError(f"selected folder contains multiple projects; choose one project folder: {names}")
         return path
+
+    def _project_path_for_key(self, key: str) -> Path | None:
+        safe_key = self._safe_part(key)
+        known = self._known_paths.get(safe_key)
+        if known is not None and known.exists() and known.is_dir():
+            return known
+        index = self._load_project_index()
+        indexed = index.get(safe_key)
+        if indexed:
+            indexed_path = Path(indexed)
+            if indexed_path.exists() and indexed_path.is_dir() and (indexed_path / "project.yaml").exists():
+                return indexed_path
+            self._unregister_project_path(safe_key)
+        default_path = self.root / safe_key
+        if default_path.exists() and default_path.is_dir() and (default_path / "project.yaml").exists():
+            return default_path
+        for path in self._discover_project_dirs(self.root):
+            if path.name == safe_key:
+                return path
+        return None
+
+    def _load_project_index(self) -> dict[str, str]:
+        if not self._index_path.exists():
+            return {}
+        try:
+            data = yaml.safe_load(self._index_path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        projects = data.get("projects", data)
+        if not isinstance(projects, dict):
+            return {}
+        return {self._safe_part(str(key)): str(value) for key, value in projects.items() if str(value)}
+
+    def _save_project_index(self, index: dict[str, str]) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+        payload = {"projects": dict(sorted(index.items()))}
+        self._index_path.write_text(yaml.safe_dump(payload, sort_keys=False, allow_unicode=True), encoding="utf-8")
+
+    def _register_project_path(self, key: str, path: Path) -> None:
+        safe_key = self._safe_part(key)
+        index = self._load_project_index()
+        index[safe_key] = str(path)
+        self._save_project_index(index)
+
+    def _unregister_project_path(self, key: str) -> None:
+        safe_key = self._safe_part(key)
+        index = self._load_project_index()
+        if safe_key in index:
+            index.pop(safe_key, None)
+            self._save_project_index(index)
 
     def _discover_project_dirs(self, root: Path, *, max_depth: int = 2) -> list[Path]:
         if not root.exists() or not root.is_dir():

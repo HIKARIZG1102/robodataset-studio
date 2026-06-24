@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThreadPool, QUrl
-from PySide6.QtGui import QDesktopServices, QKeySequence
+from PySide6.QtGui import QDesktopServices, QFontMetrics, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QDockWidget,
@@ -17,8 +17,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QInputDialog,
     QPushButton,
+    QSizePolicy,
     QSplitter,
-    QToolBar,
     QTabBar,
     QTabWidget,
     QVBoxLayout,
@@ -56,8 +56,11 @@ class MainWindow(QMainWindow):
         self.open_tabs: dict[str, QWidget] = {}
         self.workspace_panes: list[QTabWidget] = []
         self.workspace_splitter: QSplitter | None = None
+        self.workspace_host: QWidget | None = None
         self.workspace = QTabWidget()
         self._configure_workspace(self.workspace)
+        self.setTabPosition(Qt.LeftDockWidgetArea, QTabWidget.North)
+        self.setTabPosition(Qt.RightDockWidgetArea, QTabWidget.North)
         self.empty = self._empty_workspace()
         self.setCentralWidget(self.empty)
         self.inspector: InspectorDock | None = None
@@ -98,8 +101,39 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Backend connected")
 
     def _build_menu(self) -> None:
-        self.menuBar().addAction("File", self.toggle_project_sidebar)
-        self.menuBar().addAction("Config", self.toggle_config_sidebar)
+        self.menuBar().setStyleSheet(
+            """
+            QMenuBar {
+                text-decoration: none;
+            }
+            QMenuBar::item {
+                border: 0;
+                border-bottom: 0;
+                padding: 4px 9px;
+                text-decoration: none;
+            }
+            QMenuBar::item:selected {
+                border: 0;
+                border-bottom: 0;
+                background: palette(midlight);
+                text-decoration: none;
+            }
+            """
+        )
+
+        file_menu = self.menuBar().addMenu("File")
+        file_menu.aboutToShow.connect(self._show_project_sidebar_from_menu)
+        file_menu.addAction("New Project", self.new_project)
+        file_menu.addAction("Open Project Folder", self.open_project_folder)
+        file_menu.addSeparator()
+        file_menu.addAction("Refresh Projects", self.refresh_project_sidebar)
+
+        config_menu = self.menuBar().addMenu("Config")
+        config_menu.aboutToShow.connect(self._show_config_sidebar_from_menu)
+        config_menu.addAction("New Config", self.new_config)
+        config_menu.addAction("Config Library", self.open_config_library_tab)
+        config_menu.addSeparator()
+        config_menu.addAction("Refresh Configs", self.refresh_config_sidebar)
 
         tools_menu = self.menuBar().addMenu("Tools")
         tools_menu.addAction("Collect", lambda: self.open_action_tab("collect"))
@@ -134,13 +168,15 @@ class MainWindow(QMainWindow):
         refresh.setStyleSheet(
             """
             QPushButton#refreshGraphButton {
-                margin: 3px 8px 3px 12px;
-                padding: 5px 14px;
+                margin: 1px 8px 1px 12px;
+                padding: 2px 10px;
                 border: 1px solid #2f6f9f;
-                border-radius: 6px;
+                border-radius: 4px;
                 color: #ffffff;
                 background: #1f6aa5;
                 font-weight: 600;
+                min-height: 18px;
+                max-height: 22px;
             }
             QPushButton#refreshGraphButton:hover {
                 background: #267fbe;
@@ -160,20 +196,25 @@ class MainWindow(QMainWindow):
         self.menuBar().setCornerWidget(refresh, Qt.TopRightCorner)
 
     def _build_project_summary_bar(self) -> None:
-        toolbar = QToolBar("Project")
-        toolbar.setMovable(False)
         self.project_summary.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.project_summary.setWordWrap(False)
-        toolbar.addWidget(self.project_summary)
-        self.addToolBar(Qt.TopToolBarArea, toolbar)
+        self.project_summary.setMinimumWidth(0)
+        self.project_summary.setMaximumWidth(520)
+        self.project_summary.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.project_folder_status.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.statusBar().addPermanentWidget(self.project_folder_status, 1)
+        self.project_folder_status.setWordWrap(False)
+        self.project_folder_status.setMinimumWidth(220)
+        self.project_folder_status.setMaximumWidth(520)
+        self.project_folder_status.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.statusBar().addWidget(self.project_summary, 1)
+        self.statusBar().addPermanentWidget(self.project_folder_status, 0)
         self.update_project_summary()
 
     def update_project_summary(self) -> None:
         if self.current_project is None:
             self.project_summary.setText(text("Project: none | Config: none", self.language))
             self.project_folder_status.setText("Project folder: none")
+            self.project_folder_status.setToolTip("")
             return
         state = "recorded" if self.current_project.has_recorded_data else "editable"
         if normalize_language(self.language) == "zh":
@@ -186,7 +227,14 @@ class MainWindow(QMainWindow):
                 f"Project: {self.current_project.name} {self.current_project.version} | "
                 f"Config: {self.current_project.config_id or 'none'} | {state}"
             )
-        self.project_folder_status.setText(f"Project folder: {self.current_project.path}")
+        self._set_project_folder_status(self.current_project.path)
+
+    def _set_project_folder_status(self, path: str) -> None:
+        text_value = f"Project folder: {path}"
+        metrics = QFontMetrics(self.project_folder_status.font())
+        width = max(self.project_folder_status.maximumWidth() - 12, 80)
+        self.project_folder_status.setText(metrics.elidedText(text_value, Qt.ElideMiddle, width))
+        self.project_folder_status.setToolTip(text_value)
 
     def _empty_workspace(self) -> QWidget:
         widget = QWidget()
@@ -201,6 +249,11 @@ class MainWindow(QMainWindow):
         self._activate_sidebar_dock(dock)
         self.refresh_project_sidebar()
 
+    def _show_project_sidebar_from_menu(self) -> None:
+        dock = self._ensure_project_sidebar()
+        self._activate_sidebar_dock(dock)
+        self.refresh_project_sidebar()
+
     def _ensure_project_sidebar(self) -> QDockWidget:
         if self.project_dock is not None:
             return self.project_dock
@@ -208,20 +261,12 @@ class MainWindow(QMainWindow):
         dock.setAllowedAreas(Qt.LeftDockWidgetArea)
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        new_button = QPushButton("New Project")
-        open_button = QPushButton("Open Project Folder")
-        refresh_button = QPushButton("Refresh")
         self.project_list = QListWidget()
+        self._style_sidebar_list(self.project_list)
         self.project_list.currentItemChanged.connect(lambda item, _prev: self._preview_project_item(item))
         self.project_list.itemDoubleClicked.connect(self._open_project_item)
         self.project_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.project_list.customContextMenuRequested.connect(self._show_project_context_menu)
-        new_button.clicked.connect(self.new_project)
-        open_button.clicked.connect(self.open_project_folder)
-        refresh_button.clicked.connect(self.refresh_project_sidebar)
-        layout.addWidget(new_button)
-        layout.addWidget(open_button)
-        layout.addWidget(refresh_button)
         layout.addWidget(self.project_list, 1)
         dock.setWidget(widget)
         self.addDockWidget(Qt.LeftDockWidgetArea, dock)
@@ -234,19 +279,26 @@ class MainWindow(QMainWindow):
     def refresh_project_sidebar(self) -> None:
         if self.project_list is None:
             return
+        self.project_list.blockSignals(True)
         self.project_list.clear()
         try:
             projects = self.api.list_projects()
         except Exception as exc:
+            self.project_list.blockSignals(False)
             self.statusBar().showMessage(f"Cannot list projects: {exc}")
             return
+        selected_item: QListWidgetItem | None = None
         for project in projects:
-            item = QListWidgetItem(f"{project.name} {project.version}")
+            marker = "▸" if self.current_project is not None and project.key == self.current_project.key else "•"
+            item = QListWidgetItem(f"{marker}   {project.name} {project.version}")
             item.setToolTip(project.path)
             item.setData(Qt.UserRole, project)
             self.project_list.addItem(item)
             if self.current_project is not None and project.key == self.current_project.key:
-                self.project_list.setCurrentItem(item)
+                selected_item = item
+        if selected_item is not None:
+            self.project_list.setCurrentItem(selected_item)
+        self.project_list.blockSignals(False)
 
     def _open_project_item(self, item: QListWidgetItem) -> None:
         project = item.data(Qt.UserRole)
@@ -255,12 +307,34 @@ class MainWindow(QMainWindow):
             self._remember_project(project)
             self.update_project_summary()
             self._load_project_workspace()
+            self._update_project_sidebar_markers()
+
+    def _update_project_sidebar_markers(self) -> None:
+        if self.project_list is None:
+            return
+        self.project_list.blockSignals(True)
+        selected_item: QListWidgetItem | None = None
+        for row in range(self.project_list.count()):
+            item = self.project_list.item(row)
+            project = item.data(Qt.UserRole) if item is not None else None
+            if not isinstance(project, ProjectSummary):
+                continue
+            is_current = self.current_project is not None and project.key == self.current_project.key
+            marker = "▸" if is_current else "•"
+            item.setText(f"{marker}   {project.name} {project.version}")
+            if is_current:
+                selected_item = item
+        if selected_item is not None:
+            self.project_list.setCurrentItem(selected_item)
+        self.project_list.blockSignals(False)
 
     def _show_project_context_menu(self, pos) -> None:
         if self.project_list is None:
             return
         item = self.project_list.itemAt(pos)
         menu = QMenu(self)
+        refresh_action = menu.addAction("Refresh")
+        menu.addSeparator()
         open_action = menu.addAction("Open Project")
         info_action = menu.addAction("Properties")
         config_action = menu.addAction("Current Project Config")
@@ -290,6 +364,9 @@ class MainWindow(QMainWindow):
                 action.setEnabled(False)
         action = menu.exec(self.project_list.mapToGlobal(pos))
         if action is None:
+            return
+        if action is refresh_action:
+            self.refresh_project_sidebar()
             return
         if action is new_action:
             self.new_project()
@@ -368,6 +445,11 @@ class MainWindow(QMainWindow):
         self._activate_sidebar_dock(dock)
         self.refresh_config_sidebar()
 
+    def _show_config_sidebar_from_menu(self) -> None:
+        dock = self._ensure_config_sidebar()
+        self._activate_sidebar_dock(dock)
+        self.refresh_config_sidebar()
+
     def _ensure_config_sidebar(self) -> QDockWidget:
         if self.config_dock is not None:
             return self.config_dock
@@ -375,17 +457,12 @@ class MainWindow(QMainWindow):
         dock.setAllowedAreas(Qt.LeftDockWidgetArea)
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        new_button = QPushButton("New")
-        refresh_button = QPushButton("Refresh")
         self.config_list = QListWidget()
+        self._style_sidebar_list(self.config_list)
         self.config_list.currentItemChanged.connect(lambda item, _prev: self._preview_config_item(item))
         self.config_list.itemDoubleClicked.connect(self._open_config_item)
         self.config_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.config_list.customContextMenuRequested.connect(self._show_config_context_menu)
-        new_button.clicked.connect(lambda: (self.open_config_library_tab(), self.new_config()))
-        refresh_button.clicked.connect(self.refresh_config_sidebar)
-        layout.addWidget(new_button)
-        layout.addWidget(refresh_button)
         layout.addWidget(self.config_list, 1)
         dock.setWidget(widget)
         self.addDockWidget(Qt.LeftDockWidgetArea, dock)
@@ -399,6 +476,10 @@ class MainWindow(QMainWindow):
         if self.config_list is None:
             return
         self.config_list.clear()
+        selected_id = ""
+        page = self.open_tabs.get("config_library")
+        if isinstance(page, ConfigLibraryPage):
+            selected_id = str(page.loaded_config_id or page.selected_config_id() or "")
         try:
             configs = self.api.list_configs()
         except Exception as exc:
@@ -406,9 +487,12 @@ class MainWindow(QMainWindow):
             return
         for config in configs:
             config_id = str(config.get("id") or "")
-            item = QListWidgetItem(config_id)
+            marker = "▸" if selected_id and config_id == selected_id else "•"
+            item = QListWidgetItem(f"{marker}   {config_id}")
             item.setData(Qt.UserRole, config_id)
             self.config_list.addItem(item)
+            if selected_id and config_id == selected_id:
+                self.config_list.setCurrentItem(item)
 
     def _refresh_open_config_library(self, select_config_id: str = "") -> None:
         page = self.open_tabs.get("config_library")
@@ -420,6 +504,7 @@ class MainWindow(QMainWindow):
             if index >= 0:
                 page.config_select.setCurrentIndex(index)
                 page.load_selected()
+                self.refresh_config_sidebar()
 
     def _open_config_item(self, item: QListWidgetItem) -> None:
         config_id = str(item.data(Qt.UserRole) or "")
@@ -467,6 +552,8 @@ class MainWindow(QMainWindow):
             config_id = str(item.data(Qt.UserRole) or "")
             new_name, ok = QInputDialog.getText(self, "Rename Config", "New config name:", text=config_id)
             if ok and new_name.strip():
+                if self._warn_if_config_in_use(config_id, "rename"):
+                    return
                 try:
                     renamed = self.api.rename_config(config_id, new_name.strip())
                     new_id = str(renamed.get("id") or new_name.strip())
@@ -480,6 +567,8 @@ class MainWindow(QMainWindow):
                     QMessageBox.warning(self, "Rename Config", f"Cannot rename config:\n{exc}")
         elif action is delete_action:
             config_id = str(item.data(Qt.UserRole) or "")
+            if self._warn_if_config_in_use(config_id, "delete"):
+                return
             if QMessageBox.question(self, "Delete Config", f"Delete config '{config_id}'?") == QMessageBox.Yes:
                 try:
                     self.api.delete_config(config_id)
@@ -500,14 +589,11 @@ class MainWindow(QMainWindow):
         widget = QWidget()
         layout = QVBoxLayout(widget)
         open_button = QPushButton("Open Logs")
-        refresh_button = QPushButton("Refresh")
         self.logs_list = QListWidget()
         self.logs_list.currentItemChanged.connect(lambda item, _prev: self._preview_log_item(item))
         self.logs_list.itemDoubleClicked.connect(self._open_log_item)
         open_button.clicked.connect(lambda: self.open_action_tab("logs"))
-        refresh_button.clicked.connect(self.refresh_logs_sidebar)
         layout.addWidget(open_button)
-        layout.addWidget(refresh_button)
         layout.addWidget(self.logs_list, 1)
         dock.setWidget(widget)
         self.addDockWidget(Qt.LeftDockWidgetArea, dock)
@@ -542,11 +628,35 @@ class MainWindow(QMainWindow):
         dock.raise_()
 
     def _tabify_sidebar_dock(self, dock: QDockWidget) -> None:
+        self.setTabPosition(Qt.LeftDockWidgetArea, QTabWidget.North)
+        self.setTabPosition(Qt.RightDockWidgetArea, QTabWidget.North)
         for existing in [self.project_dock, self.config_dock, self.logs_dock]:
             if existing is not None and existing is not dock:
                 self.tabifyDockWidget(existing, dock)
+                self.setTabPosition(Qt.LeftDockWidgetArea, QTabWidget.North)
+                self.setTabPosition(Qt.RightDockWidgetArea, QTabWidget.North)
                 dock.raise_()
                 return
+
+    def _style_sidebar_list(self, widget: QListWidget) -> None:
+        widget.setStyleSheet(
+            """
+            QListWidget {
+                outline: 0;
+            }
+            QListWidget::item {
+                padding: 7px 8px 7px 10px;
+                border: 0;
+                border-left: 3px solid transparent;
+            }
+            QListWidget::item:selected {
+                border-left-color: #1f6aa5;
+                background: #d9ecfb;
+                color: #10202f;
+                font-weight: 600;
+            }
+            """
+        )
 
     def _preview_project_item(self, item: QListWidgetItem | None) -> None:
         if item is None:
@@ -561,6 +671,7 @@ class MainWindow(QMainWindow):
         self.open_tabs = {}
         self.workspace_panes = []
         self.workspace_splitter = None
+        self.workspace_host = None
         self.setCentralWidget(self.empty)
         self.update_project_summary()
         self._sync_inspector_project()
@@ -571,6 +682,26 @@ class MainWindow(QMainWindow):
         config_id = str(item.data(Qt.UserRole) or "")
         if config_id:
             self.statusBar().showMessage(f"Config selected: {config_id}")
+
+    def _warn_if_config_in_use(self, config_id: str, action: str) -> bool:
+        try:
+            projects = self.api.list_projects()
+        except Exception as exc:
+            QMessageBox.warning(self, "Config In Use Check", f"Cannot check project references:\n{exc}")
+            return True
+        references = [project for project in projects if project.config_id == config_id]
+        if not references:
+            return False
+        rows = "\n".join(f"- {project.name} {project.version} ({project.key})" for project in references[:12])
+        if len(references) > 12:
+            rows += f"\n... and {len(references) - 12} more"
+        QMessageBox.warning(
+            self,
+            "Config In Use",
+            f"Cannot {action} config '{config_id}' because it is used by project(s):\n{rows}\n\n"
+            "Open a new project version or switch those projects to another config first.",
+        )
+        return True
 
     def _config_library_changed(self, select_config_id: str = "") -> None:
         self.refresh_config_sidebar()
@@ -620,6 +751,15 @@ class MainWindow(QMainWindow):
         splitter.setChildrenCollapsible(False)
         return splitter
 
+    def _workspace_central_widget(self, splitter: QSplitter) -> QWidget:
+        host = QWidget()
+        layout = QVBoxLayout(host)
+        layout.setContentsMargins(0, 7, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(splitter)
+        self.workspace_host = host
+        return host
+
     def _active_workspace(self) -> QTabWidget:
         if self.workspace in self.workspace_panes:
             return self.workspace
@@ -653,7 +793,7 @@ class MainWindow(QMainWindow):
         return ""
 
     def new_project(self) -> None:
-        dialog = NewProjectDialog(self.api, self)
+        dialog = NewProjectDialog(self.api, self, default_root=self._project_folder_start_dir())
         if not dialog.exec():
             return
         try:
@@ -743,7 +883,7 @@ class MainWindow(QMainWindow):
             container = self._create_workspace_container()
             self.open_tabs = {}
             self._restoring_workspace = True
-            self.setCentralWidget(container)
+            self.setCentralWidget(self._workspace_central_widget(container))
             self._ensure_core_tabs()
             self._restoring_workspace = False
         self._sync_inspector_project()
@@ -753,7 +893,7 @@ class MainWindow(QMainWindow):
             self._focus_widget_tab(self.open_tabs[last_tab])
 
     def _has_core_workspace(self) -> bool:
-        if self.workspace_splitter is None or self.centralWidget() is not self.workspace_splitter:
+        if self.workspace_splitter is None or self.centralWidget() is not self.workspace_host:
             return False
         return all(tab_id in self.open_tabs for tab_id in ["project", "collect", "review", "convert", "upload"])
 
@@ -861,9 +1001,9 @@ class MainWindow(QMainWindow):
         if self.current_project is None and allow_empty and self.centralWidget() is self.empty:
             container = self._create_workspace_container()
             self.open_tabs = {}
-            self.setCentralWidget(container)
+            self.setCentralWidget(self._workspace_central_widget(container))
             return
-        if self.workspace_splitter is None or self.centralWidget() is not self.workspace_splitter:
+        if self.workspace_splitter is None or self.centralWidget() is not self.workspace_host:
             self._load_project_workspace()
 
     def toggle_inspector(self) -> None:

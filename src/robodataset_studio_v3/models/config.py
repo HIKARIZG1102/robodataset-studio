@@ -2,14 +2,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class DatasetConfigDraft(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     environment: dict[str, Any] = Field(default_factory=dict)
     instruction: dict[str, Any] = Field(default_factory=dict)
     ros: dict[str, Any] = Field(default_factory=dict)
     robot: dict[str, Any] = Field(default_factory=dict)
+    cameras: list[dict[str, Any]] = Field(default_factory=list)
     streams: list[dict[str, Any]] = Field(default_factory=list)
     state: dict[str, Any] = Field(default_factory=dict)
     action: dict[str, Any] = Field(default_factory=dict)
@@ -19,6 +22,9 @@ class DatasetConfigDraft(BaseModel):
 
 
 class ProjectConfigDraft(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    config_meta: dict[str, Any] = Field(default_factory=dict)
     dataset_config: DatasetConfigDraft = Field(default_factory=DatasetConfigDraft)
     paths: dict[str, Any] = Field(default_factory=dict)
     collection: dict[str, Any] = Field(default_factory=dict)

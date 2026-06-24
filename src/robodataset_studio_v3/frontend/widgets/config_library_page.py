@@ -30,8 +30,10 @@ from PySide6.QtWidgets import (
 )
 
 from robodataset_studio_v3.frontend.api_client import ApiClient, ProjectSummary
+from robodataset_studio_v3.frontend.ui_helpers import make_path_field
 from robodataset_studio_v3.frontend.worker import ApiWorker
 from robodataset_studio_v3.frontend.widgets.topic_tree import TopicTreeWidget
+from robodataset_studio_v3.services.config_service import ConfigService
 
 
 class ConfigLibraryPage(QWidget):
@@ -43,6 +45,7 @@ class ConfigLibraryPage(QWidget):
         self.api = api
         self.project = project
         self.pool = QThreadPool.globalInstance()
+        self.config_service = ConfigService()
         self._workers: list[ApiWorker] = []
         self.configs: list[dict[str, Any]] = []
         self.graph_data: dict[str, Any] = {"topics": [], "nodes": [], "services": []}
@@ -123,6 +126,7 @@ class ConfigLibraryPage(QWidget):
         self.upload_port.setValue(22)
         self.upload_username = QLineEdit()
         self.upload_key_path = QLineEdit()
+        make_path_field(self.upload_key_path)
         self.upload_rsync = QCheckBox("Use rsync")
         self.upload_repair = QCheckBox("Repair / resume verified upload")
         self.upload_verify = QCheckBox("Verify after upload")
@@ -462,6 +466,8 @@ class ConfigLibraryPage(QWidget):
             if self.loaded_config_id:
                 action = "Updated"
                 if name != self.loaded_config_id:
+                    if self._warn_if_config_in_use(self.loaded_config_id, "rename"):
+                        return
                     renamed = self.api.rename_config(self.loaded_config_id, name)
                     target_id = str(renamed.get("id") or name)
                     action = "Renamed and updated"
@@ -533,6 +539,8 @@ class ConfigLibraryPage(QWidget):
         if not config_id:
             QMessageBox.information(self, "Delete Config", "Select an existing config first.")
             return
+        if self._warn_if_config_in_use(config_id, "delete"):
+            return
         answer = QMessageBox.question(
             self,
             "Delete Config",
@@ -554,6 +562,26 @@ class ConfigLibraryPage(QWidget):
         self.status.setText(f"Deleted config: {config_id}")
         self.libraryChanged.emit("")
         self.refresh_list()
+
+    def _warn_if_config_in_use(self, config_id: str, action: str) -> bool:
+        try:
+            projects = self.api.list_projects()
+        except Exception as exc:
+            QMessageBox.warning(self, "Config In Use Check", f"Cannot check project references:\n{exc}")
+            return True
+        references = [project for project in projects if project.config_id == config_id]
+        if not references:
+            return False
+        rows = "\n".join(f"- {project.name} {project.version} ({project.key})" for project in references[:12])
+        if len(references) > 12:
+            rows += f"\n... and {len(references) - 12} more"
+        QMessageBox.warning(
+            self,
+            "Config In Use",
+            f"Cannot {action} config '{config_id}' because it is used by project(s):\n{rows}\n\n"
+            "Open a new project version or switch those projects to another config first.",
+        )
+        return True
 
     def set_graph_data(self, graph: dict[str, Any]) -> None:
         self.graph_data = graph if isinstance(graph, dict) else {"topics": [], "nodes": [], "services": []}
@@ -677,19 +705,31 @@ class ConfigLibraryPage(QWidget):
         cameras = []
         state_keys = []
         joint_topic = ""
+        used_stream_names: set[str] = set()
+        used_state_names: set[str] = set()
+        primary_state_name = ""
         for topic in selected:
             name = str(topic.get("topic") or topic.get("name") or "")
             msg_type = str(topic.get("type") or topic.get("message_type") or "")
             if not name:
                 continue
             if msg_type == "sensor_msgs/msg/Image":
-                stream_name = self.stream_name_from_topic(name, len(streams))
+                stream_name = self.unique_name(self.stream_name_from_topic(name, len(streams)), used_stream_names)
+                used_stream_names.add(stream_name)
+                modality = self.image_modality_from_topic(name)
                 crop, resize = self.image_preprocess()
+                dtype = "uint16" if modality == "depth" else "uint8"
+                renderer = "image_depth" if modality == "depth" else "image_rgb"
+                calvin_key = stream_name if modality == "rgb" else None
                 cameras.append({"name": stream_name, "role": self.camera_role(stream_name), "topic": name, "type": msg_type, "encoding": "", "fps_target": self.sample_rate.value(), "crop": crop, "resize": resize})
-                streams.append({"name": stream_name, "modality": "rgb" if "depth" not in name.lower() else "depth", "source": "ros2_topic", "topic": name, "message_type": msg_type, "dtype": "uint8", "shape": [], "encoding": "", "training_role": "observation", "calvin_key": stream_name, "required": True, "preview": {"renderer": "image_rgb", "crop": crop, "resize": resize}})
+                streams.append({"name": stream_name, "modality": modality, "source": "ros2_topic", "topic": name, "message_type": msg_type, "dtype": dtype, "shape": [], "encoding": "", "training_role": "observation", "calvin_key": calvin_key, "required": True, "preview": {"renderer": renderer, "crop": crop, "resize": resize}})
             elif msg_type == "sensor_msgs/msg/JointState":
                 joint_topic = name
-                state_keys.append({"name": "robot_obs", "source_topic": name, "type": msg_type, "output_dim": int(self.robot_joint_count.value()), "fields": ["joint_position"], "joint_order": self.split_csv(self.robot_joint_order.text())})
+                state_name = self.unique_name(self.state_name_from_topic(name, len(state_keys)), used_state_names)
+                used_state_names.add(state_name)
+                if not primary_state_name:
+                    primary_state_name = state_name
+                state_keys.append({"name": state_name, "source_topic": name, "type": msg_type, "output_dim": int(self.robot_joint_count.value()), "fields": ["joint_position"], "joint_order": self.split_csv(self.robot_joint_order.text())})
         dataset["cameras"] = cameras
         dataset["streams"] = streams
         dataset.setdefault("state", {})["keys"] = state_keys
@@ -697,7 +737,9 @@ class ConfigLibraryPage(QWidget):
         dataset.setdefault("action", {})
         dataset["action"]["source_topic"] = joint_topic
         dataset["action"]["source"] = "derived_from_robot_obs" if joint_topic else ""
+        dataset["action"]["source_state_key"] = primary_state_name
         dataset["action"]["dim"] = int(self.robot_joint_count.value()) if joint_topic else 0
+        self.sync_dataset_schema(dataset)
 
     def current_config(self, default: bool = False) -> dict[str, Any]:
         text = self.editor.toPlainText().strip()
@@ -866,6 +908,7 @@ class ConfigLibraryPage(QWidget):
             "verify_after_upload": self.upload_verify.isChecked(),
         }
         config.pop("project", None)
+        self.sync_dataset_schema(dataset)
 
     def validate(self) -> None:
         try:
@@ -950,6 +993,7 @@ class ConfigLibraryPage(QWidget):
             "selected_topics": selected_topics,
             "selected_topic_probes": topic_probes,
             "current_total_config": self.ai_safe_total_config(total_config),
+            "dataset_schema_notes": self.config_service.dataset_schema_notes(dataset),
             "selection_policy": "Use only selected_topics and selected_topic_probes. Do not infer dataset streams from unselected graph topics.",
             "required_output": "dataset_config YAML only; do not include upload, config_meta, paths, collection, review, convert, AI API settings, project name, or project version",
             "prompt_budget": {
@@ -1131,6 +1175,7 @@ class ConfigLibraryPage(QWidget):
             if key in forbidden:
                 dataset_config.pop(key, None)
         current = self.current_config(default=True)
+        self.sync_dataset_schema(dataset_config)
         current["dataset_config"] = dataset_config
         self.set_config(current)
         self.status.setText("Replaced dataset_config from AI preview.")
@@ -1169,15 +1214,42 @@ class ConfigLibraryPage(QWidget):
 
     def stream_name_from_topic(self, topic: str, index: int) -> str:
         lower = topic.lower()
+        if "depth" in lower:
+            if "wrist" in lower:
+                return "depth_wrist"
+            if "overhead" in lower:
+                return "depth_overhead"
+            if "static" in lower or "/camera/depth" in lower:
+                return "depth_static"
+            return f"depth_{index}"
         if "wrist" in lower:
             return "rgb_wrist"
         if "static" in lower or "/camera/color" in lower or "/camera/image" in lower:
             return "rgb_static"
         if "overhead" in lower:
             return "rgb_overhead"
-        if "depth" in lower:
-            return f"depth_{index}"
         return f"rgb_{index}"
+
+    def image_modality_from_topic(self, topic: str) -> str:
+        lower = topic.lower()
+        return "depth" if "depth" in lower else "rgb"
+
+    def state_name_from_topic(self, topic: str, index: int) -> str:
+        lower = topic.strip("/").lower()
+        if index == 0:
+            return "robot_obs"
+        parts = [part for part in lower.split("/") if part and part not in {"joint_states", "joint_state"}]
+        suffix = parts[-1] if parts else str(index)
+        return "robot_obs_" + re.sub(r"[^a-z0-9_]+", "_", suffix).strip("_")
+
+    def unique_name(self, base: str, used: set[str]) -> str:
+        name = base or "stream"
+        if name not in used:
+            return name
+        suffix = 2
+        while f"{name}_{suffix}" in used:
+            suffix += 1
+        return f"{name}_{suffix}"
 
     def camera_role(self, name: str) -> str:
         if "wrist" in name:
@@ -1190,7 +1262,33 @@ class ConfigLibraryPage(QWidget):
         return {"name": "", "host": "", "lan_host": "", "wan_host": "", "port": 22, "username": "", "key_path": "", "use_rsync": True, "repair_resume_enabled": True, "verify_after_upload": True}
 
     def default_dataset_config(self) -> dict[str, Any]:
-        return {"environment": {}, "instruction": {}, "robot": {}, "cameras": [], "streams": [], "state": {"keys": []}, "action": {"name": "rel_actions", "source": "", "source_topic": "", "format": "delta_state", "dim": 0, "fields": []}, "recording": {"sample_rate_hz": 10, "stop_mode": "manual", "episode_duration_sec": 0.0, "target_samples": 0}, "dataset": {"output_format": ["npz", "hdf5"], "schema": "calvin_style", "split": "training", "episode_prefix": "episode_", "write_language_annotations": True, "language_annotation_file": "lang_annotations/auto_lang_ann.npy"}}
+        return {
+            "environment": {},
+            "instruction": {},
+            "robot": {},
+            "cameras": [],
+            "streams": [],
+            "state": {"keys": []},
+            "action": {"name": "rel_actions", "source": "", "source_topic": "", "source_state_key": "", "format": "delta_state", "dim": 0, "fields": []},
+            "recording": {"sample_rate_hz": 10, "stop_mode": "manual", "episode_duration_sec": 0.0, "target_samples": 0},
+            "dataset": {
+                "output_format": ["npz", "hdf5"],
+                "schema": "calvin_style",
+                "split": "training",
+                "episode_prefix": "episode_",
+                "write_language_annotations": True,
+                "language_annotation_file": "lang_annotations/auto_lang_ann.npy",
+                "requires_robot_obs": False,
+                "requires_actions": False,
+                "metadata_extensions": list(ConfigService.METADATA_EXTENSION_KEYS),
+                "core_schema": {},
+                "recording_estimate": {},
+            },
+        }
+
+    def sync_dataset_schema(self, dataset: dict[str, Any]) -> None:
+        if isinstance(dataset, dict):
+            self.config_service.sync_dataset_schema(dataset)
 
     def default_total_config(self) -> dict[str, Any]:
         return self.ordered_total_config(

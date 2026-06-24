@@ -296,7 +296,7 @@ class InspectorDock(QWidget):
         topic_names = [str(item.get("name") or item.get("topic") or "") for item in topics]
         self._fill_combo(self.node, nodes)
         self._fill_combo(self.topic, topic_names)
-        self._fill_combo(self.image_topic, self._image_topic_names(topic_names))
+        self._fill_combo(self.image_topic, self._image_topic_names(topic_names), keep_missing=False)
         if topic_names:
             self._append(self.echo_log, f"graph refreshed: {len(topic_names)} topics, {len(nodes)} nodes")
         else:
@@ -427,7 +427,7 @@ class InspectorDock(QWidget):
         if self.project is None:
             self.preview_status.setText("preview error: no project is open")
             return
-        self._start_worker(self.api.get_dataset_config, self._finish_project_monitor_config, self.project.key)
+        self._start_worker(self.api.get_project_config, self._finish_project_monitor_config, self.project.key)
 
     def _finish_project_monitor_config(self, result: object, error: object) -> None:
         if error is not None:
@@ -437,7 +437,11 @@ class InspectorDock(QWidget):
         config = result if isinstance(result, dict) else {}
         project_topics = self._project_image_topics_from_config(config)
         self._project_image_topics = project_topics
-        self._fill_combo(self.image_topic, self._image_topic_names(list(self._topic_types)))
+        self._fill_combo(self.image_topic, self._image_topic_names(list(self._topic_types)), keep_missing=False)
+        graph_images = {topic for topic, msg_type in self._topic_types.items() if msg_type == "sensor_msgs/msg/Image"}
+        config_only = [topic for topic in project_topics if topic not in graph_images]
+        if config_only:
+            self._append(self.preview_log, "project config image topics not in current ROS graph: " + ", ".join(config_only))
         current = self._selected_image_topic_name()
         topic = current if self._is_monitorable_image_topic(current, project_topics) else self._first_project_image_topic(config)
         if not topic:
@@ -459,7 +463,8 @@ class InspectorDock(QWidget):
 
     def _project_image_topics_from_config(self, config: dict[str, Any]) -> list[str]:
         topics: list[str] = []
-        streams = config.get("streams", [])
+        dataset_config = config.get("dataset_config", {}) if isinstance(config.get("dataset_config"), dict) else config
+        streams = dataset_config.get("streams", [])
         if isinstance(streams, list):
             for item in streams:
                 if not isinstance(item, dict):
@@ -473,11 +478,24 @@ class InspectorDock(QWidget):
                     topic = str(item.get("topic") or "")
                     if self._topic_types.get(topic) == "sensor_msgs/msg/Image":
                         topics.append(topic)
-        cameras = config.get("cameras", [])
+        cameras = dataset_config.get("cameras", [])
         if isinstance(cameras, list):
             for item in cameras:
                 if isinstance(item, dict) and item.get("topic"):
                     topics.append(str(item.get("topic")))
+        ros = config.get("ros", {}) if isinstance(config.get("ros"), dict) else {}
+        for key in ["selected_topics", "discovery_snapshot"]:
+            rows = ros.get(key, [])
+            if not isinstance(rows, list):
+                continue
+            for item in rows:
+                if not isinstance(item, dict):
+                    continue
+                topic = str(item.get("topic") or item.get("name") or "")
+                message_type = str(item.get("message_type") or item.get("type") or "")
+                if topic and message_type == "sensor_msgs/msg/Image":
+                    topics.append(topic)
+                    self._topic_types.setdefault(topic, message_type)
         return list(dict.fromkeys(topic for topic in topics if topic))
 
     def _image_topic_names(self, graph_topic_names: list[str]) -> list[str]:
@@ -638,7 +656,7 @@ class InspectorDock(QWidget):
         worker.signals.finished.connect(finish, Qt.QueuedConnection)
         self.pool.start(worker)
 
-    def _fill_combo(self, combo: QComboBox, items: list[str]) -> None:
+    def _fill_combo(self, combo: QComboBox, items: list[str], *, keep_missing: bool = True) -> None:
         current = combo.currentText().strip()
         combo.blockSignals(True)
         combo.clear()
@@ -647,7 +665,7 @@ class InspectorDock(QWidget):
             index = combo.findText(current)
             if index >= 0:
                 combo.setCurrentIndex(index)
-            else:
+            elif keep_missing:
                 combo.setEditText(current)
         combo.blockSignals(False)
 
@@ -681,14 +699,16 @@ class InspectorDock(QWidget):
         self.project = project
         self._project_image_topics = []
         if project is not None:
-            self._start_worker(self.api.get_dataset_config, self._finish_project_topics_config, project.key)
+            self._start_worker(self.api.get_project_config, self._finish_project_topics_config, project.key)
 
     def _finish_project_topics_config(self, result: object, error: object) -> None:
         if error is not None:
             return
         config = result if isinstance(result, dict) else {}
         self._project_image_topics = self._project_image_topics_from_config(config)
-        self._fill_combo(self.image_topic, self._image_topic_names(list(self._topic_types)))
+        self._fill_combo(self.image_topic, self._image_topic_names(list(self._topic_types)), keep_missing=False)
+        if self._project_image_topics:
+            self._append(self.preview_log, f"loaded {len(self._project_image_topics)} project image topic(s)")
         self.update_image_topic_type(self.image_topic.currentText())
 
     def stop_workers(self) -> None:

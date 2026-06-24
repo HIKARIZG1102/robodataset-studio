@@ -5,6 +5,7 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QFormLayout, QHeaderVie
 
 from robodataset_studio_v3.frontend.api_client import ApiClient, ProjectSummary
 from robodataset_studio_v3.frontend.pages.base import BasePage
+from robodataset_studio_v3.frontend.ui_helpers import make_path_field
 
 
 class ConvertPage(BasePage):
@@ -13,6 +14,8 @@ class ConvertPage(BasePage):
         self.root = QLineEdit()
         self.output_dir = QLineEdit()
         self.output_name = QLineEdit("calvin")
+        for field in [self.root, self.output_dir]:
+            make_path_field(field)
         self.session_table = QTableWidget(0, 5)
         self.session_table.setHorizontalHeaderLabels(["Use", "Session", "Episodes", "Status", "Path"])
         self.session_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)

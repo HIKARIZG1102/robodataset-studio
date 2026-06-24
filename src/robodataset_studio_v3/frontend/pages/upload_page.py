@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 
 from robodataset_studio_v3.frontend.api_client import ApiClient, ProjectSummary
 from robodataset_studio_v3.frontend.pages.base import BasePage
+from robodataset_studio_v3.frontend.ui_helpers import make_path_field, make_path_label
 
 
 class UploadPage(BasePage):
@@ -46,6 +47,10 @@ class UploadPage(BasePage):
         self.manifest_summary = QLabel("manifest: not built")
         self.remote_summary = QLabel("remote: not listed")
         self.task_summary = QLabel("task: idle")
+        for field in [self.local_path, self.remote_path, self.key_path, self.new_folder]:
+            make_path_field(field)
+        for label in [self.manifest_summary, self.remote_summary, self.task_summary, self.auth_hint]:
+            make_path_label(label)
         self.manifest_path = ""
         self.manifest_table = QTableWidget(0, 3)
         self.manifest_table.setHorizontalHeaderLabels(["Path", "Size", "SHA256"])

@@ -26,6 +26,7 @@ class RecordingService:
 
     def preflight(self, project_key: str) -> dict[str, Any]:
         dataset_config = self.configs.read_dataset_config(self.projects.project_dir(project_key))
+        self.configs.sync_dataset_schema(dataset_config)
         streams = dataset_config.get("streams", [])
         state_keys = dataset_config.get("state", {}).get("keys", [])
         warnings = []
@@ -91,6 +92,7 @@ class RecordingService:
     ) -> dict[str, Any]:
         project_dir = self.projects.project_dir(project_key)
         dataset_config = self.configs.read_dataset_config(project_dir)
+        self.configs.sync_dataset_schema(dataset_config)
         recording = dataset_config.setdefault("recording", {})
         recording["stop_mode"] = mode
         if duration_sec is not None:
@@ -142,6 +144,7 @@ class RecordingService:
     def simulate(self, project_key: str, target_samples: int | None = None) -> dict[str, Any]:
         project_dir = self.projects.project_dir(project_key)
         dataset_config = self.configs.read_dataset_config(project_dir)
+        self.configs.sync_dataset_schema(dataset_config)
         session_name = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}_simulated"
         session_dir = project_dir / "raw_sessions" / session_name
         training_dir = session_dir / "training"
@@ -249,26 +252,40 @@ class RecordingService:
             recording = dataset_config.get("recording", {}) if isinstance(dataset_config.get("recording"), dict) else {}
             samples = int(target_samples or recording.get("target_samples") or max(int(float(recording.get("sample_rate_hz") or 10) * 2), 2))
             samples = max(samples, 2)
-            transition_count = samples - 1
+            dataset = dataset_config.get("dataset", {}) if isinstance(dataset_config.get("dataset"), dict) else {}
+            requires_actions = bool(dataset.get("requires_actions", True))
+            transition_count = samples - 1 if requires_actions else samples
             streams = [item for item in dataset_config.get("streams", []) if isinstance(item, dict)]
             image_streams = [item for item in streams if item.get("message_type") == "sensor_msgs/msg/Image"]
+            state_keys = [
+                item
+                for item in dataset_config.get("state", {}).get("keys", [])
+                if isinstance(item, dict)
+            ]
             state_dim = int(dataset_config.get("action", {}).get("dim") or dataset_config.get("robot", {}).get("joint_count") or 7)
+            if not state_keys:
+                state_keys = [{"name": "robot_obs", "output_dim": state_dim}]
             for index in range(transition_count):
                 arrays: dict[str, Any] = {}
                 for stream in image_streams:
-                    name = str(stream.get("name") or stream.get("calvin_key") or "rgb_static")
+                    name = self._stream_output_key(stream)
                     arrays[name] = self._simulated_frame(index)
-                robot_obs = np.linspace(0, 1, state_dim, dtype=np.float32) + np.float32(index * 0.01)
-                action = np.full((state_dim,), 0.01, dtype=np.float32)
-                arrays.update(
-                    {
-                        "robot_obs": robot_obs,
-                        "rel_actions": action,
-                        "actions": action.copy(),
-                        "episode_metadata": np.array(json.dumps({"mock": True, "transition_index": index, "collection_config": dataset_config}, ensure_ascii=False)),
-                        "collection_config": np.array(json.dumps(dataset_config, ensure_ascii=False)),
-                    }
-                )
+                primary_obs: np.ndarray | None = None
+                for state_key in state_keys:
+                    key_name = str(state_key.get("name") or "robot_obs")
+                    key_dim = int(state_key.get("output_dim") or state_dim)
+                    robot_obs = np.linspace(0, 1, max(key_dim, 1), dtype=np.float32) + np.float32(index * 0.01)
+                    arrays[key_name] = robot_obs
+                    if primary_obs is None or key_name == str(dataset_config.get("action", {}).get("source_state_key") or "robot_obs"):
+                        primary_obs = robot_obs
+                primary_obs = primary_obs if primary_obs is not None else np.zeros((state_dim,), dtype=np.float32)
+                if requires_actions:
+                    action_dim = int(dataset_config.get("action", {}).get("dim") or primary_obs.shape[0])
+                    action = np.full((max(action_dim, 1),), 0.01, dtype=np.float32)
+                    arrays["rel_actions"] = action
+                    arrays["actions"] = action.copy()
+                arrays["episode_metadata"] = np.array(json.dumps({"mock": True, "transition_index": index, "collection_config": dataset_config}, ensure_ascii=False))
+                arrays["collection_config"] = np.array(json.dumps(dataset_config, ensure_ascii=False))
                 self._write_npz_atomic(training_dir / f"episode_{index:07d}.npz", arrays)
             metadata = {"mock": True, "steps": transition_count, "collection_config": dataset_config, "session_dir": str(session_dir)}
             (session_dir / "session_metadata.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -285,6 +302,12 @@ class RecordingService:
         frame[:, :, 1] = (y + index * 5) % 255
         frame[:, :, 2] = 96
         return frame
+
+    def _stream_output_key(self, stream: dict[str, Any]) -> str:
+        calvin_key = stream.get("calvin_key")
+        if calvin_key is not None and str(calvin_key).strip():
+            return str(calvin_key).strip()
+        return str(stream.get("name") or stream.get("topic") or "image").strip("/").replace("/", "_")
 
     def _write_npz_atomic(self, path: Path, arrays: dict[str, Any]) -> None:
         tmp_path = path.with_suffix(".npz.tmp")
