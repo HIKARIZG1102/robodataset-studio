@@ -11,6 +11,7 @@ from uuid import uuid4
 
 import numpy as np
 
+from robodataset_studio_v3.core.runtime_env import apply_ros_environment, select_rmw
 from robodataset_studio_v3.ros.image_conversion import image_bytes_to_array
 
 
@@ -374,9 +375,11 @@ class RosEpisodeRecorder:
         if os.environ.get("ROBODATASET_DISABLE_FASTDDS_SHM", "1") == "1":
             profile = Path(__file__).resolve().parents[3] / "config" / "fastdds_no_shm.xml"
             if profile.exists():
-                os.environ.setdefault("RMW_IMPLEMENTATION", os.environ.get("ROBODATASET_RMW_IMPLEMENTATION", "rmw_cyclonedds_cpp"))
+                os.environ["RMW_IMPLEMENTATION"] = select_rmw(os.environ.get("ROBODATASET_RMW_IMPLEMENTATION") or os.environ.get("RMW_IMPLEMENTATION"))
+                os.environ["ROBODATASET_RMW_IMPLEMENTATION"] = os.environ["RMW_IMPLEMENTATION"]
                 os.environ.setdefault("FASTDDS_DEFAULT_PROFILES_FILE", str(profile))
                 os.environ.setdefault("FASTRTPS_DEFAULT_PROFILES_FILE", str(profile))
+        apply_ros_environment(os.environ)
         import rclpy
         from rclpy.executors import SingleThreadedExecutor
         from rclpy.qos import qos_profile_sensor_data

@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 
 from robodataset_studio_v3.frontend.api_client import ApiClient, ProjectSummary
 from robodataset_studio_v3.frontend.worker import ApiWorker
+from robodataset_studio_v3.core.runtime_env import select_rmw
 
 
 class InspectorTerminal(QPlainTextEdit):
@@ -344,7 +345,9 @@ class InspectorDock(QWidget):
         env = QProcessEnvironment.systemEnvironment()
         for key, value in os.environ.items():
             env.insert(key, value)
-        env.insert("RMW_IMPLEMENTATION", os.environ.get("RMW_IMPLEMENTATION", os.environ.get("ROBODATASET_RMW_IMPLEMENTATION", "rmw_cyclonedds_cpp")))
+        rmw = select_rmw(os.environ.get("RMW_IMPLEMENTATION") or os.environ.get("ROBODATASET_RMW_IMPLEMENTATION"))
+        env.insert("RMW_IMPLEMENTATION", rmw)
+        env.insert("ROBODATASET_RMW_IMPLEMENTATION", rmw)
         env.insert("ROS_LOG_DIR", os.environ.get("ROS_LOG_DIR", "/tmp/robodataset_ros_logs"))
         root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
         src_dir = os.path.join(root_dir, "src")

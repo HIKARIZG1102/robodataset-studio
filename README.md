@@ -67,8 +67,10 @@ After bootstrap, start the app with either command:
 ./scripts/run_app.sh
 ```
 
-`run_app.sh` sources `/opt/ros/humble/setup.bash` when available and exports
-`RMW_IMPLEMENTATION=rmw_cyclonedds_cpp` by default. Override these when needed:
+`run_app.sh` sources the first available ROS setup file from `ROS_SETUP`,
+`/opt/ros/humble/setup.bash`, or `/opt/ros/jazzy/setup.bash`. It auto-selects
+an installed RMW implementation, preferring `rmw_fastrtps_cpp` on machines that
+only have Fast DDS installed. Override these when needed:
 
 ```bash
 ROS_SETUP=/path/to/install/setup.bash ./RoboDataset-Studio-V3.sh

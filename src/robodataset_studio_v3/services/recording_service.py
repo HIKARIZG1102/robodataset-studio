@@ -13,6 +13,7 @@ import numpy as np
 import yaml
 
 from robodataset_studio_v3.services.config_service import ConfigService
+from robodataset_studio_v3.core.runtime_env import apply_ros_environment, default_ros_setup
 from robodataset_studio_v3.services.project_service import project_service
 from robodataset_studio_v3.services.ros_service import ros_service
 from robodataset_studio_v3.services.task_service import task_service
@@ -212,16 +213,10 @@ class RecordingService:
 
     def _recording_process_env(self) -> dict[str, str]:
         env = os.environ.copy()
-        env.setdefault("RMW_IMPLEMENTATION", env.get("ROBODATASET_RMW_IMPLEMENTATION", "rmw_cyclonedds_cpp"))
-        ros_log_dir = env.get("ROS_LOG_DIR") or "/tmp/robodataset_ros_logs"
-        try:
-            Path(ros_log_dir).mkdir(parents=True, exist_ok=True)
-        except Exception:
-            ros_log_dir = "/tmp"
-        env["ROS_LOG_DIR"] = ros_log_dir
+        apply_ros_environment(env)
         src_dir = Path(__file__).resolve().parents[3] / "src"
         python_version = f"python{sys.version_info.major}.{sys.version_info.minor}"
-        ros_setup = env.get("ROS_SETUP", "/opt/ros/humble/setup.bash")
+        ros_setup = env.get("ROS_SETUP", default_ros_setup())
         ros_root = Path(ros_setup).resolve().parent if ros_setup else Path("/opt/ros/humble")
         pythonpath_candidates = [
             src_dir,

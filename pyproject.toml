@@ -23,7 +23,7 @@ dependencies = [
 dev = [
   "pytest>=8.0",
 ]
-upload = []
+upload = ["paramiko>=3.4"]
 
 [project.scripts]
 robodataset-studio-v3 = "robodataset_studio_v3.frontend.main:main"

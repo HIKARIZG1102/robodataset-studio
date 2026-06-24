@@ -12,6 +12,7 @@ from typing import Any
 from uuid import uuid4
 
 from robodataset_studio_v3.ros.image_conversion import image_bytes_to_rgb
+from robodataset_studio_v3.core.runtime_env import apply_ros_environment, available_rmw_implementations, default_ros_setup, select_rmw
 from robodataset_studio_v3.services.task_service import task_service
 
 
@@ -498,13 +499,7 @@ class RosService:
         return f"{text[:keep]}\n...[truncated {len(text) - keep * 2} chars]...\n{text[-keep:]}"
 
     def _prepare_ros_process_env(self) -> None:
-        os.environ.setdefault("RMW_IMPLEMENTATION", os.environ.get("ROBODATASET_RMW_IMPLEMENTATION", "rmw_cyclonedds_cpp"))
-        ros_log_dir = os.environ.get("ROS_LOG_DIR") or "/tmp/robodataset_ros_logs"
-        try:
-            Path(ros_log_dir).mkdir(parents=True, exist_ok=True)
-        except Exception:
-            ros_log_dir = "/tmp"
-        os.environ["ROS_LOG_DIR"] = ros_log_dir
+        apply_ros_environment(os.environ)
         if os.environ.get("ROBODATASET_DISABLE_FASTDDS_SHM", "1") == "1":
             profile = Path(__file__).resolve().parents[3] / "config" / "fastdds_no_shm.xml"
             if profile.exists():
@@ -513,7 +508,7 @@ class RosService:
         self._ensure_ros_pythonpath()
 
     def _ensure_ros_pythonpath(self) -> None:
-        ros_setup = os.environ.get("ROS_SETUP", "/opt/ros/humble/setup.bash")
+        ros_setup = os.environ.get("ROS_SETUP", default_ros_setup())
         ros_root = str(Path(ros_setup).resolve().parent) if ros_setup else "/opt/ros/humble"
         major_minor = f"python{sys.version_info.major}.{sys.version_info.minor}"
         candidates = [
@@ -550,11 +545,11 @@ class RosService:
                 pass
 
     def _run_ros(self, command: list[str], timeout: int, *, rmw: str | None = None) -> dict[str, Any]:
-        ros_setup = os.environ.get("ROS_SETUP", "/opt/ros/humble/setup.bash")
+        ros_setup = os.environ.get("ROS_SETUP", default_ros_setup())
         quoted = " ".join(shlex.quote(item) for item in command)
         shell_command = f"source {shlex.quote(ros_setup)} >/dev/null 2>&1 || true; exec {quoted}"
         env = os.environ.copy()
-        selected_rmw = rmw or env.get("RMW_IMPLEMENTATION") or os.environ.get("ROBODATASET_RMW_IMPLEMENTATION") or "rmw_cyclonedds_cpp"
+        selected_rmw = select_rmw(rmw or env.get("RMW_IMPLEMENTATION") or os.environ.get("ROBODATASET_RMW_IMPLEMENTATION"))
         env["RMW_IMPLEMENTATION"] = selected_rmw
         ros_log_dir = env.get("ROS_LOG_DIR") or "/tmp/robodataset_ros_logs"
         try:
@@ -603,8 +598,8 @@ class RosService:
         return last
 
     def _rmw_candidates(self) -> list[str]:
-        configured = os.environ.get("RMW_IMPLEMENTATION") or os.environ.get("ROBODATASET_RMW_IMPLEMENTATION") or "rmw_cyclonedds_cpp"
-        candidates = [configured, "rmw_fastrtps_cpp", "rmw_cyclonedds_cpp"]
+        configured = select_rmw(os.environ.get("RMW_IMPLEMENTATION") or os.environ.get("ROBODATASET_RMW_IMPLEMENTATION"))
+        candidates = [configured, *available_rmw_implementations(), "rmw_fastrtps_cpp", "rmw_cyclonedds_cpp"]
         unique = []
         for item in candidates:
             if item and item not in unique:
