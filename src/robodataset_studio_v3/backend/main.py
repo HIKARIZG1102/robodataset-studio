@@ -6,6 +6,7 @@ import uvicorn
 from fastapi import FastAPI
 
 from robodataset_studio_v3.backend.routers import ai, config, convert, health, projects, recording, review, ros, settings, tasks, upload
+from robodataset_studio_v3.core.runtime_env import apply_ros_environment
 
 
 def create_app() -> FastAPI:
@@ -28,6 +29,7 @@ app = create_app()
 
 
 def main() -> None:
+    apply_ros_environment(os.environ)
     host = os.environ.get("ROBODATASET_V3_BACKEND_HOST", "127.0.0.1")
     port = int(os.environ.get("ROBODATASET_V3_BACKEND_PORT", "8765"))
     uvicorn.run(app, host=host, port=port, log_level="info")

@@ -7,8 +7,52 @@ VENV_DIR="${VENV_DIR:-${ROOT_DIR}/.venv}"
 CONDA_EXE="${CONDA_EXE:-$(command -v conda || true)}"
 CONDA_ENV_DIR="${CONDA_ENV_DIR:-${ROOT_DIR}/.conda-env}"
 ENV_BACKEND="${ENV_BACKEND:-auto}"
-ROS_SETUP="${ROS_SETUP:-/opt/ros/humble/setup.bash}"
-ROBODATASET_RMW_IMPLEMENTATION="${ROBODATASET_RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
+select_ros_setup() {
+  for candidate in "${ROS_SETUP:-}" /opt/ros/humble/setup.bash /opt/ros/jazzy/setup.bash; do
+    if [[ -n "${candidate}" && -f "${candidate}" ]]; then
+      printf '%s\n' "${candidate}"
+      return
+    fi
+  done
+  printf '%s\n' "${ROS_SETUP:-/opt/ros/humble/setup.bash}"
+}
+
+select_rmw() {
+  local requested="${ROBODATASET_RMW_IMPLEMENTATION:-${RMW_IMPLEMENTATION:-}}"
+  if [[ -n "${requested}" ]] && rmw_available "${requested}"; then
+    printf '%s\n' "${requested}"
+    return
+  fi
+  if [[ -f "${ROS_SETUP}" ]]; then
+    set +u
+    # shellcheck disable=SC1090
+    source "${ROS_SETUP}" >/dev/null 2>&1 || true
+    set -u
+  fi
+  if rmw_available "rmw_fastrtps_cpp"; then
+    printf '%s\n' "rmw_fastrtps_cpp"
+    return
+  fi
+  if rmw_available "rmw_cyclonedds_cpp"; then
+    printf '%s\n' "rmw_cyclonedds_cpp"
+    return
+  fi
+  printf '%s\n' "${requested:-rmw_fastrtps_cpp}"
+}
+
+rmw_available() {
+  local name="$1"
+  if command -v ros2 >/dev/null 2>&1 && ros2 pkg list 2>/dev/null | grep -qx "${name}"; then
+    return 0
+  fi
+  if command -v ldconfig >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -q "lib${name}.so"; then
+    return 0
+  fi
+  return 1
+}
+
+ROS_SETUP="$(select_ros_setup)"
+ROBODATASET_RMW_IMPLEMENTATION="$(select_rmw)"
 
 python_version() {
   "$1" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")'
@@ -128,7 +172,7 @@ case "${ENV_BACKEND}" in
     ;;
 esac
 
-"${ENV_PYTHON}" -m pip install setuptools wheel || true
+"${ENV_PYTHON}" -m pip install --upgrade pip "setuptools>=68,<80" wheel || true
 if ! "${ENV_PYTHON}" -m pip install -e "${ROOT_DIR}[dev,upload]"; then
   echo "Editable install failed, retrying without build isolation." >&2
   "${ENV_PYTHON}" -m pip install --no-build-isolation -e "${ROOT_DIR}[dev,upload]"

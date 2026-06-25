@@ -10,6 +10,7 @@ import signal
 from pathlib import Path
 
 from robodataset_studio_v3.frontend.api_client import ApiClient
+from robodataset_studio_v3.core.runtime_env import apply_ros_environment, default_ros_setup
 
 
 class BackendProcess:
@@ -58,14 +59,8 @@ class BackendProcess:
         env["ROBODATASET_V3_BACKEND_HOST"] = self.host
         env["ROBODATASET_V3_BACKEND_PORT"] = str(self.port)
         env["ROBODATASET_V3_ROOT"] = str(self.root_dir)
-        env.setdefault("ROS_SETUP", "/opt/ros/humble/setup.bash")
-        env.setdefault("ROBODATASET_RMW_IMPLEMENTATION", env.get("RMW_IMPLEMENTATION", "rmw_cyclonedds_cpp"))
-        env.setdefault("RMW_IMPLEMENTATION", env["ROBODATASET_RMW_IMPLEMENTATION"])
-        env.setdefault("ROS_LOG_DIR", "/tmp/robodataset_ros_logs")
-        try:
-            Path(env["ROS_LOG_DIR"]).mkdir(parents=True, exist_ok=True)
-        except Exception:
-            env["ROS_LOG_DIR"] = "/tmp"
+        env.setdefault("ROS_SETUP", default_ros_setup())
+        apply_ros_environment(env)
         log_dir = Path(tempfile.gettempdir())
         self.log_path = log_dir / f"robodataset_studio_v3_backend_{self.port}.log"
         log_file = self.log_path.open("w", encoding="utf-8")

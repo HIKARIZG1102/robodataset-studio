@@ -11,7 +11,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from robodataset_studio_v3.ros.image_conversion import image_bytes_to_rgb
+from robodataset_studio_v3.ros.image_conversion import compressed_image_to_rgb, image_bytes_to_rgb
+from robodataset_studio_v3.core.runtime_env import apply_ros_environment, available_rmw_implementations, default_ros_setup, select_rmw
 from robodataset_studio_v3.services.task_service import task_service
 
 
@@ -165,6 +166,7 @@ class RosService:
             import rclpy
             from rclpy.executors import SingleThreadedExecutor
             from rclpy.qos import qos_profile_sensor_data
+            from sensor_msgs.msg import CompressedImage
             from sensor_msgs.msg import Image
         except Exception as exc:
             return {"ok": False, "error": f"ROS image preview requires rclpy and sensor_msgs: {exc}"}
@@ -182,6 +184,7 @@ class RosService:
             def on_image(msg: Image) -> None:
                 captured["data"] = bytes(msg.data)
                 captured["meta"] = {
+                    "message_type": "sensor_msgs/msg/Image",
                     "height": int(msg.height),
                     "width": int(msg.width),
                     "encoding": str(msg.encoding),
@@ -189,22 +192,44 @@ class RosService:
                     "step": int(msg.step),
                 }
 
-            node.create_subscription(Image, topic, on_image, qos_profile_sensor_data)
+            def on_compressed_image(msg: CompressedImage) -> None:
+                captured["data"] = bytes(msg.data)
+                captured["meta"] = {
+                    "message_type": "sensor_msgs/msg/CompressedImage",
+                    "format": str(msg.format),
+                    "compressed_size": len(msg.data),
+                }
+
+            message_type = self._discover_topic_type(node, executor, topic, timeout=1.5)
+            if message_type == "sensor_msgs/msg/CompressedImage":
+                node.create_subscription(CompressedImage, topic, on_compressed_image, qos_profile_sensor_data)
+            else:
+                node.create_subscription(Image, topic, on_image, qos_profile_sensor_data)
             deadline = time.time() + timeout
             while time.time() < deadline and "data" not in captured:
                 executor.spin_once(timeout_sec=0.1)
             if "data" not in captured:
                 return {"ok": False, "error": f"no image received from {topic} before timeout"}
             meta = captured["meta"]
-            frame = image_bytes_to_rgb(captured["data"], meta)
+            frame = (
+                compressed_image_to_rgb(captured["data"], meta)
+                if meta.get("message_type") == "sensor_msgs/msg/CompressedImage"
+                else image_bytes_to_rgb(captured["data"], meta)
+            )
             if frame is None:
-                return {"ok": False, "error": f"unsupported image encoding: {meta.get('encoding')}", "meta": meta}
+                return {"ok": False, "error": f"unsupported image encoding: {meta.get('encoding') or meta.get('format')}", "meta": meta}
             height, width = int(frame.shape[0]), int(frame.shape[1])
             ppm = f"P6\n{width} {height}\n255\n".encode("ascii") + frame.tobytes()
             meta["rgb_width"] = width
             meta["rgb_height"] = height
             meta["mean_brightness"] = float(frame.mean())
-            return {"ok": True, "topic": topic, "meta": meta, "image_ppm_base64": base64.b64encode(ppm).decode("ascii")}
+            return {
+                "ok": True,
+                "topic": topic,
+                "meta": meta,
+                "image_rgb_base64": base64.b64encode(frame.tobytes()).decode("ascii"),
+                "image_ppm_base64": base64.b64encode(ppm).decode("ascii"),
+            }
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
         finally:
@@ -421,6 +446,18 @@ class RosService:
                     f"data_preview: {data}",
                 ]
             )
+        if msg_type == "sensor_msgs/msg/CompressedImage":
+            data = list(bytes(getattr(msg, "data", b""))[:32])
+            return "\n".join(
+                [
+                    "header:",
+                    f"  stamp: {getattr(getattr(msg, 'header', None), 'stamp', '')}",
+                    f"  frame_id: {getattr(getattr(msg, 'header', None), 'frame_id', '')}",
+                    f"format: {getattr(msg, 'format', '')}",
+                    f"data_length: {len(getattr(msg, 'data', []))}",
+                    f"data_preview: {data}",
+                ]
+            )
         try:
             from rosidl_runtime_py import message_to_yaml
 
@@ -438,6 +475,13 @@ class RosService:
                 "encoding": str(getattr(msg, "encoding", "") or ""),
                 "is_bigendian": int(getattr(msg, "is_bigendian", 0) or 0),
                 "step": int(getattr(msg, "step", 0) or 0),
+                "data_length": len(getattr(msg, "data", []) or []),
+            }
+        if msg_type == "sensor_msgs/msg/CompressedImage":
+            return {
+                "message_type": msg_type,
+                "header": self._header_structured(getattr(msg, "header", None)),
+                "format": str(getattr(msg, "format", "") or ""),
                 "data_length": len(getattr(msg, "data", []) or []),
             }
         if msg_type == "sensor_msgs/msg/JointState":
@@ -498,13 +542,7 @@ class RosService:
         return f"{text[:keep]}\n...[truncated {len(text) - keep * 2} chars]...\n{text[-keep:]}"
 
     def _prepare_ros_process_env(self) -> None:
-        os.environ.setdefault("RMW_IMPLEMENTATION", os.environ.get("ROBODATASET_RMW_IMPLEMENTATION", "rmw_cyclonedds_cpp"))
-        ros_log_dir = os.environ.get("ROS_LOG_DIR") or "/tmp/robodataset_ros_logs"
-        try:
-            Path(ros_log_dir).mkdir(parents=True, exist_ok=True)
-        except Exception:
-            ros_log_dir = "/tmp"
-        os.environ["ROS_LOG_DIR"] = ros_log_dir
+        apply_ros_environment(os.environ)
         if os.environ.get("ROBODATASET_DISABLE_FASTDDS_SHM", "1") == "1":
             profile = Path(__file__).resolve().parents[3] / "config" / "fastdds_no_shm.xml"
             if profile.exists():
@@ -513,7 +551,7 @@ class RosService:
         self._ensure_ros_pythonpath()
 
     def _ensure_ros_pythonpath(self) -> None:
-        ros_setup = os.environ.get("ROS_SETUP", "/opt/ros/humble/setup.bash")
+        ros_setup = os.environ.get("ROS_SETUP", default_ros_setup())
         ros_root = str(Path(ros_setup).resolve().parent) if ros_setup else "/opt/ros/humble"
         major_minor = f"python{sys.version_info.major}.{sys.version_info.minor}"
         candidates = [
@@ -550,11 +588,11 @@ class RosService:
                 pass
 
     def _run_ros(self, command: list[str], timeout: int, *, rmw: str | None = None) -> dict[str, Any]:
-        ros_setup = os.environ.get("ROS_SETUP", "/opt/ros/humble/setup.bash")
+        ros_setup = os.environ.get("ROS_SETUP", default_ros_setup())
         quoted = " ".join(shlex.quote(item) for item in command)
         shell_command = f"source {shlex.quote(ros_setup)} >/dev/null 2>&1 || true; exec {quoted}"
         env = os.environ.copy()
-        selected_rmw = rmw or env.get("RMW_IMPLEMENTATION") or os.environ.get("ROBODATASET_RMW_IMPLEMENTATION") or "rmw_cyclonedds_cpp"
+        selected_rmw = select_rmw(rmw or env.get("RMW_IMPLEMENTATION") or os.environ.get("ROBODATASET_RMW_IMPLEMENTATION"))
         env["RMW_IMPLEMENTATION"] = selected_rmw
         ros_log_dir = env.get("ROS_LOG_DIR") or "/tmp/robodataset_ros_logs"
         try:
@@ -603,8 +641,8 @@ class RosService:
         return last
 
     def _rmw_candidates(self) -> list[str]:
-        configured = os.environ.get("RMW_IMPLEMENTATION") or os.environ.get("ROBODATASET_RMW_IMPLEMENTATION") or "rmw_cyclonedds_cpp"
-        candidates = [configured, "rmw_fastrtps_cpp", "rmw_cyclonedds_cpp"]
+        configured = select_rmw(os.environ.get("RMW_IMPLEMENTATION") or os.environ.get("ROBODATASET_RMW_IMPLEMENTATION"))
+        candidates = [configured, *available_rmw_implementations(), "rmw_fastrtps_cpp", "rmw_cyclonedds_cpp"]
         unique = []
         for item in candidates:
             if item and item not in unique:

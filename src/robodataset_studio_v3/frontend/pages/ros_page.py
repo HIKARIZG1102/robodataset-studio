@@ -18,6 +18,8 @@ from robodataset_studio_v3.frontend.api_client import ApiClient, ProjectSummary
 from robodataset_studio_v3.frontend.pages.base import BasePage
 from robodataset_studio_v3.frontend.worker import ApiWorker
 from robodataset_studio_v3.frontend.widgets.topic_tree import TopicTreeWidget
+from robodataset_studio_v3.ros.image_conversion import is_image_message_type
+from robodataset_studio_v3.ros.message_conversion import message_type_to_stream_defaults, unsupported_message_type_warning
 
 
 class RosPage(BasePage):
@@ -182,10 +184,11 @@ class RosPage(BasePage):
         streams = []
         state_keys = []
         action_source_topic = ""
+        warnings = []
         for topic in selected:
             name = topic.get("name", "")
             msg_type = topic.get("type", "")
-            if msg_type == "sensor_msgs/msg/Image":
+            if is_image_message_type(msg_type):
                 stream_name = self._stream_name_from_topic(name)
                 streams.append(
                     {
@@ -219,7 +222,24 @@ class RosPage(BasePage):
                         "joint_order": [],
                     }
                 )
+            else:
+                defaults = message_type_to_stream_defaults(msg_type, name)
+                if defaults is None:
+                    warnings.append(unsupported_message_type_warning(name, msg_type))
+                    continue
+                stream_name = self._stream_name_from_topic(name)
+                streams.append(
+                    {
+                        "name": stream_name,
+                        "source": "ros2_topic",
+                        "topic": name,
+                        "message_type": msg_type,
+                        **defaults,
+                    }
+                )
         config["streams"] = streams
+        config.setdefault("warnings", {})
+        config["warnings"]["unsupported_topics"] = warnings
         config.setdefault("state", {})
         config["state"]["keys"] = state_keys
         config.setdefault("robot", {})

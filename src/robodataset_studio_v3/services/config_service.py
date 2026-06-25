@@ -7,6 +7,7 @@ from typing import Any
 import yaml
 
 from robodataset_studio_v3.models.config import ConfigPreview, DatasetConfigDraft, ProjectConfigDraft
+from robodataset_studio_v3.ros.image_conversion import is_image_message_type
 
 
 def repo_root() -> Path:
@@ -251,7 +252,7 @@ class ConfigService:
             "core_action_keys": actions,
             "optional_core_keys": {
                 "timestamps": timestamp_keys,
-                "camera_info": [f"camera_info_{item.get('key')}" for item in observations if item.get("message_type") == "sensor_msgs/msg/Image"],
+                "camera_info": [f"camera_info_{item.get('key')}" for item in observations if is_image_message_type(str(item.get("message_type") or ""))],
                 "episode_metadata": ["episode_metadata"],
             },
             "extension_data_keys": extension_streams,

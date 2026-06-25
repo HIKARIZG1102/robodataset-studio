@@ -13,6 +13,9 @@ import numpy as np
 import yaml
 
 from robodataset_studio_v3.services.config_service import ConfigService
+from robodataset_studio_v3.core.runtime_env import apply_ros_environment, default_ros_setup
+from robodataset_studio_v3.ros.image_conversion import is_image_message_type
+from robodataset_studio_v3.ros.message_conversion import is_supported_generic_message_type, unsupported_message_type_warning
 from robodataset_studio_v3.services.project_service import project_service
 from robodataset_studio_v3.services.ros_service import ros_service
 from robodataset_studio_v3.services.task_service import task_service
@@ -38,6 +41,18 @@ class RecordingService:
         requires_actions = bool(dataset.get("requires_actions", True))
         if requires_actions and not state_keys:
             warnings.append("dataset requires actions but no JointState state key is configured; recording will use placeholder robot_obs/actions")
+        config_warnings = dataset_config.get("warnings", {}) if isinstance(dataset_config.get("warnings"), dict) else {}
+        unsupported_config_topics = config_warnings.get("unsupported_topics", [])
+        if isinstance(unsupported_config_topics, list):
+            warnings.extend(str(item) for item in unsupported_config_topics if item)
+        for stream in streams if isinstance(streams, list) else []:
+            if not isinstance(stream, dict):
+                continue
+            msg_type = str(stream.get("message_type") or "")
+            topic = str(stream.get("topic") or stream.get("name") or "")
+            if is_image_message_type(msg_type) or msg_type == "sensor_msgs/msg/JointState" or is_supported_generic_message_type(msg_type):
+                continue
+            warnings.append(unsupported_message_type_warning(topic, msg_type))
         topic_checks = []
         topics: list[str] = []
         for stream in streams if isinstance(streams, list) else []:
@@ -212,16 +227,10 @@ class RecordingService:
 
     def _recording_process_env(self) -> dict[str, str]:
         env = os.environ.copy()
-        env.setdefault("RMW_IMPLEMENTATION", env.get("ROBODATASET_RMW_IMPLEMENTATION", "rmw_cyclonedds_cpp"))
-        ros_log_dir = env.get("ROS_LOG_DIR") or "/tmp/robodataset_ros_logs"
-        try:
-            Path(ros_log_dir).mkdir(parents=True, exist_ok=True)
-        except Exception:
-            ros_log_dir = "/tmp"
-        env["ROS_LOG_DIR"] = ros_log_dir
+        apply_ros_environment(env)
         src_dir = Path(__file__).resolve().parents[3] / "src"
         python_version = f"python{sys.version_info.major}.{sys.version_info.minor}"
-        ros_setup = env.get("ROS_SETUP", "/opt/ros/humble/setup.bash")
+        ros_setup = env.get("ROS_SETUP", default_ros_setup())
         ros_root = Path(ros_setup).resolve().parent if ros_setup else Path("/opt/ros/humble")
         pythonpath_candidates = [
             src_dir,
@@ -256,7 +265,7 @@ class RecordingService:
             requires_actions = bool(dataset.get("requires_actions", True))
             transition_count = samples - 1 if requires_actions else samples
             streams = [item for item in dataset_config.get("streams", []) if isinstance(item, dict)]
-            image_streams = [item for item in streams if item.get("message_type") == "sensor_msgs/msg/Image"]
+            image_streams = [item for item in streams if is_image_message_type(str(item.get("message_type") or ""))]
             state_keys = [
                 item
                 for item in dataset_config.get("state", {}).get("keys", [])

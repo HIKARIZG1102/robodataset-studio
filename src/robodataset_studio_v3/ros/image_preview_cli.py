@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import numpy as np
 
-from robodataset_studio_v3.ros.image_conversion import image_bytes_to_rgb
+from robodataset_studio_v3.ros.image_conversion import compressed_image_to_rgb, image_bytes_to_rgb
 
 
 def emit(payload: dict) -> None:
@@ -23,13 +23,16 @@ def emit(payload: dict) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--topic", required=True)
+    parser.add_argument("--message-type", default="sensor_msgs/msg/Image")
     parser.add_argument("--max-fps", type=float, default=15.0)
+    parser.add_argument("--include-ppm", action="store_true")
     args = parser.parse_args()
 
     try:
         import rclpy
         from rclpy.executors import SingleThreadedExecutor
         from rclpy.qos import qos_profile_sensor_data
+        from sensor_msgs.msg import CompressedImage
         from sensor_msgs.msg import Image
     except Exception as exc:
         emit({"type": "error", "error": f"cannot import ROS image dependencies: {exc}"})
@@ -49,6 +52,25 @@ def main() -> None:
         executor = SingleThreadedExecutor(context=context)
         executor.add_node(node)
 
+        def emit_frame(frame: np.ndarray | None, meta: dict[str, object], now: float) -> None:
+            nonlocal published, last_emit
+            if frame is None:
+                emit({"type": "error", "error": f"unsupported image encoding: {meta.get('encoding') or meta.get('format')}", "meta": meta})
+                return
+            last_emit = now
+            contiguous = np.ascontiguousarray(frame)
+            h, w, _ = contiguous.shape
+            published += 1
+            payload = {
+                "type": "frame",
+                "meta": {**meta, "rgb_width": int(w), "rgb_height": int(h), "published": int(published)},
+                "rgb_base64": base64.b64encode(contiguous.tobytes()).decode("ascii"),
+            }
+            if args.include_ppm:
+                ppm = f"P6\n{w} {h}\n255\n".encode("ascii") + contiguous.tobytes()
+                payload["ppm_base64"] = base64.b64encode(ppm).decode("ascii")
+            emit(payload)
+
         def on_image(msg: Image) -> None:
             nonlocal received, published, last_emit, last_status
             received += 1
@@ -64,31 +86,44 @@ def main() -> None:
                 )
             if now - last_emit < min_period:
                 return
-            last_emit = now
             meta = {
+                "message_type": "sensor_msgs/msg/Image",
                 "encoding": str(msg.encoding),
                 "width": int(msg.width),
                 "height": int(msg.height),
+                "is_bigendian": int(msg.is_bigendian),
                 "step": int(msg.step),
                 "received": int(received),
             }
-            frame = image_bytes_to_rgb(bytes(msg.data), meta)
-            if frame is None:
-                emit({"type": "error", "error": f"unsupported image encoding: {msg.encoding}", "meta": meta})
-                return
-            contiguous = np.ascontiguousarray(frame)
-            h, w, _ = contiguous.shape
-            ppm = f"P6\n{w} {h}\n255\n".encode("ascii") + contiguous.tobytes()
-            published += 1
-            emit(
-                {
-                    "type": "frame",
-                    "meta": {**meta, "rgb_width": int(w), "rgb_height": int(h), "published": int(published)},
-                    "ppm_base64": base64.b64encode(ppm).decode("ascii"),
-                }
-            )
+            emit_frame(image_bytes_to_rgb(bytes(msg.data), meta), meta, now)
 
-        node.create_subscription(Image, args.topic, on_image, qos_profile_sensor_data)
+        def on_compressed_image(msg: CompressedImage) -> None:
+            nonlocal received, published, last_emit, last_status
+            received += 1
+            now = time.time()
+            if now - last_status >= 1.0:
+                last_status = now
+                emit(
+                    {
+                        "type": "status",
+                        "text": f"receiving compressed frames={received} format={msg.format} bytes={len(msg.data)}",
+                        "received": received,
+                    }
+                )
+            if now - last_emit < min_period:
+                return
+            meta = {
+                "message_type": "sensor_msgs/msg/CompressedImage",
+                "format": str(msg.format),
+                "received": int(received),
+                "compressed_size": len(msg.data),
+            }
+            emit_frame(compressed_image_to_rgb(bytes(msg.data), meta), meta, now)
+
+        if args.message_type == "sensor_msgs/msg/CompressedImage":
+            node.create_subscription(CompressedImage, args.topic, on_compressed_image, qos_profile_sensor_data)
+        else:
+            node.create_subscription(Image, args.topic, on_image, qos_profile_sensor_data)
         emit({"type": "status", "text": f"subscribed: {args.topic}", "received": 0})
         while context.ok():
             executor.spin_once(timeout_sec=0.1)

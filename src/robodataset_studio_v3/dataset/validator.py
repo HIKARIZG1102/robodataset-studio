@@ -7,6 +7,8 @@ from typing import Any
 import h5py
 import numpy as np
 
+from robodataset_studio_v3.ros.image_conversion import is_image_message_type
+
 
 REQUIRED_FIELDS = ["rgb_static", "rgb_wrist", "robot_obs", "rel_actions", "actions"]
 IMAGE_FIELDS = ["rgb_static", "rgb_wrist"]
@@ -306,7 +308,7 @@ class DatasetValidator:
         requires_actions = bool(dataset_cfg.get("requires_actions", True))
         fields = []
         for stream in config.get("streams", []):
-            if stream.get("message_type") != "sensor_msgs/msg/Image":
+            if not is_image_message_type(str(stream.get("message_type") or "")):
                 continue
             if stream.get("required", True) is False:
                 continue
@@ -326,7 +328,7 @@ class DatasetValidator:
             return list(IMAGE_FIELDS)
         fields = []
         for stream in config.get("streams", []):
-            if stream.get("message_type") != "sensor_msgs/msg/Image":
+            if not is_image_message_type(str(stream.get("message_type") or "")):
                 continue
             if stream.get("calvin_key") is None:
                 continue
