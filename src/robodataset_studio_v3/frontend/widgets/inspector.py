@@ -495,12 +495,22 @@ class InspectorDock(QWidget):
         process.start()
         self.preview_status.setText(f"preview: starting {topic}")
         self._append(self.preview_log, f"$ image-monitor subscribe {topic}")
+        if not process.waitForStarted(1500):
+            detail = process.errorString()
+            self.preview_status.setText(f"preview error: process did not start: {detail}")
+            self._append(self.preview_log, f"preview process did not start: {detail}; program={program}; args={arguments}")
+            self._preview_process = None
+            process.deleteLater()
+            return
         self._preview_watchdog.start(5000)
 
     def start_project_image_monitor(self) -> None:
         if self.project is None:
-            self.preview_status.setText("preview error: no project is open")
+            self._append(self.preview_log, "no project is open; using selected ROS image topic instead")
+            self.show_image()
+            self.start_image_preview()
             return
+        self._append(self.preview_log, f"loading project image monitor config for {self.project.name}")
         self._start_worker(self.api.get_project_config, self._finish_project_monitor_config, self.project.key)
 
     def _finish_project_monitor_config(self, result: object, error: object) -> None:
@@ -519,7 +529,9 @@ class InspectorDock(QWidget):
         current = self._selected_image_topic_name()
         topic = current if self._is_monitorable_image_topic(current, project_topics) else self._first_project_image_topic(config)
         if not topic:
-            self.preview_status.setText("preview error: current project config has no image topic")
+            self._append(self.preview_log, "current project config has no image topic; using selected ROS image topic instead")
+            self.show_image()
+            self.start_image_preview()
             return
         index = self.image_topic.findText(topic)
         if index >= 0:
