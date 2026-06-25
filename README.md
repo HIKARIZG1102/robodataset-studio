@@ -20,6 +20,37 @@ rsync upload, remote verification, and OpenAI-compatible AI calls.
 Some UI surfaces are still intentionally simple and will be refined after the
 backend migration is fully validated on the robot.
 
+## ROS2-First Communication Scope
+
+RoboDataset Studio V3 is primarily a ROS2 listener-based robot dataset tool.
+It is designed to discover existing ROS2 nodes/topics, subscribe to selected
+streams, record synchronized dataset samples, review sessions, convert outputs,
+and upload results. It does not send robot control commands by default.
+
+The software must adapt several communication layers:
+
+- ROS setup/workspaces: `ROS_SETUP`, overlay workspaces, Python ABI compatibility
+  with `rclpy`, `sensor_msgs`, and other ROS2 Python packages.
+- RMW/DDS: `rmw_fastrtps_cpp` / FastDDS and `rmw_cyclonedds_cpp` / CycloneDDS.
+  DDS/RMW is part of the ROS2 runtime installed on the robot workstation; it is
+  not a normal `pip` dependency of this app.
+- DDS transport and discovery: UDP/multicast, loopback/local-only mode,
+  `ROS_DOMAIN_ID`, `ROS_LOCALHOST_ONLY`, shared-memory transport, LAN/VPN
+  behavior, and FastDDS SHM failure modes.
+- QoS: image/sensor topics usually require sensor-data QoS, while state and
+  metadata topics may use different reliability/durability settings.
+- ROS message families: images, compressed images, joint states, IMU, odometry,
+  geometry messages, and common `std_msgs` scalar/array topics.
+- Image encodings: `rgb8`, `bgr8`, `mono8`, `16UC1`, `16SC1`, `32FC1`, padded
+  row strides, endian handling, and compressed JPEG/PNG-style streams.
+- Dataset storage mapping: ROS messages must be converted into arrays,
+  extension streams, metadata, and CALVIN-compatible keys without silently
+  dropping unsupported data.
+
+When a layer is unsupported or misconfigured, V3 should surface an explicit
+warning or error with the topic, message type, encoding, RMW, or environment
+detail instead of failing silently.
+
 ## Install And Start
 
 The recommended path is the project launcher. It uses the same environment

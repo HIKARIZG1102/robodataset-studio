@@ -35,6 +35,18 @@
     </li>
   </ol>
 
+  <h2>0.1 ROS2 通信层适配范围</h2>
+  <p>V3 主要适配 ROS2 数据采集场景：发现已有 ROS2 节点和 topic，订阅图像、机械臂状态、传感器状态等数据，并整合成数据集。V3 默认不向机器人发布控制命令。</p>
+  <ul>
+    <li><b>ROS setup / workspace：</b>需要正确 source ROS2 和机器人工作空间，例如 Humble、Jazzy 或自定义 overlay。</li>
+    <li><b>RMW / DDS：</b><code>rmw_fastrtps_cpp</code> / FastDDS、<code>rmw_cyclonedds_cpp</code> / CycloneDDS 属于 ROS2 runtime 通信层，不是本软件的 pip 依赖。V3 会检测可用 RMW，并尽量避开 FastDDS shared-memory 相关错误。</li>
+    <li><b>发现与网络：</b><code>ROS_DOMAIN_ID</code>、<code>ROS_LOCALHOST_ONLY</code>、UDP/multicast、局域网、VPN、跨机器路由都会影响 topic 是否可见。</li>
+    <li><b>QoS：</b>图像和传感器 topic 通常需要 sensor-data QoS；状态、参数和普通 topic 可能使用不同可靠性设置。</li>
+    <li><b>消息类型：</b>当前重点支持 <code>Image</code>、<code>CompressedImage</code>、<code>JointState</code>、IMU、Odometry、geometry_msgs 以及常见 std_msgs 标量/数组。自定义消息需要新增 converter。</li>
+    <li><b>图像编码：</b>需要适配 <code>rgb8</code>、<code>bgr8</code>、mono/depth、float depth、压缩图像、stride padding 和 endian。</li>
+  </ul>
+  <p class="note">如果某一层不支持或配置不匹配，V3 应该显示明确 warning/error，例如 topic、message type、encoding、RMW 或 ROS 环境问题，不应该静默失败。</p>
+
   <h2>1. 从零创建项目并采集真实 episode</h2>
   <h3>1.1 新建或打开项目</h3>
   <ol>

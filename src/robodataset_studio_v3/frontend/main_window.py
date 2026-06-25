@@ -1398,6 +1398,9 @@ class MainWindow(QMainWindow):
                     "  RoboDataset Studio contributors",
                     "",
                     "Purpose: ROS2 listener-only robot dataset collection, review, conversion, and upload.",
+                    "Primary target: ROS2 topic/service environments, not direct robot control.",
+                    "Runtime adaptation: ROS setup, RMW/DDS, discovery/network, QoS, message types, and image encodings.",
+                    "DDS/RMW note: FastDDS/CycloneDDS are ROS2 runtime communication layers, not pip dependencies of this app.",
                     "License/copyright: project-local repository metadata applies.",
                 ]
             ),
