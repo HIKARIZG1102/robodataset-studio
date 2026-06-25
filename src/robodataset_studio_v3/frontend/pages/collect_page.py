@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any
 
@@ -50,6 +51,7 @@ class CollectPage(BasePage):
         self.current_dataset_config: dict[str, Any] = {}
         self.active_task_id = ""
         self.active_session_dir = ""
+        self.recording_started_at: datetime | None = None
         self.task_timer = QTimer(self)
         self.task_timer.setInterval(1000)
         self.task_timer.timeout.connect(self.poll_active_task)
@@ -96,8 +98,10 @@ class CollectPage(BasePage):
         self.project = project
         self.active_task_id = ""
         self.active_session_dir = ""
+        self.recording_started_at = None
         self.session_label.setText("Current session: new session will be created when recording starts")
         self.task_label.setText("Task: -")
+        self.task_label.setStyleSheet("")
         if project is not None:
             self.title.setText(f"Collect - {project.key}")
             self.refresh_plan()
@@ -200,9 +204,12 @@ class CollectPage(BasePage):
             payload["target_samples"] = int(self.samples.value())
         self.active_task_id = ""
         self.active_session_dir = ""
+        self.recording_started_at = datetime.now()
         self.session_label.setText(f"Current session: creating from {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        self.task_label.setText("Task: -")
+        self.task_label.setText("Task: starting recording...")
+        self.task_label.setStyleSheet("font-weight: 700; color: #b42318;")
         self.status.setText("Starting recording...")
+        self.output.setPlainText("Starting listener recording...\nWaiting for backend task id.")
         self.run_async(
             self.api.post,
             self._finish_start_recording,
@@ -219,9 +226,12 @@ class CollectPage(BasePage):
         payload: dict[str, Any] = {"project_key": self.project_key(), "mode": "simulate", "target_samples": target_samples}
         self.active_task_id = ""
         self.active_session_dir = ""
+        self.recording_started_at = datetime.now()
         self.session_label.setText(f"Current session: creating simulated session from {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        self.task_label.setText("Task: -")
+        self.task_label.setText("Task: starting simulation...")
+        self.task_label.setStyleSheet("font-weight: 700; color: #b42318;")
         self.status.setText("Writing simulated test episode...")
+        self.output.setPlainText("Starting simulated listener episode...\nWaiting for backend task id.")
         self.run_async(
             self.api.post,
             self._finish_start_recording,
@@ -248,8 +258,10 @@ class CollectPage(BasePage):
         self.active_task_id = str(payload.get("task_id") or "")
         self.active_session_dir = str(payload.get("session_dir") or "")
         self.session_label.setText(f"Current session: {self.active_session_dir or '-'}")
-        self.task_label.setText(f"Task: {self.active_task_id or '-'}")
-        self.show_result(payload, "Recording task started")
+        self.task_label.setText(f"Task: {self.active_task_id or '-'} [running] recording active")
+        self.task_label.setStyleSheet("font-weight: 700; color: #b42318;")
+        self._render_task_monitor({"status": "running", "message": "recording active", "logs": [f"session: {self.active_session_dir}"], "result": payload})
+        self.status.setText("Recording active")
         if self.active_task_id:
             self.task_timer.start()
 
@@ -280,12 +292,48 @@ class CollectPage(BasePage):
         status = str(task.get("status") or "")
         message = str(task.get("message") or "")
         self.task_label.setText(f"Task: {self.active_task_id} [{status}] {message}")
+        if status in {"running", "queued"}:
+            self.task_label.setStyleSheet("font-weight: 700; color: #b42318;")
+            self.status.setText("Recording active - task monitor refreshing")
+        else:
+            self.task_label.setStyleSheet("")
+        self._render_task_monitor(task)
         if status in {"done", "failed", "cancelled"}:
             self.task_timer.stop()
-            self.show_result(task, f"Recording {status}")
+            self.status.setText(f"Recording {status}")
             result_payload = task.get("result", {}) if isinstance(task.get("result"), dict) else {}
             session_dir = str(result_payload.get("session_dir") or self.active_session_dir)
             if session_dir:
                 self.active_session_dir = session_dir
                 self.session_label.setText(f"Last completed session: {session_dir}")
             self.refresh_plan()
+
+    def _render_task_monitor(self, task: dict[str, Any]) -> None:
+        status = str(task.get("status") or "running")
+        message = str(task.get("message") or "")
+        progress = task.get("progress")
+        logs = task.get("logs", [])
+        logs_list = [str(line) for line in logs] if isinstance(logs, list) else []
+        elapsed_text = "-"
+        if self.recording_started_at is not None:
+            elapsed = max((datetime.now() - self.recording_started_at).total_seconds(), 0.0)
+            elapsed_text = f"{elapsed:.1f}s"
+        header = [
+            "RECORDING MONITOR",
+            f"task_id: {self.active_task_id or str(task.get('task_id') or '-')}",
+            f"status: {status}",
+            f"message: {message or '-'}",
+            f"elapsed: {elapsed_text}",
+            f"session: {self.active_session_dir or '-'}",
+        ]
+        if isinstance(progress, (float, int)):
+            header.append(f"progress: {float(progress) * 100:.1f}%")
+        result_payload = task.get("result", {})
+        if isinstance(result_payload, dict) and result_payload:
+            header.extend(["", "result:", json.dumps(result_payload, indent=2, ensure_ascii=False, default=str)])
+        recent_logs = logs_list[-80:]
+        if recent_logs:
+            header.extend(["", "live logs:", *recent_logs])
+        else:
+            header.extend(["", "live logs:", "waiting for recorder heartbeat..."])
+        self.output.setPlainText("\n".join(header))

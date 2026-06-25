@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QSplitter,
@@ -143,8 +144,7 @@ class ReviewPage(BasePage):
         target_buttons = QHBoxLayout()
         for label, handler in [
             ("Use Current Session", self.use_current_session),
-            ("Scan Session", self.scan_session),
-            ("Run Local Checks", self.check_session),
+            ("Scan + Run Local Checks", self.scan_then_check),
             ("Export Quality Report", self.export_quality_report),
         ]:
             button = QPushButton(label)
@@ -251,6 +251,17 @@ class ReviewPage(BasePage):
 
     def check_session(self) -> None:
         self._post("/api/review/session/check", {"session_dir": self.session_dir.text().strip()}, "Session checked", self._finish_check)
+
+    def scan_then_check(self) -> None:
+        session_dir = self.session_dir.text().strip()
+        if not session_dir:
+            self._warn_review_blocked("No session selected", "Select a review session before running local checks.")
+            return
+        path = Path(session_dir).expanduser()
+        if not path.exists():
+            self._warn_review_blocked("Session not found", f"The selected session path does not exist:\n{path}")
+            return
+        self._post("/api/review/session/scan", {"session_dir": session_dir}, "Scanning session before local checks", self._finish_scan_before_check)
 
     def export_quality_report(self) -> None:
         self._post("/api/review/session/report", {"session_dir": self.session_dir.text().strip()}, "Quality report exported", self._finish_report)
@@ -384,6 +395,25 @@ class ReviewPage(BasePage):
         payload = self._payload_or_error(result, error)
         if not payload:
             return
+        self._apply_session_payload(payload, checks_label="not run")
+        self.show_result(result, "Session scanned")
+
+    def _finish_scan_before_check(self, result: object, error: object) -> None:
+        payload = self._payload_or_error(result, error)
+        if not payload:
+            return
+        self._apply_session_payload(payload, checks_label="not run")
+        if not self._review_rows:
+            training_dir = str(payload.get("training_dir") or Path(str(payload.get("session_dir") or "")).expanduser() / "training")
+            self._warn_review_blocked(
+                "No episode data found",
+                f"No episode_*.npz files were found under:\n{training_dir}\n\nRecord or simulate a session before running local checks.",
+            )
+            self.show_result(result, "Session scanned, no episode data found")
+            return
+        self._post("/api/review/session/check", {"session_dir": self.session_dir.text().strip()}, "Running local checks", self._finish_check)
+
+    def _apply_session_payload(self, payload: dict[str, Any], *, checks_label: str) -> None:
         rows = payload.get("episodes", [])
         self._review_rows = rows if isinstance(rows, list) else []
         self._last_report = payload.get("quality_report", {}) if isinstance(payload.get("quality_report"), dict) else {}
@@ -392,26 +422,18 @@ class ReviewPage(BasePage):
         self.update_quality_summary()
         self.session_summary.setText(
             f"session: {payload.get('session_dir', '')} | training: {payload.get('training_dir', '')} | "
-            f"episodes: {payload.get('episode_count', len(self._review_rows))} | checks: not run"
+            f"episodes: {payload.get('episode_count', len(self._review_rows))} | checks: {checks_label}"
         )
         self.load_ai_session_report()
-        self.show_result(result, "Session scanned")
 
     def _finish_check(self, result: object, error: object) -> None:
         payload = self._payload_or_error(result, error)
         if not payload:
             return
-        rows = payload.get("episodes", [])
-        self._review_rows = rows if isinstance(rows, list) else []
-        self._last_report = payload.get("quality_report", {}) if isinstance(payload.get("quality_report"), dict) else {}
-        self._sync_session(payload)
-        self.apply_review_filter()
-        self.update_quality_summary()
-        self.session_summary.setText(
-            f"session: {payload.get('session_dir', '')} | training: {payload.get('training_dir', '')} | "
-            f"episodes: {len(self._review_rows)} | checks: local script"
-        )
-        self.load_ai_session_report()
+        self._apply_session_payload(payload, checks_label="local script")
+        if not self._review_rows:
+            training_dir = str(payload.get("training_dir") or Path(str(payload.get("session_dir") or "")).expanduser() / "training")
+            self._warn_review_blocked("No episode data found", f"Local checks ran, but no episode data was found under:\n{training_dir}")
         self.show_result(result, "Session checked")
 
     def _finish_report(self, result: object, error: object) -> None:
@@ -619,6 +641,10 @@ class ReviewPage(BasePage):
     def _sync_session(self, payload: dict[str, Any]) -> None:
         if payload.get("session_dir"):
             self.session_dir.setText(str(payload.get("session_dir")))
+
+    def _warn_review_blocked(self, title: str, message: str) -> None:
+        self.status.setText(f"Warning: {message.splitlines()[0] if message else title}")
+        QMessageBox.warning(self, title, message)
 
     def _populate_issue_table(self, table: QTableWidget, rows: list[Any], keys: list[str]) -> None:
         table.setRowCount(len(rows))

@@ -4,10 +4,11 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from threading import Thread
-from typing import Any
+from typing import Any, TextIO
 
 import numpy as np
 import yaml
@@ -129,6 +130,12 @@ class RecordingService:
         self.active[project_key] = {"task_id": task.task_id, "session_dir": str(session_dir), "mode": mode, "stop_file": stop_file, "process": process, "cancelled": False}
         task_service.register_cancel_callback(task.task_id, lambda key=project_key: self.cancel_recording(key))
         task_service.add_log(task.task_id, f"session: {session_dir}")
+        self._log_recording_plan(task.task_id, dataset_config, mode, duration_sec, target_samples)
+        Thread(
+            target=self._recording_monitor,
+            args=(task.task_id, process, training_dir, dataset_config, target_samples),
+            daemon=True,
+        ).start()
         Thread(
             target=self._record_worker,
             args=(project_key, task.task_id, process, training_dir, stop_file),
@@ -176,11 +183,17 @@ class RecordingService:
         stop_file: Path,
     ) -> None:
         try:
-            stdout, stderr = process.communicate()
-            for line in (stdout or "").splitlines()[-120:]:
-                task_service.add_log(task_id, line)
-            for line in (stderr or "").splitlines()[-120:]:
-                task_service.add_log(task_id, line)
+            stdout_lines: list[str] = []
+            stderr_lines: list[str] = []
+            stdout_thread = Thread(target=self._stream_pipe, args=(task_id, "stdout", process.stdout, stdout_lines), daemon=True)
+            stderr_thread = Thread(target=self._stream_pipe, args=(task_id, "stderr", process.stderr, stderr_lines), daemon=True)
+            stdout_thread.start()
+            stderr_thread.start()
+            process.wait()
+            stdout_thread.join(timeout=2.0)
+            stderr_thread.join(timeout=2.0)
+            stdout = "\n".join(stdout_lines)
+            stderr = "\n".join(stderr_lines)
             payload = self._json_from_output(stdout) or self._json_from_output(stderr) or {}
             payload.setdefault("session_dir", str(training_dir.parent))
             state = self.active.get(project_key, {})
@@ -241,6 +254,85 @@ class RecordingService:
         prepend = [str(path) for path in pythonpath_candidates if path.is_dir() and str(path) not in current_pythonpath]
         env["PYTHONPATH"] = os.pathsep.join([*prepend, *current_pythonpath])
         return env
+
+    def _stream_pipe(self, task_id: str, name: str, pipe: TextIO | None, accumulator: list[str]) -> None:
+        if pipe is None:
+            return
+        try:
+            for line in pipe:
+                text = line.rstrip()
+                if not text:
+                    continue
+                accumulator.append(text)
+                task_service.add_log(task_id, f"{name}: {text}")
+        except Exception as exc:
+            task_service.add_log(task_id, f"{name} reader failed: {exc}")
+
+    def _log_recording_plan(
+        self,
+        task_id: str,
+        dataset_config: dict[str, Any],
+        mode: str,
+        duration_sec: float | None,
+        target_samples: int | None,
+    ) -> None:
+        recording = dataset_config.get("recording", {}) if isinstance(dataset_config.get("recording"), dict) else {}
+        sample_rate = float(recording.get("sample_rate_hz") or 10)
+        streams = [item for item in dataset_config.get("streams", []) if isinstance(item, dict)]
+        state_keys = [item for item in dataset_config.get("state", {}).get("keys", []) if isinstance(item, dict)]
+        task_service.add_log(task_id, f"recording mode: {mode}; sample_rate_hz={sample_rate:g}; duration_sec={duration_sec}; target_samples={target_samples}")
+        task_service.add_log(task_id, f"configured streams: {len(streams)}; state keys: {len(state_keys)}")
+        for stream in streams:
+            topic = str(stream.get("topic") or stream.get("endpoint") or "-")
+            task_service.add_log(
+                task_id,
+                "stream: "
+                f"name={stream.get('name', '-')} modality={stream.get('modality', '-')} "
+                f"type={stream.get('message_type', '-')} source={topic}",
+            )
+        for key in state_keys:
+            task_service.add_log(
+                task_id,
+                "state: "
+                f"name={key.get('name', '-')} source_topic={key.get('source_topic', '-')} "
+                f"fields={key.get('fields', '-')}",
+            )
+
+    def _recording_monitor(
+        self,
+        task_id: str,
+        process: subprocess.Popen[str],
+        training_dir: Path,
+        dataset_config: dict[str, Any],
+        target_samples: int | None,
+    ) -> None:
+        recording = dataset_config.get("recording", {}) if isinstance(dataset_config.get("recording"), dict) else {}
+        sample_rate = max(float(recording.get("sample_rate_hz") or 10), 0.1)
+        interval = min(max(1.0 / sample_rate, 0.25), 1.0)
+        started = time.monotonic()
+        last_count = -1
+        last_log = 0.0
+        while process.poll() is None:
+            now = time.monotonic()
+            episodes = sorted(training_dir.glob("episode_*.npz"))
+            count = len(episodes)
+            latest = episodes[-1].name if episodes else "-"
+            should_log = count != last_count or now - last_log >= 1.0
+            if should_log:
+                elapsed = now - started
+                rate = count / elapsed if elapsed > 0 else 0.0
+                message = f"capturing: elapsed={elapsed:.1f}s files={count} latest={latest} write_rate={rate:.2f}/s target={target_samples or '-'}"
+                task_service.add_log(task_id, message)
+                task = task_service.get_task(task_id)
+                if task is not None and task.status == "running":
+                    task.message = message
+                    if target_samples and target_samples > 0:
+                        task.progress = min(float(count) / float(max(target_samples - 1, 1)), 0.99)
+                last_count = count
+                last_log = now
+            time.sleep(interval)
+        episodes = sorted(training_dir.glob("episode_*.npz"))
+        task_service.add_log(task_id, f"recording process exited; files={len(episodes)}")
 
     def _terminate_later(self, process: subprocess.Popen[str], task_id: str, delay_sec: float = 8.0) -> None:
         try:
