@@ -3,12 +3,14 @@ from __future__ import annotations
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QAbstractButton,
+    QComboBox,
     QGroupBox,
     QLabel,
     QLineEdit,
     QMainWindow,
     QMenu,
     QMenuBar,
+    QPlainTextEdit,
     QTabWidget,
     QTableWidget,
     QWidget,
@@ -20,10 +22,12 @@ TEXTS: dict[str, dict[str, str]] = {
     "File": {"zh": "文件", "en": "File"},
     "New Project": {"zh": "新建项目", "en": "New Project"},
     "Open Project": {"zh": "打开项目", "en": "Open Project"},
+    "Refresh Projects": {"zh": "刷新项目", "en": "Refresh Projects"},
     "Exit": {"zh": "退出", "en": "Exit"},
     "Config": {"zh": "配置", "en": "Config"},
     "Config Library": {"zh": "配置库", "en": "Config Library"},
     "Current Project Config": {"zh": "当前项目配置", "en": "Current Project Config"},
+    "Refresh Configs": {"zh": "刷新配置", "en": "Refresh Configs"},
     "Projects": {"zh": "项目", "en": "Projects"},
     "Configs": {"zh": "配置", "en": "Configs"},
     "Open Project Folder": {"zh": "打开项目文件夹", "en": "Open Project Folder"},
@@ -32,6 +36,7 @@ TEXTS: dict[str, dict[str, str]] = {
     "Permanent Delete": {"zh": "永久删除", "en": "Permanent Delete"},
     "Open Config": {"zh": "打开配置", "en": "Open Config"},
     "Open Logs": {"zh": "打开日志", "en": "Open Logs"},
+    "Open Project Config": {"zh": "打开项目配置", "en": "Open Project Config"},
     "Tools": {"zh": "工具", "en": "Tools"},
     "Collect": {"zh": "采集", "en": "Collect"},
     "Data Review": {"zh": "数据检查", "en": "Data Review"},
@@ -64,7 +69,12 @@ TEXTS: dict[str, dict[str, str]] = {
     "Create or open a project to start.": {"zh": "创建或打开项目后开始。", "en": "Create or open a project to start."},
     "Project Config": {"zh": "项目配置", "en": "Project Config"},
     "Project Overview": {"zh": "项目概览", "en": "Project Overview"},
+    "Project Summary": {"zh": "项目摘要", "en": "Project Summary"},
+    "No project is open.": {"zh": "未打开项目。", "en": "No project is open."},
     "Project files": {"zh": "项目文件", "en": "Project files"},
+    "Project Structure": {"zh": "项目结构", "en": "Project Structure"},
+    "Open Structure Window": {"zh": "打开结构窗口", "en": "Open Structure Window"},
+    "Close": {"zh": "关闭", "en": "Close"},
     "Selected file": {"zh": "选中文件", "en": "Selected file"},
     "Refresh From Project": {"zh": "从项目刷新", "en": "Refresh From Project"},
     "Refresh Library": {"zh": "刷新配置库", "en": "Refresh Library"},
@@ -105,14 +115,30 @@ TEXTS: dict[str, dict[str, str]] = {
         "zh": "使用当前 dataset_config.yaml。图像监视在全局检查器面板中使用。",
         "en": "Uses the current dataset_config.yaml. Image monitors are available from the global Inspector panel.",
     },
+    "Uses the current dataset_config.yaml. Use the top Refresh Nodes/Topics button for ROS discovery.": {
+        "zh": "使用当前 dataset_config.yaml。ROS 节点/Topic 发现请使用顶部刷新按钮。",
+        "en": "Uses the current dataset_config.yaml. Use the top Refresh Nodes/Topics button for ROS discovery.",
+    },
     "Stop mode": {"zh": "停止方式", "en": "Stop mode"},
     "Manual": {"zh": "手动", "en": "Manual"},
     "Duration": {"zh": "时长", "en": "Duration"},
     "Sample count": {"zh": "样本数", "en": "Sample count"},
+    "all": {"zh": "全部", "en": "all"},
+    "uncheck": {"zh": "未检查", "en": "uncheck"},
+    "ok": {"zh": "正常", "en": "ok"},
+    "warning": {"zh": "警告", "en": "warning"},
+    "error": {"zh": "错误", "en": "error"},
+    "good": {"zh": "良好", "en": "good"},
+    "bad": {"zh": "较差", "en": "bad"},
+    "uncertain": {"zh": "不确定", "en": "uncertain"},
+    "unmarked": {"zh": "未标记", "en": "unmarked"},
     "Samples": {"zh": "样本", "en": "Samples"},
     "Refresh Listener Plan": {"zh": "刷新监听计划", "en": "Refresh Listener Plan"},
+    "Reload Dataset Config": {"zh": "重新加载数据配置", "en": "Reload Dataset Config"},
     "Check Nodes": {"zh": "检查节点/Topic", "en": "Check Nodes"},
+    "Check Configured Topics": {"zh": "检查配置内 Topics", "en": "Check Configured Topics"},
     "Simulate Listener Episode": {"zh": "模拟采集 Episode", "en": "Simulate Listener Episode"},
+    "Simulate Test Episode": {"zh": "模拟测试 Episode", "en": "Simulate Test Episode"},
     "Start Recording": {"zh": "开始录制", "en": "Start Recording"},
     "Stop Recording": {"zh": "停止录制", "en": "Stop Recording"},
     "Name": {"zh": "名称", "en": "Name"},
@@ -140,6 +166,7 @@ TEXTS: dict[str, dict[str, str]] = {
     "Refresh Overview": {"zh": "刷新概览", "en": "Refresh Overview"},
     "Episode Review": {"zh": "Episode 检查", "en": "Episode Review"},
     "HDF5 Inspect": {"zh": "HDF5 检查", "en": "HDF5 Inspect"},
+    "HDF5 Review": {"zh": "HDF5 检查", "en": "HDF5 Review"},
     "Review session root": {"zh": "Session 根目录", "en": "Review session root"},
     "Use Current Session": {"zh": "使用当前 Session", "en": "Use Current Session"},
     "Scan Session": {"zh": "扫描 Session", "en": "Scan Session"},
@@ -150,15 +177,26 @@ TEXTS: dict[str, dict[str, str]] = {
     "Mark Selected": {"zh": "标记选中", "en": "Mark Selected"},
     "Delete Selected": {"zh": "删除选中", "en": "Delete Selected"},
     "Quality Summary": {"zh": "质量汇总", "en": "Quality Summary"},
+    "AI Session Report": {"zh": "AI Session 报告", "en": "AI Session Report"},
+    "Save AI Report": {"zh": "保存 AI 报告", "en": "Save AI Report"},
+    "AI session report will be loaded from ai_session_report.md in the selected session.": {
+        "zh": "会从选中 session 下的 ai_session_report.md 读取 AI 报告。",
+        "en": "AI session report will be loaded from ai_session_report.md in the selected session.",
+    },
     "Selected NPZ Details": {"zh": "选中 NPZ 详情", "en": "Selected NPZ Details"},
     "AI Review": {"zh": "AI 检查", "en": "AI Review"},
     "Default AI Review Prompt": {"zh": "默认 AI 检查 Prompt", "en": "Default AI Review Prompt"},
     "Send AI Review": {"zh": "发送 AI 检查", "en": "Send AI Review"},
     "Inspect HDF5": {"zh": "检查 HDF5", "en": "Inspect HDF5"},
     "Run HDF5 Checks": {"zh": "运行 HDF5 检查", "en": "Run HDF5 Checks"},
+    "Show HDF5 Structure": {"zh": "查看 HDF5 结构", "en": "Show HDF5 Structure"},
+    "Validate HDF5 Data": {"zh": "校验 HDF5 数据", "en": "Validate HDF5 Data"},
     "HDF5 Overview": {"zh": "HDF5 概览", "en": "HDF5 Overview"},
     "HDF5 Check Summary": {"zh": "HDF5 检查汇总", "en": "HDF5 Check Summary"},
     "HDF5 Check Results": {"zh": "HDF5 检查结果", "en": "HDF5 Check Results"},
+    "HDF5 Structure Overview": {"zh": "HDF5 结构概览", "en": "HDF5 Structure Overview"},
+    "HDF5 Validation Summary": {"zh": "HDF5 校验汇总", "en": "HDF5 Validation Summary"},
+    "HDF5 Validation Results": {"zh": "HDF5 校验结果", "en": "HDF5 Validation Results"},
     "Episode": {"zh": "Episode", "en": "Episode"},
     "Mark": {"zh": "标记", "en": "Mark"},
     "Steps": {"zh": "步数", "en": "Steps"},
@@ -239,6 +277,7 @@ TEXTS: dict[str, dict[str, str]] = {
     "Save": {"zh": "保存", "en": "Save"},
     "Duplicate": {"zh": "复制副本", "en": "Duplicate"},
     "Delete": {"zh": "删除", "en": "Delete"},
+    "Run": {"zh": "运行", "en": "Run"},
     "Refresh config from selected topics": {"zh": "从已选 Topics 刷新配置", "en": "Refresh config from selected topics"},
     "Apply form -> YAML": {"zh": "应用表单 -> YAML", "en": "Apply form -> YAML"},
     "Reload form <- YAML": {"zh": "重载表单 <- YAML", "en": "Reload form <- YAML"},
@@ -280,8 +319,15 @@ def apply_i18n(root: QWidget, language: str) -> None:
             widget.setText(text(widget.text(), language))
         elif isinstance(widget, QLabel):
             widget.setText(text(widget.text(), language))
+        elif isinstance(widget, QComboBox):
+            for index in range(widget.count()):
+                widget.setItemText(index, text(widget.itemText(index), language))
         elif isinstance(widget, QGroupBox):
             widget.setTitle(text(widget.title(), language))
+        elif isinstance(widget, QLineEdit):
+            widget.setPlaceholderText(text(widget.placeholderText(), language))
+        elif isinstance(widget, QPlainTextEdit):
+            widget.setPlaceholderText(text(widget.placeholderText(), language))
         elif isinstance(widget, QTabWidget):
             for index in range(widget.count()):
                 widget.setTabText(index, text(widget.tabText(index), language))

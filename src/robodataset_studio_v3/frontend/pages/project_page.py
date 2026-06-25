@@ -4,9 +4,10 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QFileSystemWatcher, QTimer
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QPlainTextEdit, QSplitter, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QPlainTextEdit, QSplitter, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget
 
 from robodataset_studio_v3.frontend.api_client import ApiClient, ProjectSummary
+from robodataset_studio_v3.frontend.i18n import text
 from robodataset_studio_v3.frontend.pages.base import BasePage
 
 
@@ -16,10 +17,6 @@ class ProjectPage(BasePage):
         self.info = QPlainTextEdit()
         self.info.setReadOnly(True)
         self.info.setMaximumHeight(170)
-        self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["Name", "Type", "Size"])
-        self.detail = QPlainTextEdit()
-        self.detail.setReadOnly(True)
         self.watcher = QFileSystemWatcher(self)
         self.watcher.directoryChanged.connect(lambda _path: self.schedule_refresh())
         self.watcher.fileChanged.connect(lambda _path: self.schedule_refresh())
@@ -31,7 +28,6 @@ class ProjectPage(BasePage):
         self.signature_timer.setInterval(2000)
         self.signature_timer.timeout.connect(self.refresh_if_changed)
         self._last_signature: tuple[int, int, int] | None = None
-        self.tree.currentItemChanged.connect(lambda item, _prev: self.show_item_detail(item))
         self._build()
         self.refresh()
         self.signature_timer.start()
@@ -40,26 +36,15 @@ class ProjectPage(BasePage):
         buttons = QHBoxLayout()
         refresh = QPushButton("Refresh")
         refresh.clicked.connect(self.refresh)
+        structure = QPushButton("Open Structure Window")
+        structure.clicked.connect(self.open_structure_window)
         buttons.addWidget(refresh)
+        buttons.addWidget(structure)
         buttons.addStretch(1)
-
-        splitter = QSplitter()
-        tree_panel = QWidget()
-        tree_layout = QVBoxLayout(tree_panel)
-        tree_layout.addWidget(QLabel("Project files"))
-        tree_layout.addWidget(self.tree)
-        detail_panel = QWidget()
-        detail_layout = QVBoxLayout(detail_panel)
-        detail_layout.addWidget(QLabel("Selected file"))
-        detail_layout.addWidget(self.detail)
-        splitter.addWidget(tree_panel)
-        splitter.addWidget(detail_panel)
-        splitter.setSizes([520, 520])
 
         self.layout.addLayout(buttons)
         self.layout.addWidget(QLabel("Project Summary"))
         self.layout.addWidget(self.info)
-        self.layout.addWidget(splitter, 1)
         self.finish_layout()
 
     def on_project_config_changed(self, project: ProjectSummary | None) -> None:
@@ -80,8 +65,6 @@ class ProjectPage(BasePage):
     def refresh(self) -> None:
         if self.project is None:
             self.info.setPlainText("No project is open.")
-            self.tree.clear()
-            self.detail.clear()
             self._reset_watches([])
             self._last_signature = None
             return
@@ -99,26 +82,41 @@ class ProjectPage(BasePage):
             f"path: {self.project.path}",
             f"size: {self._format_bytes(size)}",
             f"modified: {modified}",
-            "",
-            "current structure:",
-            *self._ascii_tree(root),
         ]
         self.info.setPlainText("\n".join(lines))
-        self.populate_tree(root)
         self._reset_watches(self._watch_paths(root))
 
-    def populate_tree(self, root: Path) -> None:
-        self.tree.clear()
-        if not root.exists():
-            return
-        root_item = QTreeWidgetItem([root.name, "dir", self._format_bytes(self._dir_size(root, max_files=2000))])
-        root_item.setData(0, 0x0100, str(root))
-        self.tree.addTopLevelItem(root_item)
-        self._add_children(root_item, root, depth=0)
-        root_item.setExpanded(True)
-        self.tree.resizeColumnToContents(0)
+    def open_structure_window(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self._tr("Project Structure"))
+        dialog.resize(760, 640)
+        layout = QVBoxLayout(dialog)
+        splitter = QSplitter()
+        tree = QTreeWidget()
+        tree.setHeaderLabels([self._tr("Name"), self._tr("Type"), self._tr("Size")])
+        detail = QPlainTextEdit()
+        detail.setReadOnly(True)
+        tree.currentItemChanged.connect(lambda item, _prev: self.show_item_detail(item, detail))
+        splitter.addWidget(tree)
+        splitter.addWidget(detail)
+        splitter.setSizes([420, 340])
+        layout.addWidget(splitter)
+        if self.project is not None:
+            root = Path(self.project.path)
+            if root.exists():
+                root_item = QTreeWidgetItem([root.name, "dir", self._format_bytes(self._dir_size(root, max_files=2000))])
+                root_item.setData(0, 0x0100, str(root))
+                tree.addTopLevelItem(root_item)
+                self._add_children_to_tree(root_item, root, depth=0)
+                root_item.setExpanded(True)
+                tree.resizeColumnToContents(0)
+                tree.setCurrentItem(root_item)
+        close = QPushButton(self._tr("Close"))
+        close.clicked.connect(dialog.accept)
+        layout.addWidget(close)
+        dialog.exec()
 
-    def _add_children(self, parent: QTreeWidgetItem, path: Path, *, depth: int) -> None:
+    def _add_children_to_tree(self, parent: QTreeWidgetItem, path: Path, *, depth: int) -> None:
         if depth >= 3:
             return
         try:
@@ -133,18 +131,18 @@ class ProjectPage(BasePage):
             item.setData(0, 0x0100, str(child))
             parent.addChild(item)
             if child.is_dir() and not self._should_summarize_dir(child):
-                self._add_children(item, child, depth=depth + 1)
+                self._add_children_to_tree(item, child, depth=depth + 1)
 
-    def show_item_detail(self, item: QTreeWidgetItem | None) -> None:
+    def show_item_detail(self, item: QTreeWidgetItem | None, detail: QPlainTextEdit) -> None:
         if item is None:
-            self.detail.clear()
+            detail.clear()
             return
         path = Path(str(item.data(0, 0x0100) or ""))
         if not path.exists():
-            self.detail.clear()
+            detail.clear()
             return
         if self.project is not None and not self._is_within_project(path):
-            self.detail.setPlainText(f"path: {path}\n\noutside current project")
+            detail.setPlainText(f"path: {path}\n\noutside current project")
             return
         lines = [f"path: {path}", f"type: {'dir' if path.is_dir() else 'file'}"]
         if path.is_file():
@@ -156,7 +154,11 @@ class ProjectPage(BasePage):
                     lines.append(f"cannot read file: {exc}")
         else:
             lines.append(f"size: {self._format_bytes(self._dir_size(path, max_files=2000))}")
-        self.detail.setPlainText("\n".join(lines))
+        detail.setPlainText("\n".join(lines))
+
+    def _tr(self, value: str) -> str:
+        language = "zh" if self.title.text() == "属性" else "en"
+        return text(value, language)
 
     def _dir_size(self, path: Path, *, max_files: int = 10000) -> int:
         if not path.exists():
@@ -175,42 +177,6 @@ class ProjectPage(BasePage):
             except Exception:
                 continue
         return total
-
-    def _ascii_tree(self, root: Path, *, max_depth: int = 4, max_items: int = 120) -> list[str]:
-        if not root.exists():
-            return ["  <missing>"]
-        lines = [f"  {root.name}/"]
-        count = 0
-
-        def walk(path: Path, prefix: str, depth: int) -> None:
-            nonlocal count
-            if depth >= max_depth or count >= max_items:
-                return
-            try:
-                children = sorted(path.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower()))
-            except Exception:
-                return
-            visible = children[: max(0, max_items - count)]
-            for index, child in enumerate(visible):
-                if count >= max_items:
-                    break
-                count += 1
-                is_last = index == len(visible) - 1
-                branch = "`-- " if is_last else "|-- "
-                name = self._summarized_name(child)
-                if child.is_dir() and not name.endswith("/"):
-                    name = f"{name}/"
-                lines.append(f"  {prefix}{branch}{name}")
-                if child.is_dir() and not self._should_summarize_dir(child):
-                    extension = "    " if is_last else "|   "
-                    walk(child, prefix + extension, depth + 1)
-            if len(children) > len(visible):
-                lines.append(f"  {prefix}`-- ... {len(children) - len(visible)} more")
-
-        walk(root, "", 0)
-        if count >= max_items:
-            lines.append(f"  ... truncated at {max_items} items")
-        return lines
 
     def _should_summarize_dir(self, path: Path) -> bool:
         parts = path.parts

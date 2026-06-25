@@ -58,9 +58,9 @@ class CollectPage(BasePage):
 
     def _build(self) -> None:
         controls = QHBoxLayout()
-        refresh = QPushButton("Refresh Listener Plan")
-        preflight = QPushButton("Check Nodes")
-        simulate = QPushButton("Simulate Listener Episode")
+        refresh = QPushButton("Reload Dataset Config")
+        preflight = QPushButton("Check Configured Topics")
+        simulate = QPushButton("Simulate Test Episode")
         start = QPushButton("Start Recording")
         stop = QPushButton("Stop Recording")
         refresh.clicked.connect(self.refresh_plan)
@@ -83,7 +83,7 @@ class CollectPage(BasePage):
         controls.addWidget(start)
         controls.addWidget(stop)
         self.layout.addWidget(QLabel("Listener Recording Console"))
-        self.layout.addWidget(QLabel("Uses the current dataset_config.yaml. Image monitors are available from the global Inspector panel."))
+        self.layout.addWidget(QLabel("Uses the current dataset_config.yaml. Use the top Refresh Nodes/Topics button for ROS discovery."))
         self.layout.addLayout(controls)
         self.layout.addWidget(self.plan)
         self.layout.addWidget(self.session_label)
@@ -103,7 +103,7 @@ class CollectPage(BasePage):
             self.refresh_plan()
 
     def refresh_plan(self) -> None:
-        self.status.setText("Refreshing listener plan...")
+        self.status.setText("Reloading dataset config...")
         self.run_async(self.api.get_dataset_config, self._finish_refresh_plan, self.project_key())
 
     def _finish_refresh_plan(self, result: object, error: object) -> None:
@@ -123,7 +123,7 @@ class CollectPage(BasePage):
             self.samples.setValue(int(recording.get("target_samples")))
         self._populate_streams(config)
         self.update_mode_ui()
-        self.show_result(self._plan_payload(), "Plan refreshed")
+        self.show_result(self._plan_payload(), "Dataset config reloaded")
 
     def _populate_streams(self, config: dict[str, Any]) -> None:
         streams = config.get("streams", [])
@@ -167,18 +167,18 @@ class CollectPage(BasePage):
         requires_actions = bool(config.get("dataset", {}).get("requires_actions", True)) if isinstance(config.get("dataset"), dict) else True
         minimum_samples = max(min_steps, 2 if requires_actions else 1)
         if mode == "manual":
-            summary = f"Plan: manual start/stop; capture rate: {sample_rate:g}Hz; estimated episode_*.npz files: manual"
+            summary = f"Plan: manual start/stop; capture rate: {sample_rate:g}Hz; stop button remains available"
             samples = None
             transitions = None
         elif mode == "sample_count":
             samples = max(int(self.samples.value()), minimum_samples)
             transitions = max(samples - 1, 0) if requires_actions else samples
-            summary = f"Plan: sample count {samples}; estimated episode_*.npz files: {transitions}"
+            summary = f"Plan: sample count {samples}; estimated episode_*.npz files: {transitions}; stop button can end early"
         else:
             duration = float(self.duration.value())
             samples = max(int(round(sample_rate * duration)), minimum_samples)
             transitions = max(samples - 1, 0) if requires_actions else samples
-            summary = f"Plan: {duration:g}s x {sample_rate:g}Hz ~= {samples} samples; estimated episode_*.npz files: {transitions}"
+            summary = f"Plan: {duration:g}s x {sample_rate:g}Hz ~= {samples} samples; estimated episode_*.npz files: {transitions}; stop button can end early"
         return {"summary": summary, "mode": mode, "sample_rate_hz": sample_rate, "samples": samples, "estimated_transitions": transitions}
 
     def preflight(self) -> None:
@@ -212,12 +212,16 @@ class CollectPage(BasePage):
         )
 
     def simulate_episode(self) -> None:
-        payload: dict[str, Any] = {"project_key": self.project_key(), "mode": "simulate", "target_samples": int(self.samples.value())}
+        plan = self._plan_payload()
+        target_samples = plan.get("samples")
+        if not isinstance(target_samples, int) or target_samples <= 0:
+            target_samples = int(self.samples.value())
+        payload: dict[str, Any] = {"project_key": self.project_key(), "mode": "simulate", "target_samples": target_samples}
         self.active_task_id = ""
         self.active_session_dir = ""
         self.session_label.setText(f"Current session: creating simulated session from {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         self.task_label.setText("Task: -")
-        self.status.setText("Writing simulated listener episode...")
+        self.status.setText("Writing simulated test episode...")
         self.run_async(
             self.api.post,
             self._finish_start_recording,

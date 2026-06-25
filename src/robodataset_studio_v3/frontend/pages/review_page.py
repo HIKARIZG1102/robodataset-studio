@@ -48,10 +48,12 @@ class ReviewPage(BasePage):
         make_path_field(self.session_dir)
         make_path_label(self.session_summary)
         self.status_filter = QComboBox()
-        self.status_filter.addItems(["all", "uncheck", "ok", "warning", "error"])
+        for value in ["all", "uncheck", "ok", "warning", "error"]:
+            self.status_filter.addItem(value, value)
         self.status_filter.currentTextChanged.connect(self.apply_review_filter)
         self.mark_select = QComboBox()
-        self.mark_select.addItems(["good", "bad", "uncertain", "unmarked"])
+        for value in ["good", "bad", "uncertain", "unmarked"]:
+            self.mark_select.addItem(value, value)
 
         self.episodes = QTableWidget(0, 8)
         self.episodes.setHorizontalHeaderLabels(["Episode", "Status", "Mark", "Steps", "Size MB", "Missing", "Quality", "Fields"])
@@ -93,7 +95,7 @@ class ReviewPage(BasePage):
         tabs = QTabWidget()
         tabs.addTab(self._overview_tab(), "Overview")
         tabs.addTab(self._episode_tab(), "Episode Review")
-        tabs.addTab(self._hdf5_tab(), "HDF5 Inspect")
+        tabs.addTab(self._hdf5_tab(), "HDF5 Review")
         self.layout.addWidget(tabs, 1)
         self.finish_layout()
 
@@ -223,19 +225,19 @@ class ReviewPage(BasePage):
         form.addRow("HDF5 file", self._path_row(self.hdf5_path, self.browse_hdf5))
         layout.addLayout(form)
         buttons = QHBoxLayout()
-        inspect = QPushButton("Inspect HDF5")
+        inspect = QPushButton("Show HDF5 Structure")
         inspect.clicked.connect(self.inspect_hdf5)
-        check = QPushButton("Run HDF5 Checks")
+        check = QPushButton("Validate HDF5 Data")
         check.clicked.connect(self.check_hdf5)
         buttons.addWidget(inspect)
         buttons.addWidget(check)
         buttons.addStretch(1)
         layout.addLayout(buttons)
-        layout.addWidget(QLabel("HDF5 Overview"))
+        layout.addWidget(QLabel("HDF5 Structure Overview"))
         layout.addWidget(self.hdf5_summary)
-        layout.addWidget(QLabel("HDF5 Check Summary"))
+        layout.addWidget(QLabel("HDF5 Validation Summary"))
         layout.addWidget(self.hdf5_check_summary)
-        layout.addWidget(QLabel("HDF5 Check Results"))
+        layout.addWidget(QLabel("HDF5 Validation Results"))
         layout.addWidget(self.hdf5_table, 1)
         return widget
 
@@ -275,10 +277,10 @@ class ReviewPage(BasePage):
         self.run_async(self.api.post, self._finish_save_ai_session_report, "/api/review/session/ai-report/save", payload, timeout=20.0)
 
     def inspect_hdf5(self) -> None:
-        self._post("/api/review/hdf5/inspect", {"hdf5_path": self.hdf5_path.text().strip()}, "HDF5 inspected", self._finish_hdf5_inspect)
+        self._post("/api/review/hdf5/inspect", {"hdf5_path": self.hdf5_path.text().strip()}, "HDF5 structure loaded", self._finish_hdf5_inspect)
 
     def check_hdf5(self) -> None:
-        self._post("/api/review/hdf5/check", {"hdf5_path": self.hdf5_path.text().strip()}, "HDF5 checked", self._finish_hdf5_check)
+        self._post("/api/review/hdf5/check", {"hdf5_path": self.hdf5_path.text().strip()}, "HDF5 validation complete", self._finish_hdf5_check)
 
     def refresh_overview(self) -> None:
         self.overview_tree.clear()
@@ -429,7 +431,7 @@ class ReviewPage(BasePage):
             self.hdf5_summary.setPlainText(f"Cannot inspect HDF5:\n{error}")
             return
         self.hdf5_summary.setPlainText(str(payload.get("summary_text", "")))
-        self.show_result(result, "HDF5 inspected")
+        self.show_result(result, "HDF5 structure loaded")
 
     def _finish_hdf5_check(self, result: object, error: object) -> None:
         payload = self._payload_or_error(result, error)
@@ -439,7 +441,7 @@ class ReviewPage(BasePage):
         self.hdf5_check_summary.setPlainText(str(payload.get("summary_text", "")))
         rows = payload.get("rows", [])
         self._populate_issue_table(self.hdf5_table, rows if isinstance(rows, list) else [], ["scope", "status", "issue", "detail"])
-        self.show_result(result, "HDF5 checked")
+        self.show_result(result, "HDF5 validation complete")
 
     def _finish_ai_prompt(self, result: object, error: object) -> None:
         payload = self._payload_or_error(result, error)
@@ -501,7 +503,7 @@ class ReviewPage(BasePage):
         self.show_result(result, "AI session report saved")
 
     def apply_review_filter(self) -> None:
-        status = self.status_filter.currentText()
+        status = str(self.status_filter.currentData() or self.status_filter.currentText())
         self._visible_rows = [row for row in self._review_rows if status == "all" or str(row.get("status", "")) == status]
         self.episodes.setRowCount(len(self._visible_rows))
         for row_idx, row in enumerate(self._visible_rows):
@@ -567,7 +569,7 @@ class ReviewPage(BasePage):
             self.status.setText("Select an episode row first.")
             return
         episode = str(self._visible_rows[row].get("name", ""))
-        mark = self.mark_select.currentText()
+        mark = str(self.mark_select.currentData() or self.mark_select.currentText())
         payload = {"session_dir": self.session_dir.text().strip(), "episode": episode, "status": mark}
         self.run_async(self.api.post, lambda result, error: self._finish_mark(result, error, episode, mark), "/api/review/session/mark", payload, timeout=20.0)
 
