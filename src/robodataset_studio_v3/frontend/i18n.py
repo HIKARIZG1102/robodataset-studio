@@ -73,6 +73,7 @@ TEXTS: dict[str, dict[str, str]] = {
     "No project is open.": {"zh": "未打开项目。", "en": "No project is open."},
     "Project files": {"zh": "项目文件", "en": "Project files"},
     "Project Structure": {"zh": "项目结构", "en": "Project Structure"},
+    "Project Structure Tree": {"zh": "项目结构树", "en": "Project Structure Tree"},
     "Open Structure Window": {"zh": "打开结构窗口", "en": "Open Structure Window"},
     "Close": {"zh": "关闭", "en": "Close"},
     "Selected file": {"zh": "选中文件", "en": "Selected file"},

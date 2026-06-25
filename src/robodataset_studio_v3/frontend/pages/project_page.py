@@ -17,6 +17,8 @@ class ProjectPage(BasePage):
         self.info = QPlainTextEdit()
         self.info.setReadOnly(True)
         self.info.setMaximumHeight(170)
+        self.output.setReadOnly(True)
+        self.output.setMinimumHeight(220)
         self.watcher = QFileSystemWatcher(self)
         self.watcher.directoryChanged.connect(lambda _path: self.schedule_refresh())
         self.watcher.fileChanged.connect(lambda _path: self.schedule_refresh())
@@ -45,6 +47,7 @@ class ProjectPage(BasePage):
         self.layout.addLayout(buttons)
         self.layout.addWidget(QLabel("Project Summary"))
         self.layout.addWidget(self.info)
+        self.layout.addWidget(QLabel("Project Structure Tree"))
         self.finish_layout()
 
     def on_project_config_changed(self, project: ProjectSummary | None) -> None:
@@ -65,6 +68,7 @@ class ProjectPage(BasePage):
     def refresh(self) -> None:
         if self.project is None:
             self.info.setPlainText("No project is open.")
+            self.output.setPlainText("")
             self._reset_watches([])
             self._last_signature = None
             return
@@ -84,6 +88,8 @@ class ProjectPage(BasePage):
             f"modified: {modified}",
         ]
         self.info.setPlainText("\n".join(lines))
+        self.output.setPlainText("\n".join(self._ascii_tree(root)))
+        self.status.setText("Project properties refreshed")
         self._reset_watches(self._watch_paths(root))
 
     def open_structure_window(self) -> None:
@@ -177,6 +183,40 @@ class ProjectPage(BasePage):
             except Exception:
                 continue
         return total
+
+    def _ascii_tree(self, root: Path, *, max_depth: int = 4, max_items: int = 160) -> list[str]:
+        if not root.exists():
+            return ["<missing>"]
+        lines = [f"{root.name}/"]
+        count = 0
+
+        def walk(path: Path, prefix: str, depth: int) -> None:
+            nonlocal count
+            if depth >= max_depth or count >= max_items:
+                return
+            try:
+                children = sorted(path.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower()))
+            except Exception:
+                return
+            visible = children[: max(0, max_items - count)]
+            for index, child in enumerate(visible):
+                if count >= max_items:
+                    break
+                count += 1
+                is_last = index == len(visible) - 1
+                branch = "`-- " if is_last else "|-- "
+                name = self._summarized_name(child)
+                lines.append(f"{prefix}{branch}{name}")
+                if child.is_dir() and not self._should_summarize_dir(child):
+                    extension = "    " if is_last else "|   "
+                    walk(child, prefix + extension, depth + 1)
+            if len(children) > len(visible):
+                lines.append(f"{prefix}`-- ... {len(children) - len(visible)} more")
+
+        walk(root, "", 0)
+        if count >= max_items:
+            lines.append(f"... truncated at {max_items} items")
+        return lines
 
     def _should_summarize_dir(self, path: Path) -> bool:
         parts = path.parts
