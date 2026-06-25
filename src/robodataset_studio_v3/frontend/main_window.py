@@ -14,11 +14,11 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMenu,
-    QMessageBox,
-    QInputDialog,
-    QPushButton,
-    QHBoxLayout,
-    QSizePolicy,
+        QMessageBox,
+        QInputDialog,
+        QPushButton,
+        QHBoxLayout,
+        QSizePolicy,
     QSplitter,
     QTabWidget,
     QVBoxLayout,
@@ -73,6 +73,7 @@ class MainWindow(QMainWindow):
         self.logs_list: QListWidget | None = None
         self.ros_graph_cache: dict | None = None
         self.refresh_graph_button: QPushButton | None = None
+        self.message_label = QLabel("")
         self.project_name_label = QLabel("project:")
         self.project_name_value = QLabel("")
         self._status_full_project = ""
@@ -103,11 +104,11 @@ class MainWindow(QMainWindow):
         try:
             self.backend.ensure_running()
         except Exception as exc:
-            self.statusBar().showMessage(f"Backend unavailable: {exc}")
+            self.set_status_message(f"Backend unavailable: {exc}")
             if os.environ.get("QT_QPA_PLATFORM") != "offscreen":
                 QMessageBox.warning(self, "Backend", f"Cannot start local FastAPI backend:\n{exc}")
         else:
-            self.statusBar().showMessage("Backend connected")
+            self.set_status_message("Backend connected")
 
     def _build_menu(self) -> None:
         self.menuBar().setStyleSheet(
@@ -201,6 +202,12 @@ class MainWindow(QMainWindow):
         self.menuBar().setCornerWidget(refresh, Qt.TopRightCorner)
 
     def _build_project_summary_bar(self) -> None:
+        self.message_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.message_label.setWordWrap(False)
+        self.message_label.setTextFormat(Qt.PlainText)
+        self.message_label.setMinimumWidth(120)
+        self.message_label.setMaximumWidth(460)
+        self.message_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         for label in [self.project_name_label, self.config_label, self.status_label, self.project_folder_status]:
             label.setWordWrap(False)
             label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -240,9 +247,13 @@ class MainWindow(QMainWindow):
         folder_row.setSpacing(3)
         folder_row.addWidget(self.project_folder_status)
         folder_row.addWidget(self.project_folder_value)
-        self.statusBar().addWidget(project_widget, 1)
+        self.statusBar().addWidget(self.message_label, 1)
+        self.statusBar().addPermanentWidget(project_widget, 0)
         self.statusBar().addPermanentWidget(folder_widget, 0)
         self.update_project_summary()
+
+    def set_status_message(self, message: str) -> None:
+        self._set_elided_status_value(self.message_label, message)
 
     def update_project_summary(self) -> None:
         self.project_name_label.setText("project:")
@@ -351,7 +362,7 @@ class MainWindow(QMainWindow):
             projects = self.api.list_projects()
         except Exception as exc:
             self.project_list.blockSignals(False)
-            self.statusBar().showMessage(f"Cannot list projects: {exc}")
+            self.set_status_message(f"Cannot list projects: {exc}")
             return
         selected_item: QListWidgetItem | None = None
         for project in projects:
@@ -551,7 +562,7 @@ class MainWindow(QMainWindow):
         try:
             configs = self.api.list_configs()
         except Exception as exc:
-            self.statusBar().showMessage(f"Cannot list configs: {exc}")
+            self.set_status_message(f"Cannot list configs: {exc}")
             return
         for config in configs:
             config_id = str(config.get("id") or "")
@@ -700,7 +711,7 @@ class MainWindow(QMainWindow):
         try:
             tasks = self.api.list_tasks()
         except Exception as exc:
-            self.statusBar().showMessage(f"Cannot list logs/tasks: {exc}")
+            self.set_status_message(f"Cannot list logs/tasks: {exc}")
             return
         for task in tasks:
             if not isinstance(task, dict):
@@ -771,7 +782,7 @@ class MainWindow(QMainWindow):
             return
         config_id = str(item.data(Qt.UserRole) or "")
         if config_id:
-            self.statusBar().showMessage(f"Config selected: {config_id}")
+            self.set_status_message(f"Config selected: {config_id}")
 
     def _warn_if_config_in_use(self, config_id: str, action: str) -> bool:
         try:
@@ -806,14 +817,14 @@ class MainWindow(QMainWindow):
                 if item is not None and str(item.data(Qt.UserRole) or "") == select_config_id:
                     self.config_list.setCurrentItem(item)
                     break
-        self.statusBar().showMessage("Config library refreshed")
+        self.set_status_message("Config library refreshed")
 
     def _preview_log_item(self, item: QListWidgetItem | None) -> None:
         if item is None:
             return
         task = item.data(Qt.UserRole)
         if isinstance(task, dict):
-            self.statusBar().showMessage(
+            self.set_status_message(
                 f"Task selected: {task.get('task_id', '-')} | {task.get('status', '-')} | {task.get('message', '')}"
             )
 
@@ -1130,7 +1141,7 @@ class MainWindow(QMainWindow):
         dock.show()
 
     def refresh_ros_graph(self) -> None:
-        self.statusBar().showMessage("Refreshing ROS graph...")
+        self.set_status_message("Refreshing ROS graph...")
         if self.refresh_graph_button is not None:
             self.refresh_graph_button.setEnabled(False)
             self.refresh_graph_button.setText("Refreshing...")
@@ -1140,13 +1151,13 @@ class MainWindow(QMainWindow):
         def finish(result: object, error: object, item: ApiWorker = worker) -> None:
             try:
                 if error is not None:
-                    self.statusBar().showMessage(f"ROS graph refresh failed: {error}")
+                    self.set_status_message(f"ROS graph refresh failed: {error}")
                     return
                 graph = result if isinstance(result, dict) else {}
                 self._ros_graph_updated(graph)
                 topics = graph.get("topics", []) if isinstance(graph.get("topics"), list) else []
                 nodes = graph.get("nodes", []) if isinstance(graph.get("nodes"), list) else []
-                self.statusBar().showMessage(f"ROS graph refreshed: {len(topics)} topics, {len(nodes)} nodes")
+                self.set_status_message(f"ROS graph refreshed: {len(topics)} topics, {len(nodes)} nodes")
             finally:
                 if self.refresh_graph_button is not None:
                     self.refresh_graph_button.setEnabled(True)
@@ -1222,7 +1233,7 @@ class MainWindow(QMainWindow):
                 self._load_project_workspace()
                 self.update_project_summary()
             except Exception as exc:
-                self.statusBar().showMessage(f"Could not restore last project: {exc}")
+                self.set_status_message(f"Could not restore last project: {exc}")
         if bool(ui.get("inspector_visible", True)):
             self._ensure_inspector()
         self.retranslate()
@@ -1296,7 +1307,7 @@ class MainWindow(QMainWindow):
         if index < 0:
             return
         if len(self.workspace_panes) >= 3:
-            self.statusBar().showMessage("Maximum 3 workspace panes")
+            self.set_status_message("Maximum 3 workspace panes")
             return
         widget = source.widget(index)
         if widget is None:
@@ -1313,7 +1324,7 @@ class MainWindow(QMainWindow):
             target.setTabText(new_index, self._translated_tab_title(tab_id))
             self._apply_tab_close_policy(target, tab_id, new_index)
         self._rebalance_workspace_panes()
-        self.statusBar().showMessage(f"Split tab {direction}; panes={len(self.workspace_panes)}/3")
+        self.set_status_message(f"Split tab {direction}; panes={len(self.workspace_panes)}/3")
 
     def merge_workspace_panes(self) -> None:
         if not self.workspace_panes:
@@ -1335,7 +1346,7 @@ class MainWindow(QMainWindow):
         if self.workspace_splitter is not None:
             self.workspace_splitter.setOrientation(Qt.Horizontal)
         self._rebalance_workspace_panes()
-        self.statusBar().showMessage("Workspace panes merged.")
+        self.set_status_message("Workspace panes merged.")
 
     def _insert_workspace_pane(self, pane: QTabWidget, direction: str, source: QTabWidget) -> None:
         if self.workspace_splitter is None:
@@ -1344,7 +1355,7 @@ class MainWindow(QMainWindow):
         if self.workspace_splitter.orientation() != orientation and len(self.workspace_panes) == 1:
             self.workspace_splitter.setOrientation(orientation)
         elif self.workspace_splitter.orientation() != orientation:
-            self.statusBar().showMessage("Mixed directions use the current splitter orientation.")
+            self.set_status_message("Mixed directions use the current splitter orientation.")
         source_index = self.workspace_splitter.indexOf(source)
         if source_index < 0:
             source_index = len(self.workspace_panes) - 1
@@ -1396,7 +1407,7 @@ class MainWindow(QMainWindow):
                     child.setFont(font)
                 widget.updateGeometry()
                 widget.update()
-        self.statusBar().showMessage(f"UI scale: {scale:.0%}")
+        self.set_status_message(f"UI scale: {scale:.0%}")
         if persist:
             settings = dict(self.settings or {})
             settings.setdefault("ui", {})
@@ -1466,7 +1477,7 @@ class MainWindow(QMainWindow):
             try:
                 self.current_project = self.api.open_project_path(self.current_project.path)
             except Exception as exc:
-                self.statusBar().showMessage(f"Project refresh failed: {exc}")
+                self.set_status_message(f"Project refresh failed: {exc}")
                 return
         self.update_project_summary()
         if self.current_project is not None:
@@ -1482,7 +1493,7 @@ class MainWindow(QMainWindow):
                 fallback = getattr(widget, "refresh", None)
                 if callable(fallback) and widget.__class__.__name__ == "ProjectConfigPage":
                     fallback()
-        self.statusBar().showMessage("Project config refreshed across open tabs")
+        self.set_status_message("Project config refreshed across open tabs")
 
     def _save_ui_state(self) -> None:
         settings = dict(self.settings or {})
@@ -1499,7 +1510,7 @@ class MainWindow(QMainWindow):
             saved = self.api.put("/api/settings", settings, timeout=10.0)
             self.settings = saved if isinstance(saved, dict) else settings
         except Exception as exc:
-            self.statusBar().showMessage(f"Settings save failed: {exc}")
+            self.set_status_message(f"Settings save failed: {exc}")
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
         self._save_ui_state()

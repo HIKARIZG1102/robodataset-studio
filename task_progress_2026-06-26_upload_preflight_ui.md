@@ -5,6 +5,8 @@
 - [x] Fix status bar project/config/path values being over-elided to `..`.
 - [x] Reduce Inspector dock minimum width so it can be compressed further.
 - [x] Shorten Inspector button labels and keep full descriptions in tooltips.
+- [x] Fix bottom-left text overlap by replacing Qt statusBar temporary messages with a dedicated message label.
+- [x] Restore Inspector button text readability and use scrollbars for narrow dock widths instead of hiding labels.
 - [x] Investigate bottom status bar text overlap.
 - [x] Make project/config/path labels elide long text instead of overlapping.
 - [x] Investigate Upload API 500 behavior.
@@ -23,6 +25,8 @@
 - Normal project/config labels display fully when they fit.
 - Inspector image preview minimum size was reduced.
 - Inspector controls use shorter labels and split image controls into two rows.
+- Status messages now render in `message_label`, separate from project/config/path widgets.
+- Inspector controls now keep full button text; narrow widths use scrollbars instead of squeezed invisible labels.
 - Status bar labels now show elided text and keep full values in tooltips.
 - Upload endpoints now return readable 400 errors for common local/remote/path/auth failures.
 - Frontend API client now surfaces backend error details instead of generic HTTP errors.

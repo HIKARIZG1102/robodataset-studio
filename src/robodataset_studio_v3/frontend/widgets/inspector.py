@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSpinBox,
     QStyle,
@@ -153,7 +154,7 @@ class InspectorDock(QWidget):
 
     def __init__(self, api: ApiClient) -> None:
         super().__init__()
-        self.setMinimumWidth(180)
+        self.setMinimumWidth(140)
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
         self.api = api
         self.project: ProjectSummary | None = None
@@ -166,14 +167,14 @@ class InspectorDock(QWidget):
         self.image_topic = QComboBox()
         self.image_topic.setEditable(True)
         for combo in [self.node, self.topic, self.image_topic]:
-            combo.setMinimumWidth(80)
-            combo.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+            combo.setMinimumWidth(120)
+            combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.type_label = QLabel("type: -")
         self.image_type_label = QLabel("image type: -")
         for label in [self.type_label, self.image_type_label]:
             label.setWordWrap(True)
-            label.setMinimumWidth(70)
-            label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+            label.setMinimumWidth(100)
+            label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         self.node_log = self._terminal()
         self.echo_log = self._terminal()
         self.hz_log = self._terminal()
@@ -224,7 +225,18 @@ class InspectorDock(QWidget):
 
     def _build(self) -> None:
         layout = QVBoxLayout(self)
-        layout.addWidget(self.tabs)
+        layout.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setMinimumWidth(120)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(6, 6, 6, 6)
+        content_layout.addWidget(self.tabs)
+        scroll.setWidget(content)
+        layout.addWidget(scroll)
         self.tabs.addTab(self._topic_page(), "Topic Inspector")
         self.tabs.addTab(self._image_page(), "Image Monitor")
         self.refresh_graph()
@@ -238,15 +250,14 @@ class InspectorDock(QWidget):
         node_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         node_row.addWidget(node_label)
         node_row.addWidget(self.node, 1)
-        start_node = QPushButton("Node info")
-        stop_node = QPushButton("Stop")
+        start_node = QPushButton("Start node info")
+        stop_node = QPushButton("Stop node info")
         start_node.setToolTip("Start node info")
         stop_node.setToolTip("Stop node info")
         start_node.clicked.connect(self.start_node_info)
         stop_node.clicked.connect(lambda: self.stop_process("node_info"))
         for button in [start_node, stop_node]:
-            button.setMinimumWidth(1)
-            button.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+            button.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
         node_row.addWidget(start_node)
         node_row.addWidget(stop_node)
 
@@ -261,28 +272,26 @@ class InspectorDock(QWidget):
         self.topic.currentTextChanged.connect(self.update_topic_type)
 
         echo_row = QHBoxLayout()
-        start_echo = QPushButton("Echo")
-        stop_echo = QPushButton("Stop")
+        start_echo = QPushButton("Start topic echo")
+        stop_echo = QPushButton("Stop topic echo")
         start_echo.setToolTip("Start topic echo")
         stop_echo.setToolTip("Stop topic echo")
         start_echo.clicked.connect(lambda: self.start_topic_process("echo"))
         stop_echo.clicked.connect(lambda: self.stop_process("echo"))
         for button in [start_echo, stop_echo]:
-            button.setMinimumWidth(1)
-            button.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+            button.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
         echo_row.addWidget(start_echo)
         echo_row.addWidget(stop_echo)
 
         hz_row = QHBoxLayout()
-        start_hz = QPushButton("Hz")
-        stop_hz = QPushButton("Stop")
+        start_hz = QPushButton("Start topic hz")
+        stop_hz = QPushButton("Stop topic hz")
         start_hz.setToolTip("Start topic hz")
         stop_hz.setToolTip("Stop topic hz")
         start_hz.clicked.connect(lambda: self.start_topic_process("hz"))
         stop_hz.clicked.connect(lambda: self.stop_process("hz"))
         for button in [start_hz, stop_hz]:
-            button.setMinimumWidth(1)
-            button.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+            button.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
         hz_row.addWidget(start_hz)
         hz_row.addWidget(stop_hz)
 
@@ -310,13 +319,13 @@ class InspectorDock(QWidget):
         topic_row.addWidget(self.image_type_label)
         self.image_topic.currentTextChanged.connect(self.update_image_topic_type)
         controls = QHBoxLayout()
-        project_monitor = QPushButton("Sync")
+        project_monitor = QPushButton("Sync image from project")
         project_monitor.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
         project_monitor.setToolTip("Sync image topic from project config")
-        start = QPushButton("Start")
-        stop = QPushButton("Stop")
-        pause = QPushButton("Pause")
-        stats = QPushButton("Stats")
+        start = QPushButton("Start image monitor")
+        stop = QPushButton("Stop image monitor")
+        pause = QPushButton("Pause / Resume")
+        stats = QPushButton("Frame stats")
         start.setToolTip("Start image monitor")
         stop.setToolTip("Stop image monitor")
         pause.setToolTip("Pause or resume image monitor")
@@ -328,8 +337,7 @@ class InspectorDock(QWidget):
         stats.clicked.connect(self.show_frame_stats)
         self.playback_fps.valueChanged.connect(self._update_display_timer)
         for button in [project_monitor, start, stop, pause, stats]:
-            button.setMinimumWidth(1)
-            button.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+            button.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
         controls.addWidget(project_monitor)
         controls.addWidget(start)
         controls.addWidget(stop)
@@ -345,8 +353,8 @@ class InspectorDock(QWidget):
         info = QVBoxLayout()
         for label in [self.preview_status, self.image_meta, self.preview_fps, self.camera_fps, self.sample]:
             label.setWordWrap(True)
-            label.setMinimumWidth(80)
-            label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+            label.setMinimumWidth(120)
+            label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
             info.addWidget(label)
         info.addStretch(1)
         preview_row.addLayout(info, 1)
