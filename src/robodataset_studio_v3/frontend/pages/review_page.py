@@ -67,8 +67,8 @@ class ReviewPage(BasePage):
         self.summary.setReadOnly(True)
         self.summary.setMaximumHeight(112)
         self.ai_session_report = QPlainTextEdit()
-        self.ai_session_report.setPlaceholderText("AI session report will be loaded from ai_session_report.md in the selected session.")
-        self.ai_session_report.setMaximumHeight(112)
+        self.ai_session_report.setPlaceholderText("Session-level AI report loaded from ai_session_report.md.")
+        self.ai_session_report.setMaximumHeight(150)
         self.detail = QPlainTextEdit()
         self.detail.setReadOnly(True)
         self.ai_review_prompt = QPlainTextEdit()
@@ -202,10 +202,10 @@ class ReviewPage(BasePage):
         layout.addWidget(splitter, 1)
 
         ai_buttons = QHBoxLayout()
-        ai_buttons.addWidget(QLabel("AI Review"))
-        build_prompt = QPushButton("Default AI Review Prompt")
+        ai_buttons.addWidget(QLabel("AI Session Review"))
+        build_prompt = QPushButton("Build Session AI Prompt")
         build_prompt.clicked.connect(self.build_ai_review_prompt)
-        send_review = QPushButton("Send AI Review")
+        send_review = QPushButton("Send Session AI Review")
         send_review.clicked.connect(self.send_ai_review)
         ai_buttons.addWidget(build_prompt)
         ai_buttons.addWidget(send_review)
@@ -339,6 +339,13 @@ class ReviewPage(BasePage):
                 lines.extend(["", path.read_text(encoding="utf-8", errors="replace")[:20000]])
             except Exception as exc:
                 lines.append(f"cannot read file: {exc}")
+        if path.is_dir():
+            ai_report = path / "ai_session_report.md"
+            if ai_report.exists():
+                try:
+                    lines.extend(["", "ai_session_report.md:", ai_report.read_text(encoding="utf-8", errors="replace")[:12000]])
+                except Exception as exc:
+                    lines.append(f"cannot read AI report: {exc}")
         self.overview_detail.setPlainText("\n".join(lines))
 
     def _path_size(self, path: Path, *, max_files: int = 10000) -> int:
@@ -376,8 +383,11 @@ class ReviewPage(BasePage):
         return f"{size:.1f} PB"
 
     def build_ai_review_prompt(self) -> None:
-        report = self._last_report if self._last_report else {"episodes": self._review_rows, "total": len(self._review_rows)}
-        self._post("/api/ai/review-prompt", {"review_summary": report}, "AI review prompt generated", self._finish_ai_prompt)
+        session_dir = self.session_dir.text().strip()
+        if not session_dir:
+            self.status.setText("Select a session before building an AI report prompt.")
+            return
+        self._post("/api/review/session/ai-prompt", {"session_dir": session_dir}, "AI session prompt generated", self._finish_ai_prompt)
 
     def send_ai_review(self) -> None:
         prompt = self.ai_review_prompt.toPlainText().strip()
@@ -470,8 +480,17 @@ class ReviewPage(BasePage):
         if not payload:
             return
         self.ai_review_prompt.setPlainText(str(payload.get("prompt", "")))
-        self.ai_review_result.setPlainText("AI review prompt generated.")
-        self.show_result(result, "AI review prompt generated")
+        overview = payload.get("overview", {})
+        if isinstance(overview, dict):
+            self.ai_review_result.setPlainText(
+                "AI session prompt generated.\n"
+                f"episodes={overview.get('total_episodes', '-')}; "
+                f"prompt_chars={payload.get('prompt_chars', '-')}; "
+                f"samples={payload.get('episode_sample_count', '-')}"
+            )
+        else:
+            self.ai_review_result.setPlainText("AI session prompt generated.")
+        self.show_result(result, "AI session prompt generated")
 
     def _finish_ai_settings(self, result: object, error: object) -> None:
         if error is not None:
@@ -502,8 +521,10 @@ class ReviewPage(BasePage):
             self.ai_review_result.setPlainText(f"AI review failed:\n{payload.get('error')}")
             self.status.setText("AI review failed")
             return
-        self.ai_review_result.setPlainText(str(payload.get("response", "")))
-        self.ai_session_report.setPlainText(str(payload.get("response", "")))
+        response = str(payload.get("response", ""))
+        report_text = self._compose_ai_session_report(response)
+        self.ai_review_result.setPlainText(response)
+        self.ai_session_report.setPlainText(report_text)
         self.show_result(result, "AI review finished")
 
     def _finish_load_ai_session_report(self, result: object, error: object) -> None:
@@ -522,7 +543,29 @@ class ReviewPage(BasePage):
         if not payload:
             return
         self.status.setText(f"AI session report saved: {payload.get('path', '')}")
+        self.refresh_overview()
         self.show_result(result, "AI session report saved")
+
+    def _compose_ai_session_report(self, response: str) -> str:
+        report = self._last_report if isinstance(self._last_report, dict) else {}
+        by_status = report.get("by_status", {}) if isinstance(report.get("by_status"), dict) else {}
+        marks = report.get("mark_counts", {}) if isinstance(report.get("mark_counts"), dict) else {}
+        issues = report.get("issue_counts", {}) if isinstance(report.get("issue_counts"), dict) else {}
+        header = [
+            "# AI Session Report",
+            "",
+            f"- session: {self.session_dir.text().strip()}",
+            f"- episodes: {report.get('total', len(self._review_rows))}",
+            "- status: "
+            f"ok={by_status.get('ok', 0)} warning={by_status.get('warning', 0)} error={by_status.get('error', 0)}",
+            "- marks: " + (", ".join(f"{key}={value}" for key, value in sorted(marks.items())) if marks else "-"),
+            "- top issues: " + (", ".join(f"{key}={value}" for key, value in list(sorted(issues.items()))[:8]) if issues else "-"),
+            "",
+            "## AI Review",
+            "",
+        ]
+        body = response.strip() or "No AI response content."
+        return "\n".join(header) + body.rstrip() + "\n"
 
     def apply_review_filter(self) -> None:
         status = str(self.status_filter.currentData() or self.status_filter.currentText())
@@ -586,12 +629,29 @@ class ReviewPage(BasePage):
             self.detail.setPlainText(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
 
     def mark_selected(self) -> None:
-        row = self.episodes.currentRow()
-        if row < 0 or row >= len(self._visible_rows):
-            self.status.setText("Select an episode row first.")
+        selected_rows = sorted({index.row() for index in self.episodes.selectedIndexes()})
+        if not selected_rows:
+            current = self.episodes.currentRow()
+            selected_rows = [current] if current >= 0 else []
+        episodes = [str(self._visible_rows[row].get("name", "")) for row in selected_rows if 0 <= row < len(self._visible_rows)]
+        episodes = [episode for episode in episodes if episode]
+        if not episodes:
+            self.status.setText("Select one or more episode rows first.")
             return
-        episode = str(self._visible_rows[row].get("name", ""))
         mark = str(self.mark_select.currentData() or self.mark_select.currentText())
+        self._mark_queue = episodes
+        self._mark_batch_total = len(episodes)
+        self._mark_batch_mark = mark
+        self._mark_next()
+
+    def _mark_next(self) -> None:
+        if not getattr(self, "_mark_queue", []):
+            self.apply_review_filter()
+            count = int(getattr(self, "_mark_batch_total", 0) or 0)
+            self.status.setText(f"Episode marks saved: {count}")
+            return
+        episode = self._mark_queue.pop(0)
+        mark = str(getattr(self, "_mark_batch_mark", self.mark_select.currentText()))
         payload = {"session_dir": self.session_dir.text().strip(), "episode": episode, "status": mark}
         self.run_async(self.api.post, lambda result, error: self._finish_mark(result, error, episode, mark), "/api/review/session/mark", payload, timeout=20.0)
 
@@ -602,9 +662,8 @@ class ReviewPage(BasePage):
         for row in self._review_rows:
             if str(row.get("name", "")) == episode:
                 row["mark"] = mark
-        self.apply_review_filter()
-        self.status.setText("Episode mark saved")
-        self.show_result(result, "Episode mark saved")
+        self.show_result(result, f"Episode mark saved: {episode}")
+        self._mark_next()
 
     def trash_selected(self) -> None:
         selected_rows = sorted({index.row() for index in self.episodes.selectedIndexes()}, reverse=True)

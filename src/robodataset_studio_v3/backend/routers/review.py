@@ -51,6 +51,11 @@ def load_ai_report(request: SessionRequest) -> dict[str, Any]:
     return review_service.load_ai_report(request.session_dir)
 
 
+@router.post("/session/ai-prompt", response_model=dict[str, Any])
+def session_ai_prompt(request: SessionRequest) -> dict[str, Any]:
+    return review_service.ai_prompt(request.session_dir)
+
+
 @router.post("/session/ai-report/save", response_model=dict[str, Any])
 def save_ai_report(request: SessionAiReportRequest) -> dict[str, Any]:
     return review_service.save_ai_report(request.session_dir, request.content)

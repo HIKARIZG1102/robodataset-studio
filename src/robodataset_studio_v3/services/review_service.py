@@ -159,6 +159,42 @@ class ReviewService:
         task = task_service.run_instant("review_ai_report", f"saved AI review report {path}", result)
         return {"task_id": task.task_id, "result": result}
 
+    def ai_prompt(self, session_dir: str, sample_limit: int = 4) -> dict[str, Any]:
+        root = self._resolve_session_dir(Path(session_dir).expanduser())
+        config = self._load_session_config(root)
+        marks = self._load_marks(root)
+        rows = self.validator.scan_npz(root / "training", config)
+        for row in rows:
+            row["mark"] = marks.get(str(row.get("name", "")), "unmarked")
+        report = self.validator.quality_report(rows, marks)
+        metrics = self._session_metrics(rows, report)
+        sample_rows = self._sample_rows_for_ai(rows, max(sample_limit, 1))
+        episode_samples = self._compact_episode_samples(self.validator.episode_ai_summaries(sample_rows, config, limit=sample_limit))
+        overview = {
+            "session_dir": str(root),
+            "training_dir": str(root / "training"),
+            "total_episodes": len(rows),
+            "status": report.get("by_status", {}),
+            "marks": report.get("mark_counts", {}),
+            "issue_counts": report.get("issue_counts", {}),
+            "metrics": metrics,
+        }
+        prompt_context = {
+            "overview": overview,
+            "sample_policy": "Representative episodes include warnings/errors first, then first/middle/last normal episodes.",
+            "episode_stat_samples": episode_samples,
+        }
+        prompt = self._build_ai_prompt(prompt_context)
+        result = {
+            "session_dir": str(root),
+            "overview": overview,
+            "episode_sample_count": len(episode_samples),
+            "prompt": prompt,
+            "prompt_chars": len(prompt),
+        }
+        task = task_service.run_instant("review_ai_prompt", f"generated AI session review prompt {root}", result)
+        return {"task_id": task.task_id, "result": result}
+
     def inspect_hdf5(self, hdf5_path: str) -> dict[str, Any]:
         path = Path(hdf5_path).expanduser()
         result = {"path": str(path), "summary_text": self.validator.describe_hdf5(path)}
@@ -229,6 +265,140 @@ class ReviewService:
         except Exception as exc:
             issues.append(f"cannot read npz: {exc}")
         return issues
+
+    def _session_metrics(self, rows: list[dict[str, Any]], report: dict[str, Any]) -> dict[str, Any]:
+        total = len(rows)
+        step_values = []
+        total_size_mb = 0.0
+        missing_count = 0
+        field_names: dict[str, int] = {}
+        for row in rows:
+            try:
+                step_values.append(int(row.get("steps") or 0))
+            except (TypeError, ValueError):
+                pass
+            try:
+                total_size_mb += float(row.get("size_mb") or 0.0)
+            except (TypeError, ValueError):
+                pass
+            if str(row.get("missing") or "").strip():
+                missing_count += 1
+            fields = [item.strip() for item in str(row.get("fields") or "").split(",") if item.strip()]
+            for field in fields:
+                field_names[field] = field_names.get(field, 0) + 1
+        status = report.get("by_status", {}) if isinstance(report.get("by_status"), dict) else {}
+        ok = int(status.get("ok") or 0)
+        warning = int(status.get("warning") or 0)
+        error = int(status.get("error") or 0)
+        issue_counts = report.get("issue_counts", {}) if isinstance(report.get("issue_counts"), dict) else {}
+        return {
+            "ok_rate": round(ok / total, 4) if total else 0.0,
+            "warning_rate": round(warning / total, 4) if total else 0.0,
+            "error_rate": round(error / total, 4) if total else 0.0,
+            "avg_steps": round(sum(step_values) / len(step_values), 3) if step_values else 0.0,
+            "min_steps": min(step_values) if step_values else 0,
+            "max_steps": max(step_values) if step_values else 0,
+            "total_size_mb": round(total_size_mb, 3),
+            "episodes_with_missing_fields": missing_count,
+            "field_coverage": dict(sorted(field_names.items())),
+            "black_frame_issues": sum(count for issue, count in issue_counts.items() if str(issue).startswith("black_frame")),
+            "white_frame_issues": sum(count for issue, count in issue_counts.items() if str(issue).startswith("white_frame")),
+            "nan_or_inf_issues": sum(count for issue, count in issue_counts.items() if str(issue).startswith("nan_or_inf")),
+            "action_dim_issues": sum(count for issue, count in issue_counts.items() if str(issue).startswith("action_dim")),
+        }
+
+    def _sample_rows_for_ai(self, rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+        if not rows:
+            return []
+        priority = [row for row in rows if str(row.get("status") or "") in {"error", "warning"}]
+        chosen: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for row in priority:
+            name = str(row.get("name") or "")
+            if name and name not in seen:
+                chosen.append(row)
+                seen.add(name)
+            if len(chosen) >= limit:
+                return chosen
+        indices = {0, len(rows) // 2, len(rows) - 1}
+        if len(rows) > 4:
+            indices.update({len(rows) // 4, (len(rows) * 3) // 4})
+        for index in sorted(indices):
+            if 0 <= index < len(rows):
+                row = rows[index]
+                name = str(row.get("name") or "")
+                if name and name not in seen:
+                    chosen.append(row)
+                    seen.add(name)
+                if len(chosen) >= limit:
+                    break
+        return chosen
+
+    def _build_ai_prompt(self, context: dict[str, Any]) -> str:
+        return "\n".join(
+            [
+                "You are reviewing one robot dataset recording session for RoboDataset Studio.",
+                "Use the compact session overview, quality metrics, marks, and sampled NPZ statistics below.",
+                "Do not claim you inspected raw video or full arrays; you only see summaries and sampled statistics.",
+                "Return a concise session-level AI report in Markdown, no more than 700 words.",
+                "Include these sections: Overall verdict, Key metrics, Data/schema issues, Episode examples, Recommended actions.",
+                "Mention concrete episode ids only when supported by the sampled data or quality table.",
+                "Use severity labels: PASS, WARNING, or FAIL.",
+                "",
+                json.dumps(context, ensure_ascii=False, separators=(",", ":"), default=str),
+            ]
+        )
+
+    def _compact_episode_samples(self, samples: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        compact_samples: list[dict[str, Any]] = []
+        important_names = {"robot_obs", "rel_actions", "actions"}
+        for sample in samples:
+            fields = sample.get("fields", []) if isinstance(sample.get("fields"), list) else []
+            field_names = [str(field.get("name") or "") for field in fields if isinstance(field, dict)]
+            key_fields: list[dict[str, Any]] = []
+            for field in fields:
+                if not isinstance(field, dict):
+                    continue
+                name = str(field.get("name") or "")
+                is_image = any(key.startswith("image_") for key in field)
+                is_important = name in important_names or is_image
+                if not is_important:
+                    continue
+                key_fields.append(
+                    {
+                        "name": name,
+                        "shape": field.get("shape", []),
+                        "dtype": field.get("dtype", ""),
+                        "mean": self._round_metric(field.get("image_mean", field.get("mean"))),
+                        "std": self._round_metric(field.get("image_std", field.get("std"))),
+                        "min": self._round_metric(field.get("image_min", field.get("min"))),
+                        "max": self._round_metric(field.get("image_max", field.get("max"))),
+                        "finite": field.get("image_finite", field.get("finite", "")),
+                        "abs_sum": self._round_metric(field.get("abs_sum")),
+                    }
+                )
+                if len(key_fields) >= 6:
+                    break
+            compact_samples.append(
+                {
+                    "name": sample.get("name", ""),
+                    "status": sample.get("status", ""),
+                    "mark": sample.get("mark", ""),
+                    "steps": sample.get("steps", ""),
+                    "missing": sample.get("missing", ""),
+                    "quality": sample.get("quality", ""),
+                    "size_mb": sample.get("size_mb", ""),
+                    "field_names": field_names[:24],
+                    "key_fields": key_fields,
+                    "load_error": sample.get("load_error", ""),
+                }
+            )
+        return compact_samples
+
+    def _round_metric(self, value: Any) -> Any:
+        if isinstance(value, (int, float)):
+            return round(float(value), 5)
+        return value
 
     def _load_session_config(self, root: Path) -> dict[str, Any]:
         for name in ("dataset_config.yaml", "collection_config.yaml"):

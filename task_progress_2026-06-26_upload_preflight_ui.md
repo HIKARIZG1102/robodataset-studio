@@ -7,6 +7,11 @@
 - [x] Shorten Inspector button labels and keep full descriptions in tooltips.
 - [x] Fix bottom-left text overlap by replacing Qt statusBar temporary messages with a dedicated message label.
 - [x] Restore Inspector button text readability and use scrollbars for narrow dock widths instead of hiding labels.
+- [x] Shorten Image Monitor control labels enough to leave room for image type.
+- [x] Add session-level AI review prompt generation based on compact quality metrics and sampled NPZ statistics.
+- [x] Keep AI session prompt short by sending stats/field summaries, not raw arrays or full metadata.
+- [x] Add batch episode marking for selected rows.
+- [x] Show saved `ai_session_report.md` in Overview when selecting a session folder.
 - [x] Investigate bottom status bar text overlap.
 - [x] Make project/config/path labels elide long text instead of overlapping.
 - [x] Investigate Upload API 500 behavior.
@@ -27,6 +32,10 @@
 - Inspector controls use shorter labels and split image controls into two rows.
 - Status messages now render in `message_label`, separate from project/config/path widgets.
 - Inspector controls now keep full button text; narrow widths use scrollbars instead of squeezed invisible labels.
+- Image Monitor buttons now use shorter labels such as `Sync from project`, `Start monitor`, and `Stop monitor`.
+- Review now builds AI prompts from the selected session, including overview, issue counts, mark counts, metrics, and sampled episode stats.
+- AI replies are composed into a session report with a short overview header before saving.
+- `Mark Selected` now applies to all selected episode rows.
 - Status bar labels now show elided text and keep full values in tooltips.
 - Upload endpoints now return readable 400 errors for common local/remote/path/auth failures.
 - Frontend API client now surfaces backend error details instead of generic HTTP errors.
