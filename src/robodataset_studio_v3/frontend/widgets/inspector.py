@@ -206,9 +206,8 @@ class InspectorDock(QWidget):
         self._preview_watchdog = QTimer(self)
         self._preview_watchdog.setSingleShot(True)
         self._preview_watchdog.timeout.connect(self._check_preview_started)
-        self._auto_started_first_image = False
         self._build()
-        self._append(self.preview_log, "Inspector image monitor ready. Click Refresh topics, then Start image monitor.")
+        self._append(self.preview_log, "Inspector image monitor ready. Use Refresh Nodes/Topics, then choose an image topic and start.")
 
     def _build(self) -> None:
         layout = QVBoxLayout(self)
@@ -273,23 +272,17 @@ class InspectorDock(QWidget):
         self.image_topic.currentTextChanged.connect(self.update_image_topic_type)
         controls = QHBoxLayout()
         project_monitor = QPushButton("Monitor project image")
-        refresh = QPushButton("Refresh topics")
-        auto_start = QPushButton("Auto start first image")
         start = QPushButton("Start image monitor")
         stop = QPushButton("Stop image monitor")
         pause = QPushButton("Pause / Resume")
         stats = QPushButton("Frame stats")
         project_monitor.clicked.connect(self.start_project_image_monitor)
-        refresh.clicked.connect(self.refresh_graph)
-        auto_start.clicked.connect(self.auto_start_first_image)
         start.clicked.connect(self.start_image_preview)
         stop.clicked.connect(self.stop_image_preview)
         pause.clicked.connect(self.toggle_pause)
         stats.clicked.connect(self.show_frame_stats)
         self.playback_fps.valueChanged.connect(self._update_display_timer)
         controls.addWidget(project_monitor)
-        controls.addWidget(refresh)
-        controls.addWidget(auto_start)
         controls.addWidget(start)
         controls.addWidget(stop)
         controls.addWidget(pause)
@@ -343,24 +336,11 @@ class InspectorDock(QWidget):
             self._append(self.preview_log, "image topics: " + ", ".join(image_topics))
             if not self._selected_image_topic_name():
                 self.image_topic.setCurrentIndex(0)
-            if not self._auto_started_first_image and self._preview_process is None:
-                self._auto_started_first_image = True
-                QTimer.singleShot(250, self.auto_start_first_image)
         else:
             summary = self._graph_error_summary(graph)
             self._append(self.preview_log, summary or "no image topics found in current ROS graph")
         self.update_topic_type(self.topic.currentText())
         self.update_image_topic_type(self.image_topic.currentText())
-
-    def auto_start_first_image(self) -> None:
-        if self.image_topic.count() <= 0:
-            self._append(self.preview_log, "auto start requested but no image topic is loaded; refreshing graph")
-            self.refresh_graph()
-            return
-        self.image_topic.setCurrentIndex(0)
-        topic = self._selected_image_topic_name()
-        self._append(self.preview_log, f"auto start selected {topic}")
-        self.start_image_preview()
 
     def start_node_info(self) -> None:
         node = self.node.currentText().strip()
@@ -446,7 +426,7 @@ class InspectorDock(QWidget):
         topic = self._selected_image_topic_name()
         if not topic:
             self.preview_status.setText("preview error: no image topic selected")
-            self._append(self.preview_log, "no image topic selected; click Refresh topics and choose an image topic")
+            self._append(self.preview_log, "no image topic selected; use Refresh Nodes/Topics and choose an image topic")
             self.refresh_graph()
             return
         topic_type = self._topic_types.get(topic, "")

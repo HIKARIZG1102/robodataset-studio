@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThreadPool, QUrl
-from PySide6.QtGui import QDesktopServices, QFontMetrics, QKeySequence
+from PySide6.QtGui import QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QDockWidget,
@@ -164,19 +164,21 @@ class MainWindow(QMainWindow):
         refresh.setObjectName("refreshGraphButton")
         refresh.setToolTip("Refresh the global ROS nodes and topics for Config, Discovery, and Inspector.")
         refresh.setCursor(Qt.PointingHandCursor)
+        refresh.setMinimumWidth(180)
         refresh.clicked.connect(self.refresh_ros_graph)
         refresh.setStyleSheet(
             """
             QPushButton#refreshGraphButton {
                 margin: 1px 8px 1px 12px;
-                padding: 2px 10px;
+                padding: 3px 14px;
                 border: 1px solid #2f6f9f;
                 border-radius: 4px;
                 color: #ffffff;
                 background: #1f6aa5;
                 font-weight: 600;
+                min-width: 180px;
                 min-height: 18px;
-                max-height: 22px;
+                max-height: 24px;
             }
             QPushButton#refreshGraphButton:hover {
                 background: #267fbe;
@@ -203,17 +205,17 @@ class MainWindow(QMainWindow):
             value.setTextInteractionFlags(Qt.TextSelectableByMouse)
             value.setWordWrap(False)
         self.project_name_value.setMinimumWidth(48)
-        self.project_name_value.setMaximumWidth(220)
+        self.project_name_value.setMaximumWidth(420)
         self.project_name_value.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         self.config_value.setMinimumWidth(36)
-        self.config_value.setMaximumWidth(180)
+        self.config_value.setMaximumWidth(320)
         self.config_value.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         self.status_value.setMinimumWidth(56)
         self.status_value.setMaximumWidth(76)
         self.status_value.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.project_folder_status.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.project_folder_value.setMinimumWidth(90)
-        self.project_folder_value.setMaximumWidth(520)
+        self.project_folder_value.setMaximumWidth(900)
         self.project_folder_value.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         project_widget = QWidget()
         project_row = QHBoxLayout(project_widget)
@@ -242,36 +244,35 @@ class MainWindow(QMainWindow):
         self.project_name_label.setText("project:")
         self.config_label.setText("config:")
         self.status_label.setText("status:")
+        self.project_folder_status.setText("path:")
         if self.current_project is None:
-            if normalize_language(self.language) == "zh":
-                self.project_folder_status.setText("项目路径:")
-            else:
-                self.project_folder_status.setText("Project folder:")
             self._set_status_values("none", "none", "none")
             self.project_folder_value.setText("none")
             self.project_folder_value.setToolTip("")
             return
         state = "recorded" if self.current_project.has_recorded_data else "editable"
-        if normalize_language(self.language) == "zh":
-            self.project_folder_status.setText("项目路径:")
-        else:
-            self.project_folder_status.setText("Project folder:")
-        self._set_status_values(self.current_project.key, self.current_project.config_id or "none", state)
-        self._set_project_folder_status(self.current_project.path)
+        self._set_project_summary_values(self.current_project, state)
+
+    def _set_project_summary_values(self, project: ProjectSummary, status: str | None = None) -> None:
+        self.project_name_label.setText("project:")
+        self.config_label.setText("config:")
+        self.status_label.setText("status:")
+        self.project_folder_status.setText("path:")
+        state = status or ("recorded" if project.has_recorded_data else "editable")
+        self._set_status_values(project.key, project.config_id or "none", state)
+        self._set_project_folder_status(project.path)
 
     def _set_status_values(self, project: str, config: str, status: str) -> None:
-        self._set_elided_value(self.project_name_value, project, min_width=42)
-        self._set_elided_value(self.config_value, config, min_width=36)
+        self._set_full_status_value(self.project_name_value, project)
+        self._set_full_status_value(self.config_value, config)
         self.status_value.setText(status)
         self.status_value.setToolTip(status)
 
     def _set_project_folder_status(self, path: str) -> None:
-        self._set_elided_value(self.project_folder_value, path, min_width=72)
+        self._set_full_status_value(self.project_folder_value, path)
 
-    def _set_elided_value(self, label: QLabel, value: str, *, min_width: int) -> None:
-        metrics = QFontMetrics(label.font())
-        width = max(min(label.width() or label.maximumWidth(), label.maximumWidth()) - 8, min_width)
-        label.setText(metrics.elidedText(value, Qt.ElideMiddle, width))
+    def _set_full_status_value(self, label: QLabel, value: str) -> None:
+        label.setText(value)
         label.setToolTip(value)
 
     def resizeEvent(self, event) -> None:
@@ -303,6 +304,7 @@ class MainWindow(QMainWindow):
         dock.setAllowedAreas(Qt.LeftDockWidgetArea)
         widget = QWidget()
         layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 4, 0, 0)
         self.project_list = QListWidget()
         self._style_sidebar_list(self.project_list)
         self.project_list.currentItemChanged.connect(lambda item, _prev: self._preview_project_item(item))
@@ -499,6 +501,7 @@ class MainWindow(QMainWindow):
         dock.setAllowedAreas(Qt.LeftDockWidgetArea)
         widget = QWidget()
         layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 4, 0, 0)
         self.config_list = QListWidget()
         self._style_sidebar_list(self.config_list)
         self.config_list.currentItemChanged.connect(lambda item, _prev: self._preview_config_item(item))
@@ -728,7 +731,7 @@ class MainWindow(QMainWindow):
         project = item.data(Qt.UserRole)
         if isinstance(project, ProjectSummary):
             status = "recorded" if project.has_recorded_data else "editable"
-            self.statusBar().showMessage(f"{project.key} | config={project.config_id or '-'} | {status} | {project.path}")
+            self._set_project_summary_values(project, status)
 
     def _clear_current_project_workspace(self) -> None:
         self.current_project = None
@@ -962,8 +965,11 @@ class MainWindow(QMainWindow):
         return True
 
     def _ensure_default_project_tab(self) -> None:
-        if not self.open_tabs:
-            self._add_action_tab("project", switch=True)
+        default_tabs = ["project", "collect", "review", "convert", "upload"]
+        for tab_id in default_tabs:
+            self._add_action_tab(tab_id, switch=False)
+        if "project" in self.open_tabs:
+            self._focus_widget_tab(self.open_tabs["project"])
 
     def _sync_open_pages_to_project(self) -> None:
         for widget in self.open_tabs.values():

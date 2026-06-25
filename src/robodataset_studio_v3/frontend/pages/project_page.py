@@ -15,6 +15,7 @@ class ProjectPage(BasePage):
         super().__init__("Properties", api, project)
         self.info = QPlainTextEdit()
         self.info.setReadOnly(True)
+        self.info.setMaximumHeight(170)
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["Name", "Type", "Size"])
         self.detail = QPlainTextEdit()
@@ -56,7 +57,7 @@ class ProjectPage(BasePage):
         splitter.setSizes([520, 520])
 
         self.layout.addLayout(buttons)
-        self.layout.addWidget(QLabel("Project Overview"))
+        self.layout.addWidget(QLabel("Project Summary"))
         self.layout.addWidget(self.info)
         self.layout.addWidget(splitter, 1)
         self.finish_layout()
