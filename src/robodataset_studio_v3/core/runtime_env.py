@@ -7,6 +7,12 @@ from pathlib import Path
 
 
 RMW_PREFERENCE = ("rmw_cyclonedds_cpp", "rmw_fastrtps_cpp")
+RMW_ERROR_PENALTY_TOKENS = (
+    "RTPS_TRANSPORT_SHM Error",
+    "Failed init_port",
+    "open_and_lock_file failed",
+    "fastrtps_port",
+)
 
 
 def default_ros_setup() -> str:
@@ -114,11 +120,14 @@ def _rmw_graph_score(name: str) -> int:
         )
     except Exception:
         return -1
+    combined = f"{completed.stdout}\n{completed.stderr}"
     if completed.returncode != 0:
         return -1
     lines = [line for line in completed.stdout.splitlines() if line.strip()]
     score = len(lines)
     output = completed.stdout
+    if any(token in combined for token in RMW_ERROR_PENALTY_TOKENS):
+        score -= 5000
     if "sensor_msgs/msg/Image" in output:
         score += 1000
     if "sensor_msgs/msg/CompressedImage" in output:

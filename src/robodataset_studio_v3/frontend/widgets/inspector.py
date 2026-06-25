@@ -382,7 +382,7 @@ class InspectorDock(QWidget):
         env = QProcessEnvironment.systemEnvironment()
         for key, value in os.environ.items():
             env.insert(key, value)
-        rmw = select_rmw(os.environ.get("RMW_IMPLEMENTATION") or os.environ.get("ROBODATASET_RMW_IMPLEMENTATION"))
+        rmw = select_rmw(os.environ.get("ROBODATASET_RMW_IMPLEMENTATION"))
         env.insert("RMW_IMPLEMENTATION", rmw)
         env.insert("ROBODATASET_RMW_IMPLEMENTATION", rmw)
         env.insert("ROS_LOG_DIR", os.environ.get("ROS_LOG_DIR", "/tmp/robodataset_ros_logs"))

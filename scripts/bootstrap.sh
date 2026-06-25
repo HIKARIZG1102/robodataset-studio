@@ -67,13 +67,14 @@ rmw_available() {
 rmw_graph_score() {
   local name="$1"
   local output count weighted
-  output="$(RMW_IMPLEMENTATION="${name}" ROBODATASET_RMW_IMPLEMENTATION="${name}" timeout 3 ros2 topic list -t --no-daemon 2>/dev/null || true)"
+  output="$(RMW_IMPLEMENTATION="${name}" ROBODATASET_RMW_IMPLEMENTATION="${name}" timeout 3 ros2 topic list -t --no-daemon 2>&1 || true)"
   if [[ -z "${output}" ]]; then
     printf '%s\n' 0
     return
   fi
-  count="$(printf '%s\n' "${output}" | sed '/^[[:space:]]*$/d' | wc -l)"
+  count="$(printf '%s\n' "${output}" | grep -v 'RTPS_TRANSPORT_SHM Error\\|Failed init_port\\|open_and_lock_file failed\\|fastrtps_port' | sed '/^[[:space:]]*$/d' | wc -l)"
   weighted="$((count))"
+  if printf '%s\n' "${output}" | grep -qE 'RTPS_TRANSPORT_SHM Error|Failed init_port|open_and_lock_file failed|fastrtps_port'; then weighted="$((weighted - 5000))"; fi
   if printf '%s\n' "${output}" | grep -q 'sensor_msgs/msg/Image'; then weighted="$((weighted + 1000))"; fi
   if printf '%s\n' "${output}" | grep -q 'sensor_msgs/msg/CompressedImage'; then weighted="$((weighted + 800))"; fi
   if printf '%s\n' "${output}" | grep -q 'sensor_msgs/msg/JointState'; then weighted="$((weighted + 1000))"; fi
