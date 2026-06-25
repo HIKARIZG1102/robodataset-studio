@@ -12,6 +12,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     python3-venv \
     libegl1 \
+    libdbus-1-3 \
+    libfontconfig1 \
+    libfreetype6 \
     libgl1 \
     libglib2.0-0 \
     libx11-6 \

@@ -20,7 +20,6 @@ fi
 
 docker_args=(
   --rm
-  -it
   --name "${CONTAINER_NAME}"
   --network host
   --ipc host
@@ -41,6 +40,10 @@ docker_args=(
 )
 
 mkdir -p "${DATA_DIR}"
+
+if [[ -t 0 && -t 1 ]]; then
+  docker_args+=(-it)
+fi
 
 if [[ "${MOUNT_SOURCE}" == "1" || "${MOUNT_SOURCE}" == "true" || "${MOUNT_SOURCE}" == "yes" ]]; then
   docker_args+=(-v "${ROOT_DIR}:/workspace/robodataset-studio")

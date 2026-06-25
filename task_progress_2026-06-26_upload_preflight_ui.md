@@ -32,6 +32,10 @@
 - [x] Set Inspector default dock width around 320px and keep minimum at 260px so controls are visible without being overly wide.
 - [x] Split Inspector node/topic/image controls across rows so the right dock no longer opens with half-clipped controls.
 - [x] Persist Inspector dock width and left/right dock area in local settings.
+- [x] Pull latest `v3-fastapi-pyside` from GitHub and verify local/remote are synchronized.
+- [x] Test new Docker packaging and identify runtime Qt dependency gaps.
+- [x] Add missing Docker runtime libraries required by PySide6/Qt.
+- [x] Make Docker run script work in non-interactive terminals by only adding `-it` for real TTY sessions.
 - [x] Investigate bottom status bar text overlap.
 - [x] Make project/config/path labels elide long text instead of overlapping.
 - [x] Investigate Upload API 500 behavior.
@@ -73,6 +77,8 @@
 - Logs page now shows an explicit empty-state message after task/log cleanup.
 - Inspector now receives a default right-dock width via `resizeDocks`, and its controls wrap into separate rows instead of relying on a very wide dock.
 - Inspector now restores the previous dock side and width on startup instead of always using the default layout.
+- Docker image now installs `libdbus-1-3`, `libfontconfig1`, and `libfreetype6`, which PySide6/Qt needs at runtime.
+- `scripts/docker_run.sh` now supports non-interactive launches without Docker failing on `the input device is not a TTY`.
 - Status bar labels now show elided text and keep full values in tooltips.
 - Upload endpoints now return readable 400 errors for common local/remote/path/auth failures.
 - Frontend API client now surfaces backend error details instead of generic HTTP errors.
@@ -87,11 +93,16 @@
 - `/api/ros/graph` now sees mock arm and USB camera topics after app restart with `ROS_LOCALHOST_ONLY=1`.
 - `/api/recording/preflight` for `mock_test_v1` returns `ok: true` in about 9.5 seconds.
 - HDF5 conversion was reproduced against mock session data containing `mock_widowx_task_phase` with Unicode dtype and now succeeds.
+- `git fetch` against `origin/v3-fastapi-pyside` succeeded; local and remote commit counts are even.
+- Original Docker image reproduced `ImportError: libfontconfig.so.1` on startup.
+- Patched Docker image passed backend/frontend import smoke tests.
 
 ## Issues Encountered
 
 - Current mock arm and USB camera publishers were running with `ROS_LOCALHOST_ONLY=1`, while the app/backend had been running with `ROS_LOCALHOST_ONLY=0`. ROS2 discovery cannot cross that boundary.
 - HDF5 conversion previously failed on `dtype('<U5')` because h5py cannot directly create a compressed dataset from numpy Unicode arrays. This came from string/generic ROS fields, not from merge itself.
+- Docker default DNS in this environment could not resolve Ubuntu package hosts during build; building with `docker build --network host ...` works here.
+- The newly added Docker packaging depended on Qt libraries that were not included in the first image version.
 
 ## Pending Manual Checks
 
