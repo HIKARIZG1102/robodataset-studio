@@ -1,0 +1,13 @@
+.git
+.venv
+.conda-env
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+robodataset/projects
+robodataset/.deleted_projects
+*.hdf5
+*.h5
+*.npz
+*.log

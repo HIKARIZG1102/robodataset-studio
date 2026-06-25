@@ -117,6 +117,93 @@ Optional system tools for upload:
 sudo apt install rsync openssh-client
 ```
 
+## Docker Packaging
+
+The repository also includes a generic Docker wrapper named
+`robodataset-studio` rather than `robodataset-studio-v3`. The Docker image is
+intended to package only the Studio GUI, local FastAPI backend, Python
+dependencies, and upload tools. The image contains the application source and
+creates a container-local virtual environment at
+`/opt/robodataset-studio/venv`, installing the same runtime dependencies that
+the local bootstrap would normally install. It does not install ROS inside the
+image. Instead, the run wrapper passes through the host ROS environment so the
+container matches the machine that is already publishing ROS2 topics:
+
+```bash
+./scripts/docker_build.sh
+./scripts/docker_run.sh
+```
+
+Equivalent Compose workflow:
+
+```bash
+docker compose up --build robodataset-studio
+```
+
+After the GitHub Actions Docker workflow publishes a package, users can run a
+prebuilt image without building locally:
+
+```bash
+docker pull ghcr.io/HIKARIZG1102/robodataset-studio:latest
+IMAGE_NAME=ghcr.io/HIKARIZG1102/robodataset-studio ./scripts/docker_run.sh
+```
+
+The container uses host networking and X11 forwarding by default so the GUI can
+open and the ROS2 graph can be discovered from the same ROS domain:
+
+- Image name: `robodataset-studio:latest`
+- Container command: `robodataset-studio`
+- Container venv: `/opt/robodataset-studio/venv`
+- App path inside container: `/workspace/robodataset-studio`
+- Default data mount: host `./robodataset` to container
+  `/workspace/robodataset-studio/robodataset`
+- GUI forwarding: `DISPLAY`, `/tmp/.X11-unix`, optional `~/.Xauthority`
+- ROS passthrough: host network, `/opt/ros:/opt/ros:ro`, `ROS_SETUP`,
+  `ROS_DOMAIN_ID`, `ROS_LOCALHOST_ONLY`, RMW, `PYTHONPATH`, `LD_LIBRARY_PATH`,
+  and colcon/ament prefix variables
+
+The default Docker run uses the code baked into the image. It does not mount the
+whole repository over the app path. For development-only hot reloading from the
+local checkout, use:
+
+```bash
+ROBODATASET_DOCKER_MOUNT_SOURCE=1 ./scripts/docker_run.sh
+```
+
+To store project data somewhere other than `./robodataset`, set:
+
+```bash
+ROBODATASET_DOCKER_DATA_DIR=/data/robodataset ./scripts/docker_run.sh
+```
+
+If your ROS overlay workspace is outside `/opt/ros`, pass it through with a
+colon-separated list:
+
+```bash
+ROS_SETUP=/path/to/overlay/install/setup.bash \
+ROS_WORKSPACE_MOUNTS=/path/to/overlay:/another/overlay \
+./scripts/docker_run.sh
+```
+
+If a Studio project is stored outside the default data directory, mount that
+external project path too so the saved project index remains usable in the
+container:
+
+```bash
+PROJECT_MOUNTS=/mnt/datasets:/media/robot_disk ./scripts/docker_run.sh
+```
+
+The default image is based on Ubuntu 22.04 with Python 3.10, which matches ROS
+Humble's Python ABI. If the host ROS installation uses a different Python ABI,
+use a matching derived Docker base image or run the app directly on the host.
+
+This image includes Studio's software dependencies but does not include ROS,
+hardware-specific drivers, vendor SDKs, or custom robot workspaces. For broad
+use, keep those on the host and publish ROS2 topics from the host. If direct
+device access is needed inside the container, extend `scripts/docker_run.sh` or
+`docker-compose.yml` with the appropriate `--device` or volume mounts for that
+machine.
+
 Upload server fields are stored in the reusable total config under `upload`.
 After a project loads a total config, the Upload page reads host, port,
 username, password/key path, and remote root from that project config. Separate

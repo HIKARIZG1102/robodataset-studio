@@ -1,0 +1,27 @@
+services:
+  robodataset-studio:
+    image: robodataset-studio:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    network_mode: host
+    ipc: host
+    environment:
+      DISPLAY: ${DISPLAY}
+      QT_X11_NO_MITSHM: "1"
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+      ROS_LOCALHOST_ONLY: ${ROS_LOCALHOST_ONLY:-0}
+      ROS_SETUP: ${ROS_SETUP:-/opt/ros/humble/setup.bash}
+      ROBODATASET_RMW_IMPLEMENTATION: ${ROBODATASET_RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}
+      RMW_IMPLEMENTATION: ${RMW_IMPLEMENTATION:-}
+      AMENT_PREFIX_PATH: ${AMENT_PREFIX_PATH:-}
+      CMAKE_PREFIX_PATH: ${CMAKE_PREFIX_PATH:-}
+      COLCON_PREFIX_PATH: ${COLCON_PREFIX_PATH:-}
+      LD_LIBRARY_PATH: ${LD_LIBRARY_PATH:-}
+      PYTHONPATH: ${PYTHONPATH:-}
+    volumes:
+      - ./robodataset:/workspace/robodataset-studio/robodataset
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${HOME}/.Xauthority:/root/.Xauthority:ro
+      - /opt/ros:/opt/ros:ro
+    devices: []
