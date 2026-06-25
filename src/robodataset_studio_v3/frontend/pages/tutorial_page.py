@@ -62,9 +62,12 @@ class TutorialPage(QWidget):
             and dataset storage. DDS/RMW is part of the ROS2 runtime installed
             on the robot workstation, not a normal pip dependency of this app.</p>
             <ul>
-              <li><b>RMW/DDS:</b> FastDDS and CycloneDDS may both appear on ROS2 systems.
-              V3 auto-detects installed RMW implementations and avoids known FastDDS
-              shared-memory failures where possible.</li>
+              <li><b>RMW/DDS:</b> FastDDS and CycloneDDS are the common open-source
+              paths. Connext, GurumDDS, and Zenoh RMW can also exist on ROS2 systems
+              when their vendor/runtime packages are installed. V3 auto-detects
+              installed RMW implementations, checks missing shared libraries and
+              ros2 CLI Python modules, and avoids known FastDDS shared-memory
+              failures where possible.</li>
               <li><b>Discovery/network:</b> ROS_DOMAIN_ID, ROS_LOCALHOST_ONLY, multicast,
               VPNs, and LAN routing can decide whether nodes see each other.</li>
               <li><b>QoS:</b> Image and sensor topics usually need sensor-data QoS.</li>
@@ -83,8 +86,11 @@ class TutorialPage(QWidget):
             <code>/opt/robodataset-studio/venv</code>. It does not install ROS
             inside the image. The run wrapper passes through the
             host ROS environment with host networking, <code>/opt/ros</code>,
-            <code>ROS_SETUP</code>, Python/library paths, and ROS domain variables
-            so the container can match the current machine. By default only
+            <code>ROS_SETUP</code>, Python/library paths, ROS domain variables,
+            and the selected RMW/DDS so the container can match the current
+            machine. Settings &gt; Environment reports missing RMW runtime
+            libraries, missing ros2 CLI modules, and domain/local/RMW mismatches.
+            By default only
             <code>./robodataset</code> is mounted as persistent data; the app
             code runs from the image. Use <code>PROJECT_MOUNTS</code> for
             external project disks and <code>ROS_WORKSPACE_MOUNTS</code> for

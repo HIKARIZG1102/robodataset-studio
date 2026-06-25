@@ -31,7 +31,10 @@ The software must adapt several communication layers:
 
 - ROS setup/workspaces: `ROS_SETUP`, overlay workspaces, Python ABI compatibility
   with `rclpy`, `sensor_msgs`, and other ROS2 Python packages.
-- RMW/DDS: `rmw_fastrtps_cpp` / FastDDS and `rmw_cyclonedds_cpp` / CycloneDDS.
+- RMW/DDS: `rmw_fastrtps_cpp` / FastDDS and `rmw_cyclonedds_cpp` / CycloneDDS
+  are the common open-source paths. `rmw_fastrtps_dynamic_cpp`,
+  `rmw_connextdds`, `rmw_gurumdds_cpp`, and `rmw_zenoh_cpp` are detected when
+  installed, but vendor DDS stacks may require separate runtimes/licenses.
   DDS/RMW is part of the ROS2 runtime installed on the robot workstation; it is
   not a normal `pip` dependency of this app.
 - DDS transport and discovery: UDP/multicast, loopback/local-only mode,
@@ -100,8 +103,9 @@ After bootstrap, start the app with either command:
 
 `run_app.sh` sources the first available ROS setup file from `ROS_SETUP`,
 `/opt/ros/humble/setup.bash`, or `/opt/ros/jazzy/setup.bash`. It auto-selects
-an installed RMW implementation, preferring `rmw_fastrtps_cpp` on machines that
-only have Fast DDS installed. Override these when needed:
+an installed RMW implementation by probing the ROS graph. Settings >
+Environment also reports missing RMW shared libraries, missing ros2 CLI Python
+modules, and graph probe errors. Override these when needed:
 
 ```bash
 ROS_SETUP=/path/to/install/setup.bash ./RoboDataset-Studio-V3.sh

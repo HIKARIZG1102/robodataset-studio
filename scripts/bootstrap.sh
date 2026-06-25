@@ -32,6 +32,10 @@ select_rmw() {
   local candidates=()
   rmw_available "rmw_cyclonedds_cpp" && candidates+=("rmw_cyclonedds_cpp")
   rmw_available "rmw_fastrtps_cpp" && candidates+=("rmw_fastrtps_cpp")
+  rmw_available "rmw_fastrtps_dynamic_cpp" && candidates+=("rmw_fastrtps_dynamic_cpp")
+  rmw_available "rmw_connextdds" && candidates+=("rmw_connextdds")
+  rmw_available "rmw_gurumdds_cpp" && candidates+=("rmw_gurumdds_cpp")
+  rmw_available "rmw_zenoh_cpp" && candidates+=("rmw_zenoh_cpp")
   if [[ "${#candidates[@]}" -gt 1 ]]; then
     local best="" best_score="-1" score
     for candidate in "${candidates[@]}"; do
@@ -50,7 +54,7 @@ select_rmw() {
     printf '%s\n' "${candidates[0]}"
     return
   fi
-  printf '%s\n' "${requested:-rmw_cyclonedds_cpp}"
+  printf '%s\n' "${requested:-rmw_fastrtps_cpp}"
 }
 
 rmw_available() {

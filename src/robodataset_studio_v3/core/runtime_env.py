@@ -6,7 +6,14 @@ import subprocess
 from pathlib import Path
 
 
-RMW_PREFERENCE = ("rmw_cyclonedds_cpp", "rmw_fastrtps_cpp")
+RMW_PREFERENCE = (
+    "rmw_cyclonedds_cpp",
+    "rmw_fastrtps_cpp",
+    "rmw_fastrtps_dynamic_cpp",
+    "rmw_connextdds",
+    "rmw_gurumdds_cpp",
+    "rmw_zenoh_cpp",
+)
 RMW_ERROR_PENALTY_TOKENS = (
     "RTPS_TRANSPORT_SHM Error",
     "Failed init_port",

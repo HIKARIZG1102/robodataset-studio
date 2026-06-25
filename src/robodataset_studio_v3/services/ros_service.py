@@ -677,7 +677,16 @@ class RosService:
 
     def _rmw_candidates(self) -> list[str]:
         configured = select_rmw(os.environ.get("RMW_IMPLEMENTATION") or os.environ.get("ROBODATASET_RMW_IMPLEMENTATION"))
-        candidates = [configured, *available_rmw_implementations(), "rmw_fastrtps_cpp", "rmw_cyclonedds_cpp"]
+        candidates = [
+            configured,
+            *available_rmw_implementations(),
+            "rmw_fastrtps_cpp",
+            "rmw_cyclonedds_cpp",
+            "rmw_fastrtps_dynamic_cpp",
+            "rmw_connextdds",
+            "rmw_gurumdds_cpp",
+            "rmw_zenoh_cpp",
+        ]
         unique = []
         for item in candidates:
             if item and item not in unique:

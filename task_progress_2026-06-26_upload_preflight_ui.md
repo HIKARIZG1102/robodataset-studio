@@ -40,6 +40,14 @@
 - [x] Add Docker libraries required by mounted ROS Humble `rclpy`.
 - [x] Add Docker library required by mounted FastDDS RMW.
 - [x] Add Docker system Python dependencies required by ROS2 CLI plugins.
+- [x] Add broader Docker DDS runtime libraries for FastDDS/CycloneDDS-style host ROS mounts.
+- [x] Expand environment diagnostics to check each known RMW/DDS implementation.
+- [x] Show missing RMW shared libraries, ROS CLI Python module gaps, and per-RMW topic probe errors in Settings.
+- [x] Make Settings pop up a visible warning when environment diagnostics contain warnings/errors.
+- [x] Make environment diagnostics source `ROS_SETUP` internally before ROS CLI probes.
+- [x] Extend run scripts and ROS fallback probes to include FastDDS dynamic, Connext, GurumDDS, and Zenoh RMW names.
+- [x] Update Help/About/README/HTML guide with clearer ROS2 protocol-layer and DDS/RMW compatibility notes.
+- [x] Stop forcing CycloneDDS as the Docker default RMW so host ROS installs with only FastDDS can auto-select correctly.
 - [x] Investigate bottom status bar text overlap.
 - [x] Make project/config/path labels elide long text instead of overlapping.
 - [x] Investigate Upload API 500 behavior.
@@ -86,6 +94,13 @@
 - Docker image now installs `libpython3.10` and `libspdlog1`, which are required for mounted ROS Humble Python nodes/CLI to import `rclpy`.
 - Docker image now installs `libtinyxml2-9`, which mounted `rmw_fastrtps_cpp` needs at runtime.
 - Docker image now installs `python3-packaging`, `python3-numpy`, `python3-netifaces`, and `python3-yaml` so mounted ROS2 CLI plugins can load.
+- Docker image now also includes common FastDDS/CycloneDDS/iceoryx runtime libraries such as `libfastcdr1`, `libfastrtps2.5`, `libfoonathan-memory0.7.1`, `libyaml-cpp0.7`, `libcycloneddsidl0`, and iceoryx runtime packages.
+- Environment diagnostics now report per-RMW install status, library path, missing `ldd` dependencies, CLI probe status, topic counts, and DDS guidance.
+- Settings Environment refresh now shows guidance before raw YAML and pops up a warning when ROS/DDS issues are detected.
+- Environment diagnostics now source the detected ROS setup file before calling `ros2`, so Settings can diagnose correctly even if the parent shell did not source ROS manually.
+- `run_app.sh`, `bootstrap.sh`, and ROS service fallback probes now include known optional RMW names beyond FastDDS/CycloneDDS.
+- Help and project docs now explain ROS setup/workspace, RMW/DDS, discovery/network, QoS, message families, image encoding, and Docker mount layers more explicitly.
+- Dockerfile, docker compose, and docker run wrapper no longer default `ROBODATASET_RMW_IMPLEMENTATION` to CycloneDDS; auto-selection now reflects the mounted host ROS installation.
 - Status bar labels now show elided text and keep full values in tooltips.
 - Upload endpoints now return readable 400 errors for common local/remote/path/auth failures.
 - Frontend API client now surfaces backend error details instead of generic HTTP errors.
@@ -106,6 +121,7 @@
 - Docker ROS CLI test initially found mounted `/opt/ros/humble`, but `ros2 topic list` failed because `rclpy` could not load `libpython3.10.so.1.0` and `libspdlog.so.1`.
 - After fixing `rclpy`, FastDDS RMW loading exposed another missing runtime library: `libtinyxml2.so.9`.
 - After fixing RMW loading, ROS2 CLI plugin loading exposed missing system Python modules: `packaging`, `numpy`, `netifaces`, and `yaml`.
+- Current host ROS Humble install exposes FastDDS RMW libraries but does not expose CycloneDDS RMW libraries; new diagnostics now makes that explicit instead of leaving it as a silent missing graph.
 
 ## Issues Encountered
 

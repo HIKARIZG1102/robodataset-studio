@@ -65,6 +65,7 @@ class SettingsPage(BasePage):
         self.yaml_editor = self.output
         self.yaml_editor.setReadOnly(False)
         self.settings: dict = {}
+        self._environment_warning_shown = False
         self._build_settings()
         self.load()
         self._connect_auto_save()
@@ -265,6 +266,7 @@ class SettingsPage(BasePage):
         payload = result if isinstance(result, dict) else {}
         summary = payload.get("summary", {}) if isinstance(payload.get("summary"), dict) else {}
         issues = payload.get("issues", []) if isinstance(payload.get("issues"), list) else []
+        guidance = payload.get("guidance", []) if isinstance(payload.get("guidance"), list) else []
         self.environment_summary.setText(
             " | ".join(
                 [
@@ -272,6 +274,7 @@ class SettingsPage(BasePage):
                     f"rmw={summary.get('selected_rmw', '-')}",
                     f"topics={summary.get('topic_count', '-')}",
                     f"issues={summary.get('issue_count', len(issues))}",
+                    f"runnable_rmw={len(summary.get('runnable_rmw', []) if isinstance(summary.get('runnable_rmw'), list) else [])}",
                     f"ros_setup={summary.get('ros_setup', '-')}",
                 ]
             )
@@ -289,8 +292,29 @@ class SettingsPage(BasePage):
             self.environment_issues.setPlainText("\n\n".join(lines))
         else:
             self.environment_issues.setPlainText("No blocking environment issues detected.")
-        self.environment_detail.setPlainText(yaml.safe_dump(payload, sort_keys=False, allow_unicode=True))
+        detail_text = ""
+        if guidance:
+            detail_text += "Guidance:\n" + "\n".join(f"- {item}" for item in guidance) + "\n\n"
+        detail_text += yaml.safe_dump(payload, sort_keys=False, allow_unicode=True)
+        self.environment_detail.setPlainText(detail_text)
         self.status.setText("Environment diagnostics refreshed")
+        if issues:
+            has_error = any(isinstance(issue, dict) and issue.get("severity") == "error" for issue in issues)
+            if has_error or not self._environment_warning_shown:
+                self._environment_warning_shown = True
+                preview_lines = []
+                for issue in issues[:5]:
+                    if isinstance(issue, dict):
+                        preview_lines.append(f"[{issue.get('severity', 'warning')}] {issue.get('name', '')}: {issue.get('detail', '')}")
+                guidance_lines = [str(item) for item in guidance[:4]]
+                QMessageBox.warning(
+                    self,
+                    "Environment Diagnostics",
+                    "ROS/DDS environment issues were detected.\n\n"
+                    + "\n".join(preview_lines)
+                    + ("\n\nRecommended checks:\n" + "\n".join(f"- {line}" for line in guidance_lines) if guidance_lines else "")
+                    + "\n\nOpen Settings > Environment for full details.",
+                )
 
     def finish_maintenance_refresh(self, result: object, error: object) -> None:
         if error is not None:

@@ -3,7 +3,6 @@ FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV QT_X11_NO_MITSHM=1
-ENV ROBODATASET_RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 ENV ROBODATASET_VENV=/opt/robodataset-studio/venv
 ENV PATH=/opt/robodataset-studio/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
@@ -20,8 +19,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libdbus-1-3 \
     libfontconfig1 \
     libfreetype6 \
+    libfastcdr1 \
+    libfastrtps2.5 \
+    libfoonathan-memory0.7.1 \
     libgl1 \
     libglib2.0-0 \
+    libyaml-cpp0.7 \
+    libcunit1 \
+    libssl3 \
+    libcycloneddsidl0 \
+    libiceoryx-binding-c1 \
+    libiceoryx-posh1 \
+    libiceoryx-utils1 \
+    libiceoryx-platform1 \
     libtinyxml2-9 \
     libx11-6 \
     libx11-xcb1 \

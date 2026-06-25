@@ -1451,7 +1451,8 @@ class MainWindow(QMainWindow):
                     "Purpose: ROS2 listener-only robot dataset collection, review, conversion, and upload.",
                     "Primary target: ROS2 topic/service environments, not direct robot control.",
                     "Runtime adaptation: ROS setup, RMW/DDS, discovery/network, QoS, message types, and image encodings.",
-                    "DDS/RMW note: FastDDS/CycloneDDS are ROS2 runtime communication layers, not pip dependencies of this app.",
+                    "DDS/RMW note: FastDDS, CycloneDDS, Connext, GurumDDS, and Zenoh RMW are ROS2 runtime communication layers, not pip dependencies of this app.",
+                    "Settings > Environment checks installed RMW libraries, missing shared libraries, ros2 CLI modules, and graph visibility.",
                     "License/copyright: project-local repository metadata applies.",
                 ]
             ),
