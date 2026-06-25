@@ -1056,6 +1056,8 @@ class MainWindow(QMainWindow):
         page = self._make_action_page(tab_id)
         if hasattr(page, "settingsSaved"):
             page.settingsSaved.connect(self._settings_changed)
+        if hasattr(page, "maintenanceChanged"):
+            page.maintenanceChanged.connect(self._maintenance_changed)
         if self.ros_graph_cache:
             handler = getattr(page, "set_graph_data", None)
             if callable(handler):
@@ -1172,6 +1174,7 @@ class MainWindow(QMainWindow):
         if self.inspector_dock is not None:
             return self.inspector_dock
         self.inspector_dock = QDockWidget("Inspector", self)
+        self.inspector_dock.setMinimumWidth(260)
         self.inspector_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
         try:
             self.inspector = InspectorDock(self.api)
@@ -1184,9 +1187,13 @@ class MainWindow(QMainWindow):
             self.inspector_dock.setWidget(fallback)
             self.inspector = None
         self.inspector_dock.visibilityChanged.connect(lambda _visible: self._save_ui_state())
-        self.addDockWidget(Qt.RightDockWidgetArea, self.inspector_dock)
+        ui = self._ui_settings()
+        area = Qt.LeftDockWidgetArea if str(ui.get("inspector_area") or "right") == "left" else Qt.RightDockWidgetArea
+        self.addDockWidget(area, self.inspector_dock)
         visible = bool(self._ui_settings().get("inspector_visible", True))
         self.inspector_dock.setVisible(visible)
+        if visible:
+            self.resizeDocks([self.inspector_dock], [self._inspector_saved_width()], Qt.Horizontal)
         return self.inspector_dock
 
     def _ros_graph_updated(self, graph: dict) -> None:
@@ -1241,6 +1248,13 @@ class MainWindow(QMainWindow):
     def _ui_settings(self) -> dict:
         ui = self.settings.get("ui", {}) if isinstance(self.settings.get("ui"), dict) else {}
         return ui
+
+    def _inspector_saved_width(self) -> int:
+        try:
+            width = int(self._ui_settings().get("inspector_width") or 320)
+        except (TypeError, ValueError):
+            width = 320
+        return min(max(width, 260), 520)
 
     def _current_tab_id(self) -> str:
         active = self._active_workspace()
@@ -1451,6 +1465,14 @@ class MainWindow(QMainWindow):
             self.apply_ui_scale(float(ui.get("scale", self.ui_scale) or self.ui_scale), persist=False)
             self.retranslate()
 
+    def _maintenance_changed(self) -> None:
+        self.refresh_logs_sidebar()
+        page = self.open_tabs.get("logs")
+        refresh = getattr(page, "refresh", None)
+        if callable(refresh):
+            refresh()
+        self.set_status_message("Maintenance cleanup finished; logs refreshed")
+
     def retranslate(self) -> None:
         apply_i18n(self, self.language)
         for tab_id, widget in self.open_tabs.items():
@@ -1500,6 +1522,10 @@ class MainWindow(QMainWindow):
         settings.setdefault("ui", {})
         settings["ui"]["last_active_tab"] = self._current_tab_id()
         settings["ui"]["inspector_visible"] = bool(self.inspector_dock and self.inspector_dock.isVisible())
+        if self.inspector_dock is not None:
+            settings["ui"]["inspector_width"] = max(int(self.inspector_dock.width()), 260)
+            area = self.dockWidgetArea(self.inspector_dock)
+            settings["ui"]["inspector_area"] = "left" if area == Qt.LeftDockWidgetArea else "right"
         settings["ui"]["scale"] = self.ui_scale
         if self.current_project is not None:
             settings["ui"]["last_project_path"] = self.current_project.path

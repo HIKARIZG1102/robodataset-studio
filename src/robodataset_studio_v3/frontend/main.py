@@ -10,7 +10,7 @@ from robodataset_studio_v3.frontend.main_window import MainWindow
 def main() -> int:
     app = QApplication(sys.argv)
     window = MainWindow()
-    window.resize(1280, 780)
+    window.resize(1280, 860)
     window.show()
     return app.exec()
 

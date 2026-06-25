@@ -22,10 +22,11 @@ class Hdf5Converter:
                 group = episodes_group.create_group(f"{idx:07d}")
                 with np.load(episode_path, allow_pickle=True) as data:
                     for field in data.files:
+                        value = data[field]
                         if field in METADATA_FIELDS or field.endswith("_metadata"):
-                            group.attrs[field] = self._metadata_attr(data[field])
+                            group.attrs[field] = self._metadata_attr(value)
                         else:
-                            group.create_dataset(field, data=data[field], compression="gzip")
+                            self._create_dataset(group, field, value)
             meta = h5.create_group("metadata")
             meta.attrs["config_yaml"] = config_yaml
             meta.attrs["dataset_version"] = "0.1.0"
@@ -41,3 +42,31 @@ class Hdf5Converter:
         except Exception:
             pass
         return str(value)
+
+    def _create_dataset(self, group: h5py.Group, field: str, value: np.ndarray) -> None:
+        array = np.asarray(value)
+        original_dtype = str(array.dtype)
+        if array.dtype.kind in {"U", "S"}:
+            dataset = group.create_dataset(field, data=self._utf8_array(array), dtype=h5py.string_dtype(encoding="utf-8"))
+        elif array.dtype.kind == "O":
+            dataset = group.create_dataset(field, data=self._object_array_to_utf8(array), dtype=h5py.string_dtype(encoding="utf-8"))
+        elif array.shape == ():
+            dataset = group.create_dataset(field, data=array)
+        else:
+            dataset = group.create_dataset(field, data=array, compression="gzip")
+        dataset.attrs["source_dtype"] = original_dtype
+
+    def _utf8_array(self, array: np.ndarray) -> np.ndarray:
+        if array.shape == ():
+            return np.asarray(str(array.item()), dtype=object)
+        return array.astype(object)
+
+    def _object_array_to_utf8(self, array: np.ndarray) -> np.ndarray:
+        def normalize(value: object) -> str:
+            if isinstance(value, bytes):
+                return value.decode("utf-8", errors="replace")
+            return str(value)
+
+        if array.shape == ():
+            return np.asarray(normalize(array.item()), dtype=object)
+        return np.vectorize(normalize, otypes=[object])(array)

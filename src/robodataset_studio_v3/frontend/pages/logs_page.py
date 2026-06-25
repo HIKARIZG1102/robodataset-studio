@@ -82,7 +82,7 @@ class LogsPage(BasePage):
         if self.items.count():
             self.items.setCurrentRow(0)
         else:
-            self.detail.clear()
+            self.detail.setPlainText("No runtime tasks or project log files found. Task archive may have been cleared from Settings > Maintenance.")
 
     def select_task(self, task_id: str) -> None:
         for row, entry in enumerate(self._entries):

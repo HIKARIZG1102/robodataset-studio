@@ -44,16 +44,26 @@ class ConvertService:
 
     def _merge_worker(self, task_id: str, sessions: list[str], output_dir: str, output_name: str = "") -> None:
         try:
+            task_service.add_log(task_id, f"merge selected sessions: {len(sessions)}")
+            task_service.add_log(task_id, f"merge output_dir: {output_dir}")
             result = self._merge_sync(sessions, output_dir, output_name)
+            task_service.add_log(task_id, f"merged episodes: {result.get('manifest', {}).get('episode_count', '-')}")
+            task_service.add_log(task_id, f"merged_dir: {result.get('merged_dir', '')}")
             task_service.complete_task(task_id, message="merged sessions", result=result)
         except Exception as exc:
+            task_service.add_log(task_id, f"merge failed: {type(exc).__name__}: {exc}")
             task_service.fail_task(task_id, message="merge failed", error=str(exc))
 
     def _hdf5_worker(self, task_id: str, sessions: list[str], output_dir: str, output_name: str = "") -> None:
         try:
+            task_service.add_log(task_id, f"HDF5 selected sessions: {len(sessions)}")
+            task_service.add_log(task_id, f"HDF5 output_dir: {output_dir}")
             result = self._hdf5_sync(sessions, output_dir, output_name)
+            task_service.add_log(task_id, f"converted episodes: {result.get('episode_count', '-')}")
+            task_service.add_log(task_id, f"hdf5_path: {result.get('hdf5_path', '')}")
             task_service.complete_task(task_id, message="converted selected sessions to HDF5", result=result)
         except Exception as exc:
+            task_service.add_log(task_id, f"HDF5 conversion failed: {type(exc).__name__}: {exc}")
             task_service.fail_task(task_id, message="HDF5 conversion failed", error=str(exc))
 
     def _merge_sync(self, sessions: list[str], output_dir: str, output_name: str = "") -> dict[str, Any]:

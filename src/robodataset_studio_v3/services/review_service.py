@@ -133,6 +133,48 @@ class ReviewService:
         self._save_marks(root, marks)
         return {"session_dir": str(root), "episode": path.name, "trashed_path": str(target)}
 
+    def delete_session(self, session_dir: str) -> dict[str, Any]:
+        root = self._resolve_session_dir(Path(session_dir).expanduser())
+        if not root.exists() or not root.is_dir():
+            raise FileNotFoundError(f"session not found: {root}")
+        if not (root / "training").exists():
+            raise RuntimeError(f"refusing to delete non-session directory without training folder: {root}")
+        trash_root = root.parent / ".delete" / "sessions"
+        trash_root.mkdir(parents=True, exist_ok=True)
+        target = trash_root / root.name
+        suffix = 1
+        while target.exists():
+            target = trash_root / f"{root.name}_{suffix}"
+            suffix += 1
+        size_bytes = self._path_size(root)
+        shutil.move(str(root), str(target))
+        result = {"session_dir": str(root), "deleted_path": str(target), "size_bytes": size_bytes}
+        task = task_service.run_instant("review_delete_session", f"moved session to .delete {target}", result)
+        return {"task_id": task.task_id, "result": result}
+
+    def cleanup_recycle_bin(self, project_dir: str) -> dict[str, Any]:
+        if not str(project_dir).strip():
+            raise ValueError("project_dir is required")
+        root = Path(project_dir).expanduser()
+        if not root.exists() or not root.is_dir():
+            raise FileNotFoundError(f"project folder not found: {root}")
+        targets = [root / ".delete", *root.glob("raw_sessions/session_*/review_deleted")]
+        removed: list[dict[str, Any]] = []
+        removed_bytes = 0
+        for target in targets:
+            if not target.exists():
+                continue
+            size = self._path_size(target)
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+            removed.append({"path": str(target), "size_bytes": size})
+            removed_bytes += size
+        result = {"project_dir": str(root), "removed": removed, "removed_count": len(removed), "removed_bytes": removed_bytes}
+        task = task_service.run_instant("cleanup_recycle_bin", f"cleaned recycle bin under {root}", result)
+        return {"task_id": task.task_id, "result": result}
+
     def quality_report(self, session_dir: str) -> dict[str, Any]:
         root = self._resolve_session_dir(Path(session_dir).expanduser())
         config = self._load_session_config(root)
@@ -182,7 +224,8 @@ class ReviewService:
         prompt_context = {
             "overview": overview,
             "sample_policy": "Representative episodes include warnings/errors first, then first/middle/last normal episodes.",
-            "episode_stat_samples": episode_samples,
+            "episode_samples": self._episode_sample_index(episode_samples),
+            "field_columns": self._field_columns(episode_samples),
         }
         prompt = self._build_ai_prompt(prompt_context)
         result = {
@@ -340,8 +383,9 @@ class ReviewService:
                 "You are reviewing one robot dataset recording session for RoboDataset Studio.",
                 "Use the compact session overview, quality metrics, marks, and sampled NPZ statistics below.",
                 "Do not claim you inspected raw video or full arrays; you only see summaries and sampled statistics.",
-                "Return a concise session-level AI report in Markdown, no more than 700 words.",
-                "Include these sections: Overall verdict, Key metrics, Data/schema issues, Episode examples, Recommended actions.",
+                "Return concise plain text only. Do not use Markdown styling, heading markup, bold markup, tables, or bullet symbols that require rich rendering.",
+                "Use short plain section labels exactly like: Verdict:, Key metrics:, Data/schema issues:, Episode examples:, Recommended actions:.",
+                "Keep the report under 700 words.",
                 "Mention concrete episode ids only when supported by the sampled data or quality table.",
                 "Use severity labels: PASS, WARNING, or FAIL.",
                 "",
@@ -395,6 +439,52 @@ class ReviewService:
             )
         return compact_samples
 
+    def _episode_sample_index(self, samples: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
+            {
+                "episode": sample.get("name", ""),
+                "status": sample.get("status", ""),
+                "mark": sample.get("mark", ""),
+                "steps": sample.get("steps", ""),
+                "missing": sample.get("missing", ""),
+                "quality": sample.get("quality", ""),
+                "size_mb": sample.get("size_mb", ""),
+                "fields": sample.get("field_names", []),
+            }
+            for sample in samples
+        ]
+
+    def _field_columns(self, samples: list[dict[str, Any]]) -> dict[str, Any]:
+        columns: dict[str, Any] = {}
+        for sample in samples:
+            episode = str(sample.get("name") or "")
+            for field in sample.get("key_fields", []):
+                if not isinstance(field, dict):
+                    continue
+                name = str(field.get("name") or "")
+                if not name:
+                    continue
+                column = columns.setdefault(
+                    name,
+                    {
+                        "shape": field.get("shape", []),
+                        "dtype": field.get("dtype", ""),
+                        "values": [],
+                    },
+                )
+                column["values"].append(
+                    {
+                        "episode": episode,
+                        "mean": field.get("mean"),
+                        "std": field.get("std"),
+                        "min": field.get("min"),
+                        "max": field.get("max"),
+                        "finite": field.get("finite"),
+                        "abs_sum": field.get("abs_sum"),
+                    }
+                )
+        return columns
+
     def _round_metric(self, value: Any) -> Any:
         if isinstance(value, (int, float)):
             return round(float(value), 5)
@@ -439,6 +529,14 @@ class ReviewService:
     def _ai_report_path(self, root: Path) -> Path:
         root.mkdir(parents=True, exist_ok=True)
         return root / "ai_session_report.md"
+
+    def _path_size(self, path: Path) -> int:
+        try:
+            if path.is_file():
+                return path.stat().st_size
+            return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
+        except Exception:
+            return 0
 
     def _metadata_value(self, value: np.ndarray) -> Any:
         try:

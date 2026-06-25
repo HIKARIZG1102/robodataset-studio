@@ -76,6 +76,11 @@ def trash_episode(request: MarkRequest) -> dict[str, Any]:
     return review_service.trash_episode(request.session_dir, request.episode)
 
 
+@router.post("/session/delete", response_model=dict[str, Any])
+def delete_session(request: SessionRequest) -> dict[str, Any]:
+    return review_service.delete_session(request.session_dir)
+
+
 @router.post("/hdf5/inspect", response_model=dict[str, Any])
 def inspect_hdf5(request: Hdf5Request) -> dict[str, Any]:
     return review_service.inspect_hdf5(request.hdf5_path)

@@ -65,16 +65,22 @@ class ReviewPage(BasePage):
 
         self.summary = QPlainTextEdit()
         self.summary.setReadOnly(True)
-        self.summary.setMaximumHeight(112)
+        self.summary.setMinimumHeight(132)
+        self.summary.setMaximumHeight(156)
         self.ai_session_report = QPlainTextEdit()
         self.ai_session_report.setPlaceholderText("Session-level AI report loaded from ai_session_report.md.")
-        self.ai_session_report.setMaximumHeight(150)
+        self.ai_session_report.setMinimumHeight(132)
+        self.ai_session_report.setMaximumHeight(156)
         self.detail = QPlainTextEdit()
         self.detail.setReadOnly(True)
+        self.detail.setMinimumHeight(240)
         self.ai_review_prompt = QPlainTextEdit()
-        self.ai_review_prompt.setMaximumHeight(170)
+        self.ai_review_prompt.setMinimumHeight(200)
+        self.ai_review_prompt.setMaximumHeight(280)
         self.ai_review_result = QPlainTextEdit()
         self.ai_review_result.setReadOnly(True)
+        self.ai_review_result.setMinimumHeight(200)
+        self.ai_review_result.setMaximumHeight(280)
 
         self.hdf5_path = QLineEdit()
         self.hdf5_path.setReadOnly(True)
@@ -119,6 +125,7 @@ class ReviewPage(BasePage):
     def _overview_tab(self) -> QWidget:
         widget = QWidget()
         layout = QVBoxLayout(widget)
+        layout.setSpacing(8)
         buttons = QHBoxLayout()
         refresh = QPushButton("Refresh Overview")
         refresh.clicked.connect(self.refresh_overview)
@@ -146,6 +153,7 @@ class ReviewPage(BasePage):
             ("Use Current Session", self.use_current_session),
             ("Scan + Run Local Checks", self.scan_then_check),
             ("Export Quality Report", self.export_quality_report),
+            ("Delete Session", self.delete_session),
         ]:
             button = QPushButton(label)
             button.clicked.connect(handler)
@@ -159,6 +167,9 @@ class ReviewPage(BasePage):
         controls.addWidget(self.status_filter)
         controls.addWidget(QLabel("Manual mark"))
         controls.addWidget(self.mark_select)
+        select_all_button = QPushButton("Select All Episodes")
+        select_all_button.clicked.connect(self.select_all_episodes)
+        controls.addWidget(select_all_button)
         mark_button = QPushButton("Mark Selected")
         mark_button.clicked.connect(self.mark_selected)
         controls.addWidget(mark_button)
@@ -169,25 +180,14 @@ class ReviewPage(BasePage):
         layout.addLayout(controls)
 
         summary_splitter = QSplitter(Qt.Horizontal)
-        quality_panel = QWidget()
-        quality_layout = QVBoxLayout(quality_panel)
-        quality_layout.setContentsMargins(0, 0, 0, 0)
-        quality_layout.addWidget(QLabel("Quality Summary"))
-        quality_layout.addWidget(self.summary)
-        ai_report_panel = QWidget()
-        ai_report_layout = QVBoxLayout(ai_report_panel)
-        ai_report_layout.setContentsMargins(0, 0, 0, 0)
         ai_report_header = QHBoxLayout()
-        ai_report_header.addWidget(QLabel("AI Session Report"))
         save_ai_report = QPushButton("Save AI Report")
         save_ai_report.clicked.connect(self.save_ai_session_report)
         ai_report_header.addWidget(save_ai_report)
         ai_report_header.addStretch(1)
-        ai_report_layout.addLayout(ai_report_header)
-        ai_report_layout.addWidget(self.ai_session_report)
-        summary_splitter.addWidget(quality_panel)
-        summary_splitter.addWidget(ai_report_panel)
-        summary_splitter.setSizes([520, 620])
+        summary_splitter.addWidget(self._text_panel("Quality Summary", self.summary))
+        summary_splitter.addWidget(self._text_panel("AI Session Report", self.ai_session_report, ai_report_header))
+        summary_splitter.setSizes([760, 420])
         layout.addWidget(summary_splitter)
 
         splitter = QSplitter(Qt.Horizontal)
@@ -198,7 +198,7 @@ class ReviewPage(BasePage):
         detail_layout.addWidget(QLabel("Selected NPZ Details"))
         detail_layout.addWidget(self.detail)
         splitter.addWidget(detail_panel)
-        splitter.setSizes([700, 480])
+        splitter.setSizes([760, 420])
         layout.addWidget(splitter, 1)
 
         ai_buttons = QHBoxLayout()
@@ -212,11 +212,27 @@ class ReviewPage(BasePage):
         ai_buttons.addStretch(1)
         layout.addLayout(ai_buttons)
         ai_splitter = QSplitter(Qt.Horizontal)
-        ai_splitter.addWidget(self.ai_review_prompt)
-        ai_splitter.addWidget(self.ai_review_result)
-        ai_splitter.setSizes([600, 600])
+        ai_splitter.addWidget(self._text_panel("Prompt sent to AI", self.ai_review_prompt))
+        ai_splitter.addWidget(self._text_panel("AI Response", self.ai_review_result))
+        ai_splitter.setSizes([760, 420])
         layout.addWidget(ai_splitter)
         return widget
+
+    def _text_panel(self, title: str, body: QWidget, controls: QHBoxLayout | None = None) -> QWidget:
+        panel = QWidget()
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(0, 0, 0, 0)
+        panel_layout.setSpacing(4)
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.addWidget(QLabel(title))
+        if controls is not None:
+            header.addLayout(controls)
+        else:
+            header.addStretch(1)
+        panel_layout.addLayout(header)
+        panel_layout.addWidget(body)
+        return panel
 
     def _hdf5_tab(self) -> QWidget:
         widget = QWidget()
@@ -265,6 +281,22 @@ class ReviewPage(BasePage):
 
     def export_quality_report(self) -> None:
         self._post("/api/review/session/report", {"session_dir": self.session_dir.text().strip()}, "Quality report exported", self._finish_report)
+
+    def delete_session(self) -> None:
+        session_dir = self.session_dir.text().strip()
+        if not session_dir:
+            self._warn_review_blocked("No session selected", "Select a review session before deleting it.")
+            return
+        answer = QMessageBox.warning(
+            self,
+            "Delete Session",
+            f"Move this session to .delete?\n\n{session_dir}\n\nThis removes it from the active raw_sessions list.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        self._post("/api/review/session/delete", {"session_dir": session_dir}, "Deleting session", self._finish_delete_session)
 
     def load_ai_session_report(self) -> None:
         session_dir = self.session_dir.text().strip()
@@ -457,6 +489,23 @@ class ReviewPage(BasePage):
             self.update_quality_summary()
         self.show_result(result, "Quality report exported")
 
+    def _finish_delete_session(self, result: object, error: object) -> None:
+        payload = self._payload_or_error(result, error)
+        if not payload:
+            return
+        result_payload = payload.get("result", payload) if isinstance(payload.get("result", payload), dict) else payload
+        self._review_rows = []
+        self._visible_rows = []
+        self.episodes.setRowCount(0)
+        self.detail.clear()
+        self.summary.clear()
+        self.ai_session_report.clear()
+        self.ai_review_prompt.clear()
+        self.ai_review_result.clear()
+        self.status.setText(f"Session moved to .delete: {result_payload.get('deleted_path', '')}")
+        self.refresh_overview()
+        self.show_result(result, "Session deleted")
+
     def _finish_hdf5_inspect(self, result: object, error: object) -> None:
         payload = self._payload_or_error(result, error)
         if not payload:
@@ -521,7 +570,7 @@ class ReviewPage(BasePage):
             self.ai_review_result.setPlainText(f"AI review failed:\n{payload.get('error')}")
             self.status.setText("AI review failed")
             return
-        response = str(payload.get("response", ""))
+        response = self._plain_ai_text(str(payload.get("response", "")))
         report_text = self._compose_ai_session_report(response)
         self.ai_review_result.setPlainText(response)
         self.ai_session_report.setPlainText(report_text)
@@ -542,7 +591,7 @@ class ReviewPage(BasePage):
         payload = self._payload_or_error(result, error)
         if not payload:
             return
-        self.status.setText(f"AI session report saved: {payload.get('path', '')}")
+        self.status.setText(f"AI session report replaced: {payload.get('path', '')}")
         self.refresh_overview()
         self.show_result(result, "AI session report saved")
 
@@ -552,20 +601,45 @@ class ReviewPage(BasePage):
         marks = report.get("mark_counts", {}) if isinstance(report.get("mark_counts"), dict) else {}
         issues = report.get("issue_counts", {}) if isinstance(report.get("issue_counts"), dict) else {}
         header = [
-            "# AI Session Report",
+            "AI Session Report",
             "",
-            f"- session: {self.session_dir.text().strip()}",
-            f"- episodes: {report.get('total', len(self._review_rows))}",
-            "- status: "
+            f"session: {self.session_dir.text().strip()}",
+            f"episodes: {report.get('total', len(self._review_rows))}",
+            "status: "
             f"ok={by_status.get('ok', 0)} warning={by_status.get('warning', 0)} error={by_status.get('error', 0)}",
-            "- marks: " + (", ".join(f"{key}={value}" for key, value in sorted(marks.items())) if marks else "-"),
-            "- top issues: " + (", ".join(f"{key}={value}" for key, value in list(sorted(issues.items()))[:8]) if issues else "-"),
+            "marks: " + (", ".join(f"{key}={value}" for key, value in sorted(marks.items())) if marks else "-"),
+            "top issues: " + (", ".join(f"{key}={value}" for key, value in list(sorted(issues.items()))[:8]) if issues else "-"),
             "",
-            "## AI Review",
+            "AI Review",
             "",
         ]
-        body = response.strip() or "No AI response content."
+        body = self._plain_ai_text(response).strip() or "No AI response content."
         return "\n".join(header) + body.rstrip() + "\n"
+
+    @staticmethod
+    def _plain_ai_text(text: str) -> str:
+        cleaned_lines: list[str] = []
+        for raw_line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+            line = raw_line.strip()
+            while line.startswith("#"):
+                line = line[1:].lstrip()
+            for marker in ("- ", "* ", "+ ", "• "):
+                if line.startswith(marker):
+                    line = line[len(marker) :].lstrip()
+                    break
+            line = line.replace("**", "").replace("__", "").replace("`", "")
+            cleaned_lines.append(line)
+        compact: list[str] = []
+        blank_count = 0
+        for line in cleaned_lines:
+            if line:
+                blank_count = 0
+                compact.append(line)
+            else:
+                blank_count += 1
+                if blank_count <= 1:
+                    compact.append(line)
+        return "\n".join(compact).strip()
 
     def apply_review_filter(self) -> None:
         status = str(self.status_filter.currentData() or self.status_filter.currentText())
@@ -643,6 +717,10 @@ class ReviewPage(BasePage):
         self._mark_batch_total = len(episodes)
         self._mark_batch_mark = mark
         self._mark_next()
+
+    def select_all_episodes(self) -> None:
+        self.episodes.selectAll()
+        self.status.setText(f"Selected all visible episodes: {len(self._visible_rows)}")
 
     def _mark_next(self) -> None:
         if not getattr(self, "_mark_queue", []):

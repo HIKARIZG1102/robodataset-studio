@@ -2,7 +2,20 @@ from __future__ import annotations
 
 import yaml
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QPushButton, QSpinBox, QTabWidget, QWidget
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QFormLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPlainTextEdit,
+    QPushButton,
+    QSpinBox,
+    QTabWidget,
+    QWidget,
+)
 
 from robodataset_studio_v3.frontend.api_client import ApiClient, ProjectSummary
 from robodataset_studio_v3.frontend.pages.base import BasePage
@@ -10,6 +23,7 @@ from robodataset_studio_v3.frontend.pages.base import BasePage
 
 class SettingsPage(BasePage):
     settingsSaved = Signal(object)
+    maintenanceChanged = Signal()
 
     def __init__(self, api: ApiClient, project: ProjectSummary | None = None) -> None:
         super().__init__("Settings", api, project)
@@ -43,6 +57,11 @@ class SettingsPage(BasePage):
         self.environment_issues.setMaximumHeight(180)
         self.environment_detail = QPlainTextEdit()
         self.environment_detail.setReadOnly(True)
+        self.maintenance_summary = QLabel("")
+        self.maintenance_summary.setWordWrap(True)
+        self.maintenance_detail = QPlainTextEdit()
+        self.maintenance_detail.setReadOnly(True)
+        self.maintenance_detail.setMaximumHeight(180)
         self.yaml_editor = self.output
         self.yaml_editor.setReadOnly(False)
         self.settings: dict = {}
@@ -91,9 +110,27 @@ class SettingsPage(BasePage):
         environment_layout.addRow("Issues", self.environment_issues)
         environment_layout.addRow("Details", self.environment_detail)
 
+        self.maintenance_widget = QWidget()
+        maintenance_layout = QFormLayout(self.maintenance_widget)
+        maintenance_buttons = QHBoxLayout()
+        refresh_maintenance = QPushButton("Refresh Maintenance Status")
+        cleanup_recycle = QPushButton("Clean Recycle Bin")
+        clear_log_cache = QPushButton("Clear Log Cache")
+        refresh_maintenance.clicked.connect(self.refresh_maintenance)
+        cleanup_recycle.clicked.connect(self.cleanup_recycle_bin)
+        clear_log_cache.clicked.connect(self.clear_log_cache)
+        maintenance_buttons.addWidget(refresh_maintenance)
+        maintenance_buttons.addWidget(cleanup_recycle)
+        maintenance_buttons.addWidget(clear_log_cache)
+        maintenance_buttons.addStretch(1)
+        maintenance_layout.addRow(maintenance_buttons)
+        maintenance_layout.addRow("Summary", self.maintenance_summary)
+        maintenance_layout.addRow("Details", self.maintenance_detail)
+
         self.tabs.addTab(general, "General")
         self.tabs.addTab(ai_widget, "AI")
         self.tabs.addTab(self.environment_widget, "Environment")
+        self.tabs.addTab(self.maintenance_widget, "Maintenance")
         self.tabs.addTab(self.yaml_editor, "Advanced YAML")
 
         self.layout.addLayout(buttons)
@@ -119,6 +156,7 @@ class SettingsPage(BasePage):
         self.yaml_editor.setPlainText(yaml.safe_dump(self.settings, sort_keys=False, allow_unicode=True))
         self.status.setText("Settings loaded")
         self.refresh_environment()
+        self.refresh_maintenance()
 
     def save(self) -> None:
         try:
@@ -180,6 +218,46 @@ class SettingsPage(BasePage):
         self.environment_detail.setPlainText("")
         self.run_async(self.api.get, self.finish_environment_refresh, "/api/environment/diagnostics", timeout=20.0)
 
+    def refresh_maintenance(self) -> None:
+        self.maintenance_summary.setText("Loading maintenance status...")
+        self.maintenance_detail.setPlainText("")
+        self.run_async(self.api.get, self.finish_maintenance_refresh, "/api/settings/maintenance/summary", timeout=10.0)
+
+    def cleanup_recycle_bin(self) -> None:
+        if self.project is None:
+            self.status.setText("Open a project before cleaning recycle bin.")
+            return
+        answer = QMessageBox.warning(
+            self,
+            "Clean Recycle Bin",
+            f"Delete .delete and review_deleted files under this project?\n\n{self.project.path}",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        self.status.setText("Cleaning recycle bin...")
+        self.run_async(
+            self.api.post,
+            self.finish_cleanup_recycle_bin,
+            "/api/settings/maintenance/cleanup-recycle-bin",
+            {"project_dir": self.project.path},
+            timeout=60.0,
+        )
+
+    def clear_log_cache(self) -> None:
+        answer = QMessageBox.warning(
+            self,
+            "Clear Log Cache",
+            "Clear current in-memory task list, task archive counts, and temporary ROS/preview logs?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        self.status.setText("Clearing log cache...")
+        self.run_async(self.api.post, self.finish_clear_log_cache, "/api/settings/maintenance/clear-log-cache", {}, timeout=20.0)
+
     def finish_environment_refresh(self, result: object, error: object) -> None:
         if error is not None:
             self.environment_summary.setText(f"Environment diagnostics failed: {error}")
@@ -213,6 +291,46 @@ class SettingsPage(BasePage):
             self.environment_issues.setPlainText("No blocking environment issues detected.")
         self.environment_detail.setPlainText(yaml.safe_dump(payload, sort_keys=False, allow_unicode=True))
         self.status.setText("Environment diagnostics refreshed")
+
+    def finish_maintenance_refresh(self, result: object, error: object) -> None:
+        if error is not None:
+            self.maintenance_summary.setText(f"Maintenance status failed: {error}")
+            return
+        payload = result if isinstance(result, dict) else {}
+        archive = payload.get("task_archive", {}) if isinstance(payload.get("task_archive"), dict) else {}
+        by_status = archive.get("by_status", {}) if isinstance(archive.get("by_status"), dict) else {}
+        self.maintenance_summary.setText(
+            " | ".join(
+                [
+                    f"task_archive_records={archive.get('records', 0)}",
+                    f"done={by_status.get('done', 0)}",
+                    f"failed={by_status.get('failed', 0)}",
+                    f"cancelled={by_status.get('cancelled', 0)}",
+                    f"archive={archive.get('path', '-')}",
+                ]
+            )
+        )
+        self.maintenance_detail.setPlainText(yaml.safe_dump(payload, sort_keys=False, allow_unicode=True))
+        self.status.setText("Maintenance status refreshed")
+
+    def finish_cleanup_recycle_bin(self, result: object, error: object) -> None:
+        if error is not None:
+            self.status.setText(f"Recycle bin cleanup failed: {error}")
+            self.maintenance_detail.setPlainText(str(error))
+            return
+        self.status.setText("Recycle bin cleaned")
+        self.maintenance_detail.setPlainText(yaml.safe_dump(result, sort_keys=False, allow_unicode=True))
+        self.refresh_maintenance()
+
+    def finish_clear_log_cache(self, result: object, error: object) -> None:
+        if error is not None:
+            self.status.setText(f"Log cache cleanup failed: {error}")
+            self.maintenance_detail.setPlainText(str(error))
+            return
+        self.status.setText("Log cache cleared")
+        self.maintenance_detail.setPlainText(yaml.safe_dump(result, sort_keys=False, allow_unicode=True))
+        self.maintenanceChanged.emit()
+        self.refresh_maintenance()
 
     def show_environment(self) -> None:
         index = self.tabs.indexOf(self.environment_widget)
