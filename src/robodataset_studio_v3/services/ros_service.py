@@ -6,6 +6,7 @@ import time
 import base64
 import os
 import re
+import signal
 import shlex
 from pathlib import Path
 from typing import Any
@@ -52,6 +53,11 @@ class RosService:
                 "topics_samples": topics_result.get("samples", 0),
                 "nodes_samples": nodes_result.get("samples", 0),
                 "services_samples": services_result.get("samples", 0),
+                "ros_domain_id": os.environ.get("ROS_DOMAIN_ID", "(unset)"),
+                "ros_localhost_only": os.environ.get("ROS_LOCALHOST_ONLY", "(unset)"),
+                "rmw_implementation": os.environ.get("RMW_IMPLEMENTATION", "(auto)"),
+                "robodataset_rmw_implementation": os.environ.get("ROBODATASET_RMW_IMPLEMENTATION", "(auto)"),
+                "ros_setup": os.environ.get("ROS_SETUP", ""),
             },
             "errors": {
                 "topics": "" if topics_result.get("ok") else str(topics_result.get("stderr") or ""),
@@ -601,27 +607,54 @@ class RosService:
             ros_log_dir = "/tmp"
         env["ROS_LOG_DIR"] = ros_log_dir
         try:
-            completed = subprocess.run(
+            process = subprocess.Popen(
                 ["/bin/bash", "-lc", shell_command],
-                check=False,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=timeout,
                 env=env,
+                start_new_session=True,
             )
+            try:
+                stdout, stderr = process.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                self._terminate_process_group(process)
+                stdout, stderr = process.communicate(timeout=1)
+                return {
+                    "ok": bool((stdout or "").strip()),
+                    "stdout": (stdout or "").strip(),
+                    "stderr": (stderr or "").strip() or "command timed out",
+                    "returncode": 124,
+                    "rmw": selected_rmw,
+                }
         except FileNotFoundError:
             return {"ok": False, "stdout": "", "stderr": "ros2 command not found", "returncode": 127, "rmw": selected_rmw}
-        except subprocess.TimeoutExpired as exc:
-            stdout = exc.stdout.decode() if isinstance(exc.stdout, bytes) else (exc.stdout or "")
-            stderr = exc.stderr.decode() if isinstance(exc.stderr, bytes) else (exc.stderr or "")
-            return {"ok": bool(stdout.strip()), "stdout": stdout.strip(), "stderr": stderr.strip() or "command timed out", "returncode": 124, "rmw": selected_rmw}
         return {
-            "ok": completed.returncode == 0,
-            "stdout": completed.stdout.strip(),
-            "stderr": completed.stderr.strip(),
-            "returncode": completed.returncode,
+            "ok": process.returncode == 0,
+            "stdout": (stdout or "").strip(),
+            "stderr": (stderr or "").strip(),
+            "returncode": process.returncode,
             "rmw": selected_rmw,
         }
+
+    def _terminate_process_group(self, process: subprocess.Popen[str]) -> None:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except Exception:
+            try:
+                process.terminate()
+            except Exception:
+                return
+        try:
+            process.wait(timeout=0.5)
+        except Exception:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except Exception:
+                try:
+                    process.kill()
+                except Exception:
+                    pass
 
     def _run_ros_with_fallback(self, primary: list[str], fallback: list[str], timeout: int) -> dict[str, Any]:
         errors = []

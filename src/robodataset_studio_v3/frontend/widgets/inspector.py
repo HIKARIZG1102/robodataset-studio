@@ -338,7 +338,7 @@ class InspectorDock(QWidget):
                 self.image_topic.setCurrentIndex(0)
         else:
             summary = self._graph_error_summary(graph)
-            self._append(self.preview_log, summary or "no image topics found in current ROS graph")
+            self._append(self.preview_log, summary or self._no_image_topic_summary(graph, topic_names))
         self.update_topic_type(self.topic.currentText())
         self.update_image_topic_type(self.image_topic.currentText())
 
@@ -403,6 +403,22 @@ class InspectorDock(QWidget):
             if text:
                 parts.append(f"{key}: {text.splitlines()[0]}")
         return "graph returned no topics. " + " | ".join(parts) if parts else ""
+
+    def _no_image_topic_summary(self, graph: dict[str, Any], topic_names: list[str]) -> str:
+        runtime = graph.get("runtime", {}) if isinstance(graph, dict) else {}
+        runtime = runtime if isinstance(runtime, dict) else {}
+        details = [
+            "no image topics found in current ROS graph",
+            f"topics discovered: {len(topic_names)}",
+            f"RMW_IMPLEMENTATION={runtime.get('rmw_implementation') or runtime.get('topics_rmw') or '(unknown)'}",
+            f"ROS_LOCALHOST_ONLY={runtime.get('ros_localhost_only', '(unset)')}",
+            f"ROS_DOMAIN_ID={runtime.get('ros_domain_id', '(unset)')}",
+        ]
+        if topic_names:
+            details.append("visible topics: " + ", ".join(topic_names[:8]))
+        else:
+            details.append("check that the publisher uses the same ROS_DOMAIN_ID, ROS_LOCALHOST_ONLY, and RMW/DDS.")
+        return " | ".join(details)
 
     def stop_process(self, role: str) -> None:
         process = self._processes.pop(role, None)
