@@ -156,6 +156,7 @@ class MainWindow(QMainWindow):
         help_menu = self.menuBar().addMenu("Help")
         help_menu.addAction("Tutorial", self.open_tutorial_guide)
         help_menu.addAction("Logs / Tasks", self.toggle_logs_sidebar)
+        help_menu.addAction("Environment Diagnostics", self.open_environment_diagnostics)
         help_menu.addAction("About", self.show_about)
 
     def _build_graph_button(self) -> None:
@@ -998,6 +999,13 @@ class MainWindow(QMainWindow):
             return
         self._ensure_workspace(allow_empty=True)
         self._add_action_tab(tab_id, switch=True)
+
+    def open_environment_diagnostics(self) -> None:
+        self.open_action_tab("settings")
+        page = self.open_tabs.get("settings")
+        show_environment = getattr(page, "show_environment", None)
+        if callable(show_environment):
+            show_environment()
 
     def _add_action_tab(self, tab_id: str, *, switch: bool) -> None:
         existing = self.open_tabs.get(tab_id)

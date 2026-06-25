@@ -3,10 +3,22 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${ROOT_DIR}/.robodataset_env"
+EXPLICIT_RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-}"
+EXPLICIT_ROBODATASET_RMW_IMPLEMENTATION="${ROBODATASET_RMW_IMPLEMENTATION:-}"
 
 if [[ -f "${ENV_FILE}" ]]; then
   # shellcheck disable=SC1090
   source "${ENV_FILE}"
+fi
+if [[ -n "${EXPLICIT_RMW_IMPLEMENTATION}" ]]; then
+  RMW_IMPLEMENTATION="${EXPLICIT_RMW_IMPLEMENTATION}"
+else
+  unset RMW_IMPLEMENTATION || true
+fi
+if [[ -n "${EXPLICIT_ROBODATASET_RMW_IMPLEMENTATION}" ]]; then
+  ROBODATASET_RMW_IMPLEMENTATION="${EXPLICIT_ROBODATASET_RMW_IMPLEMENTATION}"
+else
+  unset ROBODATASET_RMW_IMPLEMENTATION || true
 fi
 
 select_ros_setup() {
@@ -25,26 +37,56 @@ select_rmw() {
     printf '%s\n' "${requested}"
     return
   fi
-  if rmw_available "rmw_fastrtps_cpp"; then
-    printf '%s\n' "rmw_fastrtps_cpp"
+  local candidates=()
+  rmw_available "rmw_cyclonedds_cpp" && candidates+=("rmw_cyclonedds_cpp")
+  rmw_available "rmw_fastrtps_cpp" && candidates+=("rmw_fastrtps_cpp")
+  if [[ "${#candidates[@]}" -gt 1 ]]; then
+    local best="" best_score="-1" score
+    for candidate in "${candidates[@]}"; do
+      score="$(rmw_graph_score "${candidate}")"
+      if [[ "${score}" -gt "${best_score}" ]]; then
+        best="${candidate}"
+        best_score="${score}"
+      fi
+    done
+    if [[ -n "${best}" && "${best_score}" -ge 0 ]]; then
+      printf '%s\n' "${best}"
+      return
+    fi
+  fi
+  if [[ "${#candidates[@]}" -gt 0 ]]; then
+    printf '%s\n' "${candidates[0]}"
     return
   fi
-  if rmw_available "rmw_cyclonedds_cpp"; then
-    printf '%s\n' "rmw_cyclonedds_cpp"
-    return
-  fi
-  printf '%s\n' "${requested:-rmw_fastrtps_cpp}"
+  printf '%s\n' "${requested:-rmw_cyclonedds_cpp}"
 }
 
 rmw_available() {
   local name="$1"
-  if command -v ros2 >/dev/null 2>&1 && ros2 pkg list 2>/dev/null | grep -qx "${name}"; then
+  if command -v ros2 >/dev/null 2>&1 && ros2 pkg prefix "${name}" >/dev/null 2>&1; then
     return 0
   fi
   if command -v ldconfig >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -q "lib${name}.so"; then
     return 0
   fi
   return 1
+}
+
+rmw_graph_score() {
+  local name="$1"
+  local output count weighted
+  output="$(RMW_IMPLEMENTATION="${name}" ROBODATASET_RMW_IMPLEMENTATION="${name}" timeout 3 ros2 topic list -t --no-daemon 2>/dev/null || true)"
+  if [[ -z "${output}" ]]; then
+    printf '%s\n' 0
+    return
+  fi
+  count="$(printf '%s\n' "${output}" | sed '/^[[:space:]]*$/d' | wc -l)"
+  weighted="$((count))"
+  if printf '%s\n' "${output}" | grep -q 'sensor_msgs/msg/Image'; then weighted="$((weighted + 1000))"; fi
+  if printf '%s\n' "${output}" | grep -q 'sensor_msgs/msg/CompressedImage'; then weighted="$((weighted + 800))"; fi
+  if printf '%s\n' "${output}" | grep -q 'sensor_msgs/msg/JointState'; then weighted="$((weighted + 1000))"; fi
+  if printf '%s\n' "${output}" | grep -Eq 'camera|wrist|wx250s|joint_states'; then weighted="$((weighted + 500))"; fi
+  printf '%s\n' "${weighted}"
 }
 
 ROS_SETUP="$(select_ros_setup)"

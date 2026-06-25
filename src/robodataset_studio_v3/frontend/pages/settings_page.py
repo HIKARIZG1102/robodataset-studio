@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import yaml
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox, QTabWidget, QWidget
+from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QPushButton, QSpinBox, QTabWidget, QWidget
 
 from robodataset_studio_v3.frontend.api_client import ApiClient, ProjectSummary
 from robodataset_studio_v3.frontend.pages.base import BasePage
@@ -34,6 +34,14 @@ class SettingsPage(BasePage):
         self.language = QComboBox()
         self.language.addItem("English", "en")
         self.language.addItem("中文", "zh")
+        self.tabs = QTabWidget()
+        self.environment_summary = QLabel("")
+        self.environment_summary.setWordWrap(True)
+        self.environment_issues = QPlainTextEdit()
+        self.environment_issues.setReadOnly(True)
+        self.environment_issues.setMaximumHeight(180)
+        self.environment_detail = QPlainTextEdit()
+        self.environment_detail.setReadOnly(True)
         self.yaml_editor = self.output
         self.yaml_editor.setReadOnly(False)
         self.settings: dict = {}
@@ -72,13 +80,22 @@ class SettingsPage(BasePage):
         general_form = QFormLayout(general)
         general_form.addRow("Language", self.language)
 
-        tabs = QTabWidget()
-        tabs.addTab(general, "General")
-        tabs.addTab(ai_widget, "AI")
-        tabs.addTab(self.yaml_editor, "Advanced YAML")
+        self.environment_widget = QWidget()
+        environment_layout = QFormLayout(self.environment_widget)
+        refresh_environment = QPushButton("Refresh Environment Diagnostics")
+        refresh_environment.clicked.connect(self.refresh_environment)
+        environment_layout.addRow(refresh_environment)
+        environment_layout.addRow("Summary", self.environment_summary)
+        environment_layout.addRow("Issues", self.environment_issues)
+        environment_layout.addRow("Details", self.environment_detail)
+
+        self.tabs.addTab(general, "General")
+        self.tabs.addTab(ai_widget, "AI")
+        self.tabs.addTab(self.environment_widget, "Environment")
+        self.tabs.addTab(self.yaml_editor, "Advanced YAML")
 
         self.layout.addLayout(buttons)
-        self.layout.addWidget(tabs)
+        self.layout.addWidget(self.tabs)
         self.layout.addWidget(self.status)
 
     def load(self) -> None:
@@ -99,6 +116,7 @@ class SettingsPage(BasePage):
         self.ai_probe_budget.setValue(int(ai.get("probe_stdout_budget") or 12000))
         self.yaml_editor.setPlainText(yaml.safe_dump(self.settings, sort_keys=False, allow_unicode=True))
         self.status.setText("Settings loaded")
+        self.refresh_environment()
 
     def save(self) -> None:
         try:
@@ -129,6 +147,52 @@ class SettingsPage(BasePage):
 
     def refresh_models(self) -> None:
         self.save()
+
+    def refresh_environment(self) -> None:
+        self.environment_summary.setText("Loading environment diagnostics...")
+        self.environment_issues.setPlainText("")
+        self.environment_detail.setPlainText("")
+        self.run_async(self.api.get, self.finish_environment_refresh, "/api/environment/diagnostics", timeout=20.0)
+
+    def finish_environment_refresh(self, result: object, error: object) -> None:
+        if error is not None:
+            self.environment_summary.setText(f"Environment diagnostics failed: {error}")
+            return
+        payload = result if isinstance(result, dict) else {}
+        summary = payload.get("summary", {}) if isinstance(payload.get("summary"), dict) else {}
+        issues = payload.get("issues", []) if isinstance(payload.get("issues"), list) else []
+        self.environment_summary.setText(
+            " | ".join(
+                [
+                    f"python={summary.get('python', '-')}",
+                    f"rmw={summary.get('selected_rmw', '-')}",
+                    f"topics={summary.get('topic_count', '-')}",
+                    f"issues={summary.get('issue_count', len(issues))}",
+                    f"ros_setup={summary.get('ros_setup', '-')}",
+                ]
+            )
+        )
+        if issues:
+            lines = []
+            for issue in issues:
+                if not isinstance(issue, dict):
+                    continue
+                lines.append(
+                    f"[{issue.get('severity', 'warning')}] {issue.get('name', '')}\n"
+                    f"  detail: {issue.get('detail', '')}\n"
+                    f"  impact: {issue.get('impact', '')}"
+                )
+            self.environment_issues.setPlainText("\n\n".join(lines))
+        else:
+            self.environment_issues.setPlainText("No blocking environment issues detected.")
+        self.environment_detail.setPlainText(yaml.safe_dump(payload, sort_keys=False, allow_unicode=True))
+        self.status.setText("Environment diagnostics refreshed")
+
+    def show_environment(self) -> None:
+        index = self.tabs.indexOf(self.environment_widget)
+        if index >= 0:
+            self.tabs.setCurrentIndex(index)
+        self.refresh_environment()
         base_url = self.ai_base_url.text().strip()
         api_key = self.ai_api_key.text().strip()
         if not base_url or not api_key:

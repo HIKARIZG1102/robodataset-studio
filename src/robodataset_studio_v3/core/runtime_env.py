@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 
 
-RMW_PREFERENCE = ("rmw_fastrtps_cpp", "rmw_cyclonedds_cpp")
+RMW_PREFERENCE = ("rmw_cyclonedds_cpp", "rmw_fastrtps_cpp")
 
 
 def default_ros_setup() -> str:
@@ -22,32 +22,36 @@ def default_ros_setup() -> str:
 
 def available_rmw_implementations() -> list[str]:
     found: list[str] = []
-    try:
-        completed = subprocess.run(["ros2", "pkg", "list"], check=False, capture_output=True, text=True, timeout=5)
-        if completed.returncode == 0:
-            packages = set(completed.stdout.split())
-            if "rmw_fastrtps_cpp" in packages:
-                found.append("rmw_fastrtps_cpp")
-            if "rmw_cyclonedds_cpp" in packages:
-                found.append("rmw_cyclonedds_cpp")
-    except Exception:
-        pass
     for name in RMW_PREFERENCE:
-        if name not in found and _rmw_library_exists(name):
+        if _ros_package_exists(name) or _rmw_library_exists(name):
             found.append(name)
     return found
 
 
-def select_rmw(explicit: str | None = None) -> str:
+def _ros_package_exists(name: str) -> bool:
+    if not shutil.which("ros2"):
+        return False
+    try:
+        completed = subprocess.run(["ros2", "pkg", "prefix", name], check=False, capture_output=True, text=True, timeout=1.5)
+        return completed.returncode == 0
+    except Exception:
+        return False
+
+
+def select_rmw(explicit: str | None = None, *, probe_graph: bool = True) -> str:
     explicit = explicit or os.environ.get("ROBODATASET_RMW_IMPLEMENTATION") or os.environ.get("RMW_IMPLEMENTATION")
     available = available_rmw_implementations()
     if explicit:
         if explicit in available or not available:
             return explicit
         return available[0]
+    if probe_graph and len(available) > 1:
+        probed = _select_rmw_by_graph_probe(available)
+        if probed:
+            return probed
     if available:
         return available[0]
-    return "rmw_fastrtps_cpp"
+    return "rmw_cyclonedds_cpp"
 
 
 def apply_ros_environment(env: dict[str, str] | None = None) -> dict[str, str]:
@@ -78,3 +82,49 @@ def _rmw_library_exists(name: str) -> bool:
             return True
     return False
 
+
+def _select_rmw_by_graph_probe(candidates: list[str]) -> str:
+    best = ""
+    best_score = -1
+    for candidate in candidates:
+        score = _rmw_graph_score(candidate)
+        if score > best_score:
+            best = candidate
+            best_score = score
+    return best if best_score >= 0 else ""
+
+
+def _rmw_graph_score(name: str) -> int:
+    env = os.environ.copy()
+    env["RMW_IMPLEMENTATION"] = name
+    env["ROBODATASET_RMW_IMPLEMENTATION"] = name
+    env.setdefault("ROS_LOG_DIR", "/tmp/robodataset_ros_logs")
+    try:
+        Path(env["ROS_LOG_DIR"]).mkdir(parents=True, exist_ok=True)
+    except Exception:
+        env["ROS_LOG_DIR"] = "/tmp"
+    try:
+        completed = subprocess.run(
+            ["ros2", "topic", "list", "-t", "--no-daemon"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=1.5,
+            env=env,
+        )
+    except Exception:
+        return -1
+    if completed.returncode != 0:
+        return -1
+    lines = [line for line in completed.stdout.splitlines() if line.strip()]
+    score = len(lines)
+    output = completed.stdout
+    if "sensor_msgs/msg/Image" in output:
+        score += 1000
+    if "sensor_msgs/msg/CompressedImage" in output:
+        score += 800
+    if "sensor_msgs/msg/JointState" in output:
+        score += 1000
+    if any(token in output for token in ("camera", "wrist", "wx250s", "joint_states")):
+        score += 500
+    return score

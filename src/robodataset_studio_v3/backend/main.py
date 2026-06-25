@@ -5,7 +5,7 @@ import os
 import uvicorn
 from fastapi import FastAPI
 
-from robodataset_studio_v3.backend.routers import ai, config, convert, health, projects, recording, review, ros, settings, tasks, upload
+from robodataset_studio_v3.backend.routers import ai, config, convert, environment, health, projects, recording, review, ros, settings, tasks, upload
 from robodataset_studio_v3.core.runtime_env import apply_ros_environment
 
 
@@ -22,6 +22,7 @@ def create_app() -> FastAPI:
     app.include_router(ai.router, prefix="/api/ai", tags=["ai"])
     app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
     app.include_router(tasks.router, prefix="/api/tasks", tags=["tasks"])
+    app.include_router(environment.router, prefix="/api/environment", tags=["environment"])
     return app
 
 
