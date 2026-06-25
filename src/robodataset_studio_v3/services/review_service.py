@@ -145,6 +145,20 @@ class ReviewService:
         task = task_service.run_instant("review_report", f"exported quality report {output}", result)
         return {"task_id": task.task_id, "result": result}
 
+    def load_ai_report(self, session_dir: str) -> dict[str, Any]:
+        root = self._resolve_session_dir(Path(session_dir).expanduser())
+        path = self._ai_report_path(root)
+        text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+        return {"session_dir": str(root), "path": str(path), "exists": path.exists(), "content": text}
+
+    def save_ai_report(self, session_dir: str, content: str) -> dict[str, Any]:
+        root = self._resolve_session_dir(Path(session_dir).expanduser())
+        path = self._ai_report_path(root)
+        path.write_text(content.rstrip() + "\n", encoding="utf-8")
+        result = {"session_dir": str(root), "path": str(path), "exists": True, "content": content}
+        task = task_service.run_instant("review_ai_report", f"saved AI review report {path}", result)
+        return {"task_id": task.task_id, "result": result}
+
     def inspect_hdf5(self, hdf5_path: str) -> dict[str, Any]:
         path = Path(hdf5_path).expanduser()
         result = {"path": str(path), "summary_text": self.validator.describe_hdf5(path)}
@@ -251,6 +265,10 @@ class ReviewService:
         if not path.exists():
             raise FileNotFoundError(f"episode not found: {episode_name}")
         return path
+
+    def _ai_report_path(self, root: Path) -> Path:
+        root.mkdir(parents=True, exist_ok=True)
+        return root / "ai_session_report.md"
 
     def _metadata_value(self, value: np.ndarray) -> Any:
         try:

@@ -14,6 +14,10 @@ class SessionRequest(BaseModel):
     session_dir: str
 
 
+class SessionAiReportRequest(SessionRequest):
+    content: str
+
+
 class MarkRequest(SessionRequest):
     episode: str
     status: str
@@ -40,6 +44,16 @@ def check_session(request: SessionRequest) -> dict[str, Any]:
 @router.post("/session/report", response_model=dict[str, Any])
 def quality_report(request: SessionRequest) -> dict[str, Any]:
     return review_service.quality_report(request.session_dir)
+
+
+@router.post("/session/ai-report/load", response_model=dict[str, Any])
+def load_ai_report(request: SessionRequest) -> dict[str, Any]:
+    return review_service.load_ai_report(request.session_dir)
+
+
+@router.post("/session/ai-report/save", response_model=dict[str, Any])
+def save_ai_report(request: SessionAiReportRequest) -> dict[str, Any]:
+    return review_service.save_ai_report(request.session_dir, request.content)
 
 
 @router.post("/session/mark", response_model=dict[str, Any])

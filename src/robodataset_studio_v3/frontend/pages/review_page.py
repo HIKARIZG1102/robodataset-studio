@@ -63,6 +63,9 @@ class ReviewPage(BasePage):
         self.summary = QPlainTextEdit()
         self.summary.setReadOnly(True)
         self.summary.setMaximumHeight(112)
+        self.ai_session_report = QPlainTextEdit()
+        self.ai_session_report.setPlaceholderText("AI session report will be loaded from ai_session_report.md in the selected session.")
+        self.ai_session_report.setMaximumHeight(112)
         self.detail = QPlainTextEdit()
         self.detail.setReadOnly(True)
         self.ai_review_prompt = QPlainTextEdit()
@@ -101,6 +104,7 @@ class ReviewPage(BasePage):
         self.episodes.setRowCount(0)
         self.detail.clear()
         self.summary.clear()
+        self.ai_session_report.clear()
         self.hdf5_summary.clear()
         self.hdf5_check_summary.clear()
         self.hdf5_table.setRowCount(0)
@@ -162,8 +166,27 @@ class ReviewPage(BasePage):
         controls.addStretch(1)
         layout.addLayout(controls)
 
-        layout.addWidget(QLabel("Quality Summary"))
-        layout.addWidget(self.summary)
+        summary_splitter = QSplitter(Qt.Horizontal)
+        quality_panel = QWidget()
+        quality_layout = QVBoxLayout(quality_panel)
+        quality_layout.setContentsMargins(0, 0, 0, 0)
+        quality_layout.addWidget(QLabel("Quality Summary"))
+        quality_layout.addWidget(self.summary)
+        ai_report_panel = QWidget()
+        ai_report_layout = QVBoxLayout(ai_report_panel)
+        ai_report_layout.setContentsMargins(0, 0, 0, 0)
+        ai_report_header = QHBoxLayout()
+        ai_report_header.addWidget(QLabel("AI Session Report"))
+        save_ai_report = QPushButton("Save AI Report")
+        save_ai_report.clicked.connect(self.save_ai_session_report)
+        ai_report_header.addWidget(save_ai_report)
+        ai_report_header.addStretch(1)
+        ai_report_layout.addLayout(ai_report_header)
+        ai_report_layout.addWidget(self.ai_session_report)
+        summary_splitter.addWidget(quality_panel)
+        summary_splitter.addWidget(ai_report_panel)
+        summary_splitter.setSizes([520, 620])
+        layout.addWidget(summary_splitter)
 
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(self.episodes)
@@ -229,6 +252,27 @@ class ReviewPage(BasePage):
 
     def export_quality_report(self) -> None:
         self._post("/api/review/session/report", {"session_dir": self.session_dir.text().strip()}, "Quality report exported", self._finish_report)
+
+    def load_ai_session_report(self) -> None:
+        session_dir = self.session_dir.text().strip()
+        if not session_dir:
+            self.ai_session_report.clear()
+            return
+        self.run_async(
+            self.api.post,
+            self._finish_load_ai_session_report,
+            "/api/review/session/ai-report/load",
+            {"session_dir": session_dir},
+            timeout=20.0,
+        )
+
+    def save_ai_session_report(self) -> None:
+        session_dir = self.session_dir.text().strip()
+        if not session_dir:
+            self.status.setText("Select a session before saving AI report.")
+            return
+        payload = {"session_dir": session_dir, "content": self.ai_session_report.toPlainText()}
+        self.run_async(self.api.post, self._finish_save_ai_session_report, "/api/review/session/ai-report/save", payload, timeout=20.0)
 
     def inspect_hdf5(self) -> None:
         self._post("/api/review/hdf5/inspect", {"hdf5_path": self.hdf5_path.text().strip()}, "HDF5 inspected", self._finish_hdf5_inspect)
@@ -348,6 +392,7 @@ class ReviewPage(BasePage):
             f"session: {payload.get('session_dir', '')} | training: {payload.get('training_dir', '')} | "
             f"episodes: {payload.get('episode_count', len(self._review_rows))} | checks: not run"
         )
+        self.load_ai_session_report()
         self.show_result(result, "Session scanned")
 
     def _finish_check(self, result: object, error: object) -> None:
@@ -364,6 +409,7 @@ class ReviewPage(BasePage):
             f"session: {payload.get('session_dir', '')} | training: {payload.get('training_dir', '')} | "
             f"episodes: {len(self._review_rows)} | checks: local script"
         )
+        self.load_ai_session_report()
         self.show_result(result, "Session checked")
 
     def _finish_report(self, result: object, error: object) -> None:
@@ -433,7 +479,26 @@ class ReviewPage(BasePage):
             self.status.setText("AI review failed")
             return
         self.ai_review_result.setPlainText(str(payload.get("response", "")))
+        self.ai_session_report.setPlainText(str(payload.get("response", "")))
         self.show_result(result, "AI review finished")
+
+    def _finish_load_ai_session_report(self, result: object, error: object) -> None:
+        if error is not None:
+            self.ai_session_report.setPlainText(f"Cannot load AI session report:\n{error}")
+            return
+        payload = self._payload_or_error(result, error)
+        self.ai_session_report.setPlainText(str(payload.get("content", "")))
+        path = str(payload.get("path", ""))
+        self.ai_session_report.setToolTip(path)
+        if path:
+            self.status.setText(f"AI session report loaded: {path}")
+
+    def _finish_save_ai_session_report(self, result: object, error: object) -> None:
+        payload = self._payload_or_error(result, error)
+        if not payload:
+            return
+        self.status.setText(f"AI session report saved: {payload.get('path', '')}")
+        self.show_result(result, "AI session report saved")
 
     def apply_review_filter(self) -> None:
         status = self.status_filter.currentText()
@@ -572,17 +637,20 @@ class ReviewPage(BasePage):
             table.setColumnWidth(col, width)
 
     def browse_session(self) -> None:
-        self._browse_dir(self.session_dir, "Select CALVIN session")
+        if self._browse_dir(self.session_dir, "Select CALVIN session"):
+            self.load_ai_session_report()
 
     def browse_hdf5(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Select HDF5 file", self.hdf5_path.text().strip(), "HDF5 (*.hdf5 *.h5);;All files (*)")
         if path:
             self.hdf5_path.setText(path)
 
-    def _browse_dir(self, target: QLineEdit, title: str) -> None:
+    def _browse_dir(self, target: QLineEdit, title: str) -> bool:
         path = QFileDialog.getExistingDirectory(self, title, target.text().strip())
         if path:
             target.setText(path)
+            return True
+        return False
 
     def _path_row(self, field: QLineEdit, handler) -> QWidget:
         widget = QWidget()

@@ -17,9 +17,9 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QInputDialog,
     QPushButton,
+    QHBoxLayout,
     QSizePolicy,
     QSplitter,
-    QTabBar,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -73,8 +73,14 @@ class MainWindow(QMainWindow):
         self.logs_list: QListWidget | None = None
         self.ros_graph_cache: dict | None = None
         self.refresh_graph_button: QPushButton | None = None
-        self.project_summary = QLabel("")
+        self.project_name_label = QLabel("project:")
+        self.project_name_value = QLabel("")
+        self.config_label = QLabel("config:")
+        self.config_value = QLabel("")
+        self.status_label = QLabel("status:")
+        self.status_value = QLabel("")
         self.project_folder_status = QLabel("")
+        self.project_folder_value = QLabel("")
         self.settings: dict = {}
         self.language = "en"
         self.ui_scale = 1.0
@@ -135,12 +141,6 @@ class MainWindow(QMainWindow):
         config_menu.addSeparator()
         config_menu.addAction("Refresh Configs", self.refresh_config_sidebar)
 
-        tools_menu = self.menuBar().addMenu("Tools")
-        tools_menu.addAction("Collect", lambda: self.open_action_tab("collect"))
-        tools_menu.addAction("Data Review", lambda: self.open_action_tab("review"))
-        tools_menu.addAction("Convert", lambda: self.open_action_tab("convert"))
-        tools_menu.addAction("Upload", lambda: self.open_action_tab("upload"))
-
         self.menuBar().addAction("Inspector", self.toggle_inspector)
 
         settings_menu = self.menuBar().addMenu("Settings")
@@ -153,10 +153,9 @@ class MainWindow(QMainWindow):
         reset_zoom = settings_menu.addAction("Reset Zoom", self.reset_zoom)
         reset_zoom.setShortcut(QKeySequence("Ctrl+0"))
 
-        self.menuBar().addAction("Logs", self.toggle_logs_sidebar)
-
         help_menu = self.menuBar().addMenu("Help")
         help_menu.addAction("Tutorial", self.open_tutorial_guide)
+        help_menu.addAction("Logs / Tasks", self.toggle_logs_sidebar)
         help_menu.addAction("About", self.show_about)
 
     def _build_graph_button(self) -> None:
@@ -196,45 +195,87 @@ class MainWindow(QMainWindow):
         self.menuBar().setCornerWidget(refresh, Qt.TopRightCorner)
 
     def _build_project_summary_bar(self) -> None:
-        self.project_summary.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.project_summary.setWordWrap(False)
-        self.project_summary.setMinimumWidth(0)
-        self.project_summary.setMaximumWidth(520)
-        self.project_summary.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        for label in [self.project_name_label, self.config_label, self.status_label, self.project_folder_status]:
+            label.setWordWrap(False)
+            label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        for value in [self.project_name_value, self.config_value, self.status_value, self.project_folder_value]:
+            value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            value.setWordWrap(False)
+        self.project_name_value.setMinimumWidth(48)
+        self.project_name_value.setMaximumWidth(220)
+        self.project_name_value.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.config_value.setMinimumWidth(36)
+        self.config_value.setMaximumWidth(180)
+        self.config_value.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.status_value.setMinimumWidth(56)
+        self.status_value.setMaximumWidth(76)
+        self.status_value.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.project_folder_status.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.project_folder_status.setWordWrap(False)
-        self.project_folder_status.setMinimumWidth(220)
-        self.project_folder_status.setMaximumWidth(520)
-        self.project_folder_status.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        self.statusBar().addWidget(self.project_summary, 1)
-        self.statusBar().addPermanentWidget(self.project_folder_status, 0)
+        self.project_folder_value.setMinimumWidth(90)
+        self.project_folder_value.setMaximumWidth(520)
+        self.project_folder_value.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        project_widget = QWidget()
+        project_row = QHBoxLayout(project_widget)
+        project_row.setContentsMargins(0, 0, 0, 0)
+        project_row.setSpacing(3)
+        project_row.addWidget(self.project_name_label)
+        project_row.addWidget(self.project_name_value)
+        project_row.addSpacing(8)
+        project_row.addWidget(self.config_label)
+        project_row.addWidget(self.config_value)
+        project_row.addSpacing(8)
+        project_row.addWidget(self.status_label)
+        project_row.addWidget(self.status_value)
+        project_row.addStretch(1)
+        folder_widget = QWidget()
+        folder_row = QHBoxLayout(folder_widget)
+        folder_row.setContentsMargins(0, 0, 0, 0)
+        folder_row.setSpacing(3)
+        folder_row.addWidget(self.project_folder_status)
+        folder_row.addWidget(self.project_folder_value)
+        self.statusBar().addWidget(project_widget, 1)
+        self.statusBar().addPermanentWidget(folder_widget, 0)
         self.update_project_summary()
 
     def update_project_summary(self) -> None:
+        self.project_name_label.setText("project:")
+        self.config_label.setText("config:")
+        self.status_label.setText("status:")
         if self.current_project is None:
-            self.project_summary.setText(text("Project: none | Config: none", self.language))
-            self.project_folder_status.setText("Project folder: none")
-            self.project_folder_status.setToolTip("")
+            if normalize_language(self.language) == "zh":
+                self.project_folder_status.setText("项目路径:")
+            else:
+                self.project_folder_status.setText("Project folder:")
+            self._set_status_values("none", "none", "none")
+            self.project_folder_value.setText("none")
+            self.project_folder_value.setToolTip("")
             return
         state = "recorded" if self.current_project.has_recorded_data else "editable"
         if normalize_language(self.language) == "zh":
-            self.project_summary.setText(
-                f"项目: {self.current_project.name} {self.current_project.version} | "
-                f"配置: {self.current_project.config_id or 'none'} | {state}"
-            )
+            self.project_folder_status.setText("项目路径:")
         else:
-            self.project_summary.setText(
-                f"Project: {self.current_project.name} {self.current_project.version} | "
-                f"Config: {self.current_project.config_id or 'none'} | {state}"
-            )
+            self.project_folder_status.setText("Project folder:")
+        self._set_status_values(self.current_project.key, self.current_project.config_id or "none", state)
         self._set_project_folder_status(self.current_project.path)
 
+    def _set_status_values(self, project: str, config: str, status: str) -> None:
+        self._set_elided_value(self.project_name_value, project, min_width=42)
+        self._set_elided_value(self.config_value, config, min_width=36)
+        self.status_value.setText(status)
+        self.status_value.setToolTip(status)
+
     def _set_project_folder_status(self, path: str) -> None:
-        text_value = f"Project folder: {path}"
-        metrics = QFontMetrics(self.project_folder_status.font())
-        width = max(self.project_folder_status.maximumWidth() - 12, 80)
-        self.project_folder_status.setText(metrics.elidedText(text_value, Qt.ElideMiddle, width))
-        self.project_folder_status.setToolTip(text_value)
+        self._set_elided_value(self.project_folder_value, path, min_width=72)
+
+    def _set_elided_value(self, label: QLabel, value: str, *, min_width: int) -> None:
+        metrics = QFontMetrics(label.font())
+        width = max(min(label.width() or label.maximumWidth(), label.maximumWidth()) - 8, min_width)
+        label.setText(metrics.elidedText(value, Qt.ElideMiddle, width))
+        label.setToolTip(value)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self.update_project_summary()
 
     def _empty_workspace(self) -> QWidget:
         widget = QWidget()
@@ -515,6 +556,28 @@ class MainWindow(QMainWindow):
             if index >= 0:
                 page.config_select.setCurrentIndex(index)
                 page.load_selected()
+                self._update_config_sidebar_markers(config_id)
+
+    def _update_config_sidebar_markers(self, selected_id: str = "") -> None:
+        if self.config_list is None:
+            return
+        if not selected_id:
+            page = self.open_tabs.get("config_library")
+            if isinstance(page, ConfigLibraryPage):
+                selected_id = str(page.loaded_config_id or page.selected_config_id() or "")
+        self.config_list.blockSignals(True)
+        selected_item: QListWidgetItem | None = None
+        for row in range(self.config_list.count()):
+            item = self.config_list.item(row)
+            config_id = str(item.data(Qt.UserRole) or "") if item is not None else ""
+            is_current = bool(selected_id and config_id == selected_id)
+            marker = "▸" if is_current else "•"
+            item.setText(f"{marker}   {config_id}")
+            if is_current:
+                selected_item = item
+        if selected_item is not None:
+            self.config_list.setCurrentItem(selected_item)
+        self.config_list.blockSignals(False)
 
     def _show_config_context_menu(self, pos) -> None:
         if self.config_list is None:
@@ -874,17 +937,17 @@ class MainWindow(QMainWindow):
     def _load_project_workspace(self) -> None:
         if self.current_project is None:
             return
-        if self._has_core_workspace():
+        if self._has_project_workspace():
             self._restoring_workspace = True
             self._sync_open_pages_to_project()
-            self._ensure_core_tabs()
+            self._ensure_default_project_tab()
             self._restoring_workspace = False
         else:
             container = self._create_workspace_container()
             self.open_tabs = {}
             self._restoring_workspace = True
             self.setCentralWidget(self._workspace_central_widget(container))
-            self._ensure_core_tabs()
+            self._ensure_default_project_tab()
             self._restoring_workspace = False
         self._sync_inspector_project()
         self.update_project_summary()
@@ -892,14 +955,14 @@ class MainWindow(QMainWindow):
         if isinstance(last_tab, str) and last_tab in self.open_tabs:
             self._focus_widget_tab(self.open_tabs[last_tab])
 
-    def _has_core_workspace(self) -> bool:
+    def _has_project_workspace(self) -> bool:
         if self.workspace_splitter is None or self.centralWidget() is not self.workspace_host:
             return False
-        return all(tab_id in self.open_tabs for tab_id in ["project", "collect", "review", "convert", "upload"])
+        return True
 
-    def _ensure_core_tabs(self) -> None:
-        for tab_id in ["project", "collect", "review", "convert", "upload"]:
-            self._add_action_tab(tab_id, switch=False)
+    def _ensure_default_project_tab(self) -> None:
+        if not self.open_tabs:
+            self._add_action_tab("project", switch=True)
 
     def _sync_open_pages_to_project(self) -> None:
         for widget in self.open_tabs.values():
@@ -1089,10 +1152,6 @@ class MainWindow(QMainWindow):
         if not isinstance(pane, QTabWidget):
             pane = self.workspace
         widget = pane.widget(index)
-        tab_id = self._tab_id_for_widget(widget)
-        if tab_id in {"project", "collect", "review", "convert", "upload"}:
-            self.statusBar().showMessage("Core project tabs cannot be closed.")
-            return
         for tab_id, tab_widget in list(self.open_tabs.items()):
             if tab_widget is widget:
                 self.open_tabs.pop(tab_id, None)
@@ -1162,9 +1221,7 @@ class MainWindow(QMainWindow):
         widget.tabBar().customContextMenuRequested.connect(lambda pos, pane=widget: self._show_tab_context_menu(pane, pos))
 
     def _apply_tab_close_policy(self, pane: QTabWidget, tab_id: str, index: int) -> None:
-        if tab_id in {"project", "collect", "review", "convert", "upload"}:
-            pane.tabBar().setTabButton(index, QTabBar.ButtonPosition.RightSide, None)
-            pane.tabBar().setTabButton(index, QTabBar.ButtonPosition.LeftSide, None)
+        return
 
     def _show_tab_context_menu(self, pane: QTabWidget, pos) -> None:
         index = pane.tabBar().tabAt(pos)
