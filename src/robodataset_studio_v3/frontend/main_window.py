@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThreadPool, QUrl
-from PySide6.QtGui import QDesktopServices, QKeySequence
+from PySide6.QtGui import QDesktopServices, QFontMetrics, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QDockWidget,
@@ -75,12 +75,15 @@ class MainWindow(QMainWindow):
         self.refresh_graph_button: QPushButton | None = None
         self.project_name_label = QLabel("project:")
         self.project_name_value = QLabel("")
+        self._status_full_project = ""
         self.config_label = QLabel("config:")
         self.config_value = QLabel("")
+        self._status_full_config = ""
         self.status_label = QLabel("status:")
         self.status_value = QLabel("")
         self.project_folder_status = QLabel("")
         self.project_folder_value = QLabel("")
+        self._status_full_path = ""
         self.settings: dict = {}
         self.language = "en"
         self.ui_scale = 1.0
@@ -204,18 +207,19 @@ class MainWindow(QMainWindow):
         for value in [self.project_name_value, self.config_value, self.status_value, self.project_folder_value]:
             value.setTextInteractionFlags(Qt.TextSelectableByMouse)
             value.setWordWrap(False)
+            value.setTextFormat(Qt.PlainText)
         self.project_name_value.setMinimumWidth(48)
-        self.project_name_value.setMaximumWidth(420)
+        self.project_name_value.setMaximumWidth(220)
         self.project_name_value.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         self.config_value.setMinimumWidth(36)
-        self.config_value.setMaximumWidth(320)
+        self.config_value.setMaximumWidth(180)
         self.config_value.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         self.status_value.setMinimumWidth(56)
         self.status_value.setMaximumWidth(76)
         self.status_value.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.project_folder_status.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.project_folder_value.setMinimumWidth(90)
-        self.project_folder_value.setMaximumWidth(900)
+        self.project_folder_value.setMaximumWidth(520)
         self.project_folder_value.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         project_widget = QWidget()
         project_row = QHBoxLayout(project_widget)
@@ -263,21 +267,34 @@ class MainWindow(QMainWindow):
         self._set_project_folder_status(project.path)
 
     def _set_status_values(self, project: str, config: str, status: str) -> None:
-        self._set_full_status_value(self.project_name_value, project)
-        self._set_full_status_value(self.config_value, config)
+        self._status_full_project = project
+        self._status_full_config = config
+        self._set_elided_status_value(self.project_name_value, project)
+        self._set_elided_status_value(self.config_value, config)
         self.status_value.setText(status)
         self.status_value.setToolTip(status)
 
     def _set_project_folder_status(self, path: str) -> None:
-        self._set_full_status_value(self.project_folder_value, path)
+        self._status_full_path = path
+        self._set_elided_status_value(self.project_folder_value, path, mode=Qt.ElideMiddle)
 
-    def _set_full_status_value(self, label: QLabel, value: str) -> None:
-        label.setText(value)
+    def _set_elided_status_value(self, label: QLabel, value: str, *, mode: Qt.TextElideMode = Qt.ElideRight) -> None:
+        width = max(label.width() - 6, label.minimumWidth())
+        metrics = QFontMetrics(label.font())
+        label.setText(metrics.elidedText(value, mode, width))
         label.setToolTip(value)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        self.update_project_summary()
+        self._refresh_status_elision()
+
+    def _refresh_status_elision(self) -> None:
+        if self._status_full_project:
+            self._set_elided_status_value(self.project_name_value, self._status_full_project)
+        if self._status_full_config:
+            self._set_elided_status_value(self.config_value, self._status_full_config)
+        if self._status_full_path:
+            self._set_elided_status_value(self.project_folder_value, self._status_full_path, mode=Qt.ElideMiddle)
 
     def _empty_workspace(self) -> QWidget:
         widget = QWidget()

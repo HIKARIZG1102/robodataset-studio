@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from threading import Thread
@@ -33,7 +34,7 @@ class RecordingService:
         self.configs.sync_dataset_schema(dataset_config)
         streams = dataset_config.get("streams", [])
         state_keys = dataset_config.get("state", {}).get("keys", [])
-        warnings = []
+        warnings: list[str] = []
         if not streams:
             warnings.append("no streams configured")
         if not state_keys:
@@ -54,6 +55,14 @@ class RecordingService:
             if is_image_message_type(msg_type) or msg_type == "sensor_msgs/msg/JointState" or is_supported_generic_message_type(msg_type):
                 continue
             warnings.append(unsupported_message_type_warning(topic, msg_type))
+        graph = ros_service.graph(topic_samples=1, node_samples=0, service_samples=0)
+        graph_topics = {
+            str(item.get("topic") or item.get("name") or ""): item
+            for item in graph.get("topics", [])
+            if isinstance(item, dict)
+        }
+        visible_topics = set(graph_topics)
+        graph_runtime = graph.get("runtime", {}) if isinstance(graph.get("runtime"), dict) else {}
         topic_checks = []
         topics: list[str] = []
         for stream in streams if isinstance(streams, list) else []:
@@ -62,23 +71,43 @@ class RecordingService:
         for key in state_keys if isinstance(state_keys, list) else []:
             if isinstance(key, dict) and key.get("source_topic"):
                 topics.append(str(key.get("source_topic")))
+        topic_checks_by_topic: dict[str, dict[str, Any]] = {}
+        topics_to_probe: list[str] = []
         for topic in sorted(set(topics)):
-            info = ros_service.topic_info(topic)
-            echo = ros_service.echo_once(topic)
-            hz = ros_service.topic_hz(topic)
-            hz_text = str(hz.get("stdout") or "")
-            topic_checks.append(
-                {
+            if visible_topics and topic not in visible_topics:
+                topic_checks_by_topic[topic] = {
                     "topic": topic,
-                    "info_ok": bool(info.get("ok")),
-                    "echo_ok": bool(echo.get("ok")),
-                    "hz_ok": bool(hz.get("ok") or "average rate:" in hz_text),
-                    "hz": self._parse_hz(hz_text),
-                    "info_error": "" if info.get("ok") else str(info.get("stderr") or info.get("error") or ""),
-                    "echo_error": "" if echo.get("ok") else str(echo.get("stderr") or echo.get("error") or ""),
-                    "hz_error": "" if hz.get("ok") or "average rate:" in hz_text else str(hz.get("stderr") or hz.get("error") or ""),
+                    "info_ok": False,
+                    "echo_ok": False,
+                    "hz_ok": False,
+                    "hz": None,
+                    "issue": "graph_missing",
+                    "info_error": self._graph_missing_message(topic, graph_runtime),
+                    "echo_error": "skipped because topic is not visible in current ROS graph",
+                    "hz_error": "skipped because topic is not visible in current ROS graph",
                 }
-            )
+                continue
+            topics_to_probe.append(topic)
+        if topics_to_probe:
+            with ThreadPoolExecutor(max_workers=min(6, len(topics_to_probe))) as executor:
+                futures = {executor.submit(self._preflight_topic_check, topic, graph_topics.get(topic, {})): topic for topic in topics_to_probe}
+                for future in as_completed(futures):
+                    topic = futures[future]
+                    try:
+                        topic_checks_by_topic[topic] = future.result()
+                    except Exception as exc:
+                        topic_checks_by_topic[topic] = {
+                            "topic": topic,
+                            "info_ok": False,
+                            "echo_ok": False,
+                            "hz_ok": False,
+                            "hz": None,
+                            "issue": "probe_failed",
+                            "info_error": str(exc),
+                            "echo_error": str(exc),
+                            "hz_error": str(exc),
+                        }
+        topic_checks = [topic_checks_by_topic[topic] for topic in sorted(set(topics))]
         missing = [row["topic"] for row in topic_checks if not row["info_ok"]]
         silent = [row["topic"] for row in topic_checks if row["info_ok"] and not row["echo_ok"]]
         no_hz = [row["topic"] for row in topic_checks if row["info_ok"] and not row["hz_ok"]]
@@ -93,11 +122,47 @@ class RecordingService:
             "streams": len(streams) if isinstance(streams, list) else 0,
             "state_keys": len(state_keys) if isinstance(state_keys, list) else 0,
             "topic_checks": topic_checks,
+            "ros_graph": {
+                "available": bool(graph.get("available")),
+                "visible_topics": sorted(visible_topics),
+                "runtime": graph_runtime,
+                "errors": graph.get("errors", {}),
+            },
             "warnings": warnings,
             "ok": not warnings,
         }
         task = task_service.run_instant("recording_preflight", f"preflight for {project_key}", result)
         return {"task_id": task.task_id, "result": result}
+
+    def _preflight_topic_check(self, topic: str, graph_topic: dict[str, Any]) -> dict[str, Any]:
+        msg_type = str(graph_topic.get("message_type") or graph_topic.get("type") or "unknown")
+        info = {
+            "ok": True,
+            "stdout": f"Type: {msg_type}\nPublisher count: visible in ROS graph",
+            "stderr": "",
+            "returncode": 0,
+            "backend": "graph",
+            "message_type": msg_type,
+            "structured": {
+                "topic": topic,
+                "message_type": msg_type,
+                "publisher_count": "visible",
+                "subscription_count": "unknown",
+            },
+        }
+        echo = ros_service.echo_once(topic, timeout=4.0)
+        hz = ros_service.topic_hz(topic, timeout=4.0, window=3)
+        hz_text = str(hz.get("stdout") or "")
+        return {
+            "topic": topic,
+            "info_ok": bool(info.get("ok")),
+            "echo_ok": bool(echo.get("ok")),
+            "hz_ok": bool(hz.get("ok") or "average rate:" in hz_text),
+            "hz": self._parse_hz(hz_text),
+            "info_error": "" if info.get("ok") else str(info.get("stderr") or info.get("error") or ""),
+            "echo_error": "" if echo.get("ok") else str(echo.get("stderr") or echo.get("error") or ""),
+            "hz_error": "" if hz.get("ok") or "average rate:" in hz_text else str(hz.get("stderr") or hz.get("error") or ""),
+        }
 
     def start(
         self,
@@ -426,6 +491,16 @@ class RecordingService:
                 except Exception:
                     return None
         return None
+
+    def _graph_missing_message(self, topic: str, runtime: dict[str, Any]) -> str:
+        return (
+            f"topic is not visible in current ROS graph: {topic}. "
+            f"Check that publisher and RoboDataset Studio use the same ROS_DOMAIN_ID, ROS_LOCALHOST_ONLY, and RMW_IMPLEMENTATION. "
+            f"current runtime: RMW={runtime.get('topics_rmw') or runtime.get('rmw_implementation')}, "
+            f"ROS_DOMAIN_ID={runtime.get('ros_domain_id')}, "
+            f"ROS_LOCALHOST_ONLY={runtime.get('ros_localhost_only')}, "
+            f"ROS_SETUP={runtime.get('ros_setup')}"
+        )
 
     def _json_from_output(self, text: str | None) -> dict[str, Any] | None:
         if not text:

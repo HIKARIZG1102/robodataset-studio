@@ -18,27 +18,27 @@ from robodataset_studio_v3.services.task_service import task_service
 
 
 class RosService:
-    def graph(self) -> dict[str, Any]:
+    def graph(self, *, topic_samples: int = 3, node_samples: int = 1, service_samples: int = 1) -> dict[str, Any]:
         topics_result = self._sample_ros_graph(
             ["ros2", "topic", "list", "--no-daemon", "-t"],
             ["ros2", "topic", "list", "-t"],
             parser=self._parse_name_type_lines,
             timeout=4,
-            samples=3,
+            samples=topic_samples,
         )
         nodes_result = self._sample_ros_graph(
             ["ros2", "node", "list", "--no-daemon"],
             ["ros2", "node", "list"],
             parser=self._parse_name_lines,
             timeout=3,
-            samples=1,
+            samples=node_samples,
         )
         services_result = self._sample_ros_graph(
             ["ros2", "service", "list", "--no-daemon", "-t"],
             ["ros2", "service", "list", "-t"],
             parser=self._parse_name_type_lines,
             timeout=3,
-            samples=1,
+            samples=service_samples,
         )
         available = bool(topics_result.get("ok") or nodes_result.get("ok") or services_result.get("ok"))
         return {
@@ -75,10 +75,12 @@ class RosService:
         timeout: int,
         samples: int = 3,
     ) -> dict[str, Any]:
+        if samples <= 0:
+            return {"ok": True, "stdout": "", "stderr": "", "returncode": 0, "items": [], "samples": 0}
         merged: dict[str, dict[str, str]] = {}
         best_result: dict[str, Any] | None = None
         errors: list[str] = []
-        for index in range(max(samples, 1)):
+        for index in range(samples):
             result = self._run_ros_with_fallback(primary, fallback, timeout=timeout)
             if result.get("ok"):
                 rows = parser(str(result.get("stdout") or ""))
@@ -108,24 +110,24 @@ class RosService:
             cli_result["stderr"] = f"{rclpy_result.get('stderr')}\n{cli_result.get('stderr', '')}".strip()
         return cli_result
 
-    def echo_once(self, topic: str) -> dict[str, Any]:
-        rclpy_result = self._echo_once_rclpy(topic)
+    def echo_once(self, topic: str, *, timeout: float = 5.0) -> dict[str, Any]:
+        rclpy_result = self._echo_once_rclpy(topic, timeout=timeout)
         if rclpy_result.get("ok"):
             return rclpy_result
         cli_result = self._run_ros_with_fallback(
             ["ros2", "topic", "echo", "--no-daemon", "--once", "--truncate-length", "512", topic],
             ["ros2", "topic", "echo", "--once", "--truncate-length", "512", topic],
-            timeout=8,
+            timeout=max(int(timeout) + 3, 4),
         )
         if not cli_result.get("ok") and rclpy_result.get("stderr"):
             cli_result["stderr"] = f"{rclpy_result.get('stderr')}\n{cli_result.get('stderr', '')}".strip()
         return cli_result
 
-    def topic_hz(self, topic: str) -> dict[str, Any]:
-        rclpy_result = self._topic_hz_rclpy(topic)
+    def topic_hz(self, topic: str, *, timeout: float = 5.0, window: int = 10) -> dict[str, Any]:
+        rclpy_result = self._topic_hz_rclpy(topic, timeout=timeout, window=window)
         if rclpy_result.get("ok"):
             return rclpy_result
-        cli_result = self._run_ros(["ros2", "topic", "hz", topic, "--window", "10"], timeout=8)
+        cli_result = self._run_ros(["ros2", "topic", "hz", topic, "--window", str(int(window))], timeout=max(int(timeout) + 3, 4))
         if not cli_result.get("ok") and rclpy_result.get("stderr"):
             cli_result["stderr"] = f"{rclpy_result.get('stderr')}\n{cli_result.get('stderr', '')}".strip()
         return cli_result

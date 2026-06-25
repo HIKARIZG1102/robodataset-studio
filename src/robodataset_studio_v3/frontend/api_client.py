@@ -23,38 +23,38 @@ class ApiClient:
     def health(self) -> dict[str, Any]:
         with httpx.Client(timeout=2.0) as client:
             response = client.get(f"{self.base_url}/api/health")
-            response.raise_for_status()
+            self._raise_for_status(response)
             data = response.json()
         return data if isinstance(data, dict) else {}
 
     def get(self, path: str, *, timeout: float = 10.0) -> Any:
         with httpx.Client(timeout=timeout) as client:
             response = client.get(f"{self.base_url}{path}")
-            response.raise_for_status()
+            self._raise_for_status(response)
             return response.json()
 
     def post(self, path: str, payload: dict[str, Any] | None = None, *, timeout: float = 20.0) -> Any:
         with httpx.Client(timeout=timeout) as client:
             response = client.post(f"{self.base_url}{path}", json=payload or {})
-            response.raise_for_status()
+            self._raise_for_status(response)
             return response.json()
 
     def put(self, path: str, payload: dict[str, Any], *, timeout: float = 20.0) -> Any:
         with httpx.Client(timeout=timeout) as client:
             response = client.put(f"{self.base_url}{path}", json=payload)
-            response.raise_for_status()
+            self._raise_for_status(response)
             return response.json()
 
     def delete(self, path: str, *, timeout: float = 20.0) -> Any:
         with httpx.Client(timeout=timeout) as client:
             response = client.delete(f"{self.base_url}{path}")
-            response.raise_for_status()
+            self._raise_for_status(response)
             return response.json()
 
     def list_projects(self) -> list[ProjectSummary]:
         with httpx.Client(timeout=5.0) as client:
             response = client.get(f"{self.base_url}/api/projects")
-            response.raise_for_status()
+            self._raise_for_status(response)
             data = response.json()
         if not isinstance(data, list):
             return []
@@ -90,7 +90,7 @@ class ApiClient:
         }
         with httpx.Client(timeout=5.0) as client:
             response = client.post(f"{self.base_url}/api/projects", json=payload)
-            response.raise_for_status()
+            self._raise_for_status(response)
             data = response.json()
         if not isinstance(data, dict):
             raise RuntimeError("backend returned invalid project response")
@@ -147,17 +147,35 @@ class ApiClient:
     def get_project_config(self, project_key: str) -> dict[str, Any]:
         with httpx.Client(timeout=5.0) as client:
             response = client.get(f"{self.base_url}/api/config/project/{project_key}")
-            response.raise_for_status()
+            self._raise_for_status(response)
             data = response.json()
         return data if isinstance(data, dict) else {}
 
     def get_dataset_config(self, project_key: str) -> dict[str, Any]:
         with httpx.Client(timeout=5.0) as client:
             response = client.get(f"{self.base_url}/api/config/dataset/{project_key}")
-            response.raise_for_status()
+            self._raise_for_status(response)
             data = response.json()
         return data if isinstance(data, dict) else {}
 
     def list_tasks(self) -> list[dict[str, Any]]:
         data = self.get("/api/tasks")
         return data if isinstance(data, list) else []
+
+    def _raise_for_status(self, response: httpx.Response) -> None:
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = self._error_detail(response)
+            raise RuntimeError(f"{response.status_code} {response.reason_phrase}: {detail}") from exc
+
+    def _error_detail(self, response: httpx.Response) -> str:
+        try:
+            payload = response.json()
+        except Exception:
+            text = response.text.strip()
+            return text or "empty error response"
+        if isinstance(payload, dict):
+            detail = payload.get("detail", payload)
+            return str(detail)
+        return str(payload)
