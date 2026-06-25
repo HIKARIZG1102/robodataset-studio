@@ -31,6 +31,7 @@ class SettingsPage(BasePage):
         self.ai_probe_budget.setSingleStep(1000)
         self.ai_probe_budget.setSuffix(" chars")
         self.model_status = QLabel("")
+        self.refresh_models_button: QPushButton | None = None
         self.language = QComboBox()
         self.language.addItem("English", "en")
         self.language.addItem("中文", "zh")
@@ -66,6 +67,7 @@ class SettingsPage(BasePage):
         ai_form.addRow("API key", self.ai_api_key)
         model_row = QHBoxLayout()
         refresh_models = QPushButton("Refresh models")
+        self.refresh_models_button = refresh_models
         refresh_models.clicked.connect(self.refresh_models)
         model_row.addWidget(self.ai_model, 1)
         model_row.addWidget(refresh_models)
@@ -147,6 +149,26 @@ class SettingsPage(BasePage):
 
     def refresh_models(self) -> None:
         self.save()
+        base_url = self.ai_base_url.text().strip()
+        api_key = self.ai_api_key.text().strip()
+        if not base_url:
+            self.model_status.setText("base URL required")
+            return
+        if not api_key:
+            self.model_status.setText("API key empty; trying model list without Authorization header")
+        else:
+            self.model_status.setText(f"checking models from {base_url.rstrip('/')}/models ...")
+        if self.refresh_models_button is not None:
+            self.refresh_models_button.setEnabled(False)
+            self.refresh_models_button.setText("Checking...")
+        self.status.setText("Refreshing AI model list...")
+        self.run_async(
+            self.api.post,
+            self.finish_model_refresh,
+            "/api/ai/models",
+            {"base_url": base_url, "api_key": api_key},
+            timeout=35.0,
+        )
 
     def refresh_environment(self) -> None:
         self.environment_summary.setText("Loading environment diagnostics...")
@@ -193,23 +215,14 @@ class SettingsPage(BasePage):
         if index >= 0:
             self.tabs.setCurrentIndex(index)
         self.refresh_environment()
-        base_url = self.ai_base_url.text().strip()
-        api_key = self.ai_api_key.text().strip()
-        if not base_url or not api_key:
-            self.model_status.setText("base URL and API key required")
-            return
-        self.model_status.setText("loading models...")
-        self.run_async(
-            self.api.post,
-            self.finish_model_refresh,
-            "/api/ai/models",
-            {"base_url": base_url, "api_key": api_key},
-            timeout=30.0,
-        )
 
     def finish_model_refresh(self, result: object, error: object) -> None:
+        if self.refresh_models_button is not None:
+            self.refresh_models_button.setEnabled(True)
+            self.refresh_models_button.setText("Refresh models")
         if error is not None:
             self.model_status.setText(f"model list failed: {error}")
+            self.status.setText("AI model refresh failed")
             return
         payload = result.get("result", result) if isinstance(result, dict) else {}
         models = payload.get("models", []) if isinstance(payload, dict) else []
@@ -227,10 +240,13 @@ class SettingsPage(BasePage):
         if model_ids:
             self.ai_model.addItems(model_ids)
             self.ai_model.setCurrentText(current if current in model_ids else model_ids[0])
-            self.model_status.setText(f"{len(model_ids)} model(s) available")
+            selected = self.ai_model.currentText().strip()
+            self.model_status.setText(f"{len(model_ids)} model(s) available; selected {selected}")
+            self.status.setText("AI model list refreshed")
         else:
             self.ai_model.setEditText(current)
             self.model_status.setText(str(payload.get("error") or "no available models") if isinstance(payload, dict) else "no available models")
+            self.status.setText("AI model refresh returned no models")
         self.ai_model.blockSignals(False)
         self.save()
 

@@ -157,17 +157,34 @@ class AiService:
             result = {"base_url": base_url, "models": [], "error": "base_url is empty"}
             task_service.fail_task(task.task_id, message="model discovery failed", error=result["error"])
             return {"task_id": task.task_id, "result": result}
+        url = base_url.rstrip("/") + "/models"
         try:
-            url = base_url.rstrip("/") + "/models"
             headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
             response = httpx.get(url, headers=headers, timeout=20.0)
             response.raise_for_status()
             payload = response.json()
             models = payload.get("data", payload if isinstance(payload, list) else [])
-            result = {"base_url": base_url, "models": models}
+            result = {"base_url": base_url, "url": url, "models": models, "status_code": response.status_code}
             task_service.complete_task(task.task_id, message="model discovery finished", result=result)
+        except httpx.HTTPStatusError as exc:
+            body = self._truncate_text(exc.response.text, 600) if exc.response is not None else ""
+            status_code = exc.response.status_code if exc.response is not None else 0
+            result = {
+                "base_url": base_url,
+                "url": url,
+                "models": [],
+                "status_code": status_code,
+                "error": f"HTTP {status_code} from model endpoint: {body or exc}",
+            }
+            task_service.fail_task(task.task_id, message="model discovery failed", error=result["error"])
+        except httpx.TimeoutException as exc:
+            result = {"base_url": base_url, "url": url, "models": [], "error": f"model endpoint timed out: {exc}"}
+            task_service.fail_task(task.task_id, message="model discovery failed", error=result["error"])
+        except httpx.RequestError as exc:
+            result = {"base_url": base_url, "url": url, "models": [], "error": f"model endpoint request failed: {exc}"}
+            task_service.fail_task(task.task_id, message="model discovery failed", error=result["error"])
         except Exception as exc:
-            result = {"base_url": base_url, "models": [], "error": str(exc)}
+            result = {"base_url": base_url, "url": url, "models": [], "error": str(exc)}
             task_service.fail_task(task.task_id, message="model discovery failed", error=str(exc))
         return {"task_id": task.task_id, "result": result}
 
