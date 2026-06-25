@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSpinBox,
+    QStyle,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -271,7 +272,8 @@ class InspectorDock(QWidget):
         topic_row.addWidget(self.image_type_label)
         self.image_topic.currentTextChanged.connect(self.update_image_topic_type)
         controls = QHBoxLayout()
-        project_monitor = QPushButton("Monitor project image")
+        project_monitor = QPushButton("Sync image from project")
+        project_monitor.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
         start = QPushButton("Start image monitor")
         stop = QPushButton("Stop image monitor")
         pause = QPushButton("Pause / Resume")
@@ -506,9 +508,8 @@ class InspectorDock(QWidget):
 
     def start_project_image_monitor(self) -> None:
         if self.project is None:
-            self._append(self.preview_log, "no project is open; using selected ROS image topic instead")
-            self.show_image()
-            self.start_image_preview()
+            self.preview_status.setText("preview error: no project is open")
+            self._append(self.preview_log, "no project is open; open a project before syncing image topics from project config")
             return
         self._append(self.preview_log, f"loading project image monitor config for {self.project.name}")
         self._start_worker(self.api.get_project_config, self._finish_project_monitor_config, self.project.key)
@@ -529,9 +530,8 @@ class InspectorDock(QWidget):
         current = self._selected_image_topic_name()
         topic = current if self._is_monitorable_image_topic(current, project_topics) else self._first_project_image_topic(config)
         if not topic:
-            self._append(self.preview_log, "current project config has no image topic; using selected ROS image topic instead")
-            self.show_image()
-            self.start_image_preview()
+            self.preview_status.setText("preview error: current project config has no image topic")
+            self._append(self.preview_log, "current project config has no image topic; add an image stream/camera topic to the project config first")
             return
         index = self.image_topic.findText(topic)
         if index >= 0:

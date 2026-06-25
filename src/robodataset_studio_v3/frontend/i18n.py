@@ -252,7 +252,7 @@ TEXTS: dict[str, dict[str, str]] = {
     "Topic Echo": {"zh": "Topic Echo", "en": "Topic Echo"},
     "Topic Hz": {"zh": "Topic 频率", "en": "Topic Hz"},
     "Image monitor topic": {"zh": "图像监视 Topic", "en": "Image monitor topic"},
-    "Monitor project image": {"zh": "监视项目图像", "en": "Monitor project image"},
+    "Sync image from project": {"zh": "从项目同步图像", "en": "Sync image from project"},
     "Start image monitor": {"zh": "开始图像监视", "en": "Start image monitor"},
     "Stop image monitor": {"zh": "停止图像监视", "en": "Stop image monitor"},
     "Pause / Resume": {"zh": "暂停 / 继续", "en": "Pause / Resume"},

@@ -15,6 +15,9 @@
   had previously been started with a different localhost-only setting.
 - Added ROS discovery environment fields to `/api/ros/graph` and surfaced them
   in the Inspector preview log when no image topic is found.
+- Renamed the project-image button to "Sync image from project" with a sync
+  icon, and restored project-only behavior: if no project is open, the user is
+  told to open one instead of falling back to the selected ROS topic.
 
 ## Findings
 
@@ -26,6 +29,8 @@
 - `This plugin supports grabbing the mouse only for popup windows` is a Qt
   platform plugin warning and does not explain missing ROS image topics. It may
   appear under Wayland/XCB popup/menu mouse-grab paths.
+- Project image sync and direct ROS image monitoring are intentionally separate
+  actions. Direct topic preview remains on "Start image monitor".
 
 ## Verification
 
