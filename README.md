@@ -133,6 +133,36 @@ the local bootstrap would normally install. It does not install ROS inside the
 image. Instead, the run wrapper passes through the host ROS environment so the
 container matches the machine that is already publishing ROS2 topics:
 
+Install Docker on Ubuntu 22.04:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y docker.io docker-compose-v2 docker-buildx
+sudo systemctl enable --now docker
+sudo usermod -aG docker "$USER"
+newgrp docker
+docker version
+docker compose version
+```
+
+If Docker Hub is slow or blocked, configure the Docker daemon to use the local
+proxy available on that machine. For example, with a Clash HTTP proxy on
+`127.0.0.1:7890`:
+
+```bash
+sudo mkdir -p /etc/systemd/system/docker.service.d
+sudo tee /etc/systemd/system/docker.service.d/proxy.conf >/dev/null <<'EOF'
+[Service]
+Environment="HTTP_PROXY=http://127.0.0.1:7890"
+Environment="HTTPS_PROXY=http://127.0.0.1:7890"
+Environment="NO_PROXY=localhost,127.0.0.1,::1"
+EOF
+sudo systemctl daemon-reload
+sudo systemctl restart docker
+```
+
+Build and run the local image:
+
 ```bash
 ./scripts/docker_build.sh
 ./scripts/docker_run.sh
@@ -148,8 +178,8 @@ After the GitHub Actions Docker workflow publishes a package, users can run a
 prebuilt image without building locally:
 
 ```bash
-docker pull ghcr.io/HIKARIZG1102/robodataset-studio:latest
-IMAGE_NAME=ghcr.io/HIKARIZG1102/robodataset-studio ./scripts/docker_run.sh
+docker pull ghcr.io/hikarizg1102/robodataset-studio:latest
+IMAGE_NAME=ghcr.io/hikarizg1102/robodataset-studio ./scripts/docker_run.sh
 ```
 
 The container uses host networking and X11 forwarding by default so the GUI can
@@ -161,10 +191,68 @@ open and the ROS2 graph can be discovered from the same ROS domain:
 - App path inside container: `/workspace/robodataset-studio`
 - Default data mount: host `./robodataset` to container
   `/workspace/robodataset-studio/robodataset`
-- GUI forwarding: `DISPLAY`, `/tmp/.X11-unix`, optional `~/.Xauthority`
+- GUI forwarding: `DISPLAY`, `/tmp/.X11-unix`, and Xauthority. The run script
+  mounts `$XAUTHORITY` first, then falls back to `~/.Xauthority` or
+  `/run/user/$(id -u)/gdm/Xauthority`.
 - ROS passthrough: host network, `/opt/ros:/opt/ros:ro`, `ROS_SETUP`,
   `ROS_DOMAIN_ID`, `ROS_LOCALHOST_ONLY`, RMW, `PYTHONPATH`, `LD_LIBRARY_PATH`,
   and colcon/ament prefix variables
+
+If the GUI fails with `Authorization required`, `could not connect to display`,
+or a Qt `xcb` platform initialization error, check the host display and
+Xauthority path:
+
+```bash
+echo "$DISPLAY"
+echo "$XAUTHORITY"
+ls -l "$XAUTHORITY"
+XAUTHORITY=/run/user/$(id -u)/gdm/Xauthority ./scripts/docker_run.sh
+```
+
+On desktops where `xhost` can access the active display, this can also unblock
+local containers:
+
+```bash
+xhost +local:docker
+./scripts/docker_run.sh
+```
+
+A fully expanded GUI run command, equivalent to the wrapper, is:
+
+```bash
+docker run --rm --name robodataset-studio \
+  --network host --ipc host \
+  -e DISPLAY="$DISPLAY" \
+  -e XAUTHORITY=/root/.Xauthority \
+  -e QT_X11_NO_MITSHM=1 \
+  -e ROS_SETUP="${ROS_SETUP:-/opt/ros/humble/setup.bash}" \
+  -e ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}" \
+  -e ROS_LOCALHOST_ONLY="${ROS_LOCALHOST_ONLY:-0}" \
+  -e ROBODATASET_RMW_IMPLEMENTATION="${ROBODATASET_RMW_IMPLEMENTATION:-}" \
+  -e RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-}" \
+  -e AMENT_PREFIX_PATH="${AMENT_PREFIX_PATH:-}" \
+  -e CMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH:-}" \
+  -e COLCON_PREFIX_PATH="${COLCON_PREFIX_PATH:-}" \
+  -e LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}" \
+  -e PYTHONPATH="${PYTHONPATH:-}" \
+  -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
+  -v "${XAUTHORITY:-/run/user/$(id -u)/gdm/Xauthority}:/root/.Xauthority:ro" \
+  -v "$PWD/robodataset:/workspace/robodataset-studio/robodataset" \
+  -v /opt/ros:/opt/ros:ro \
+  robodataset-studio:latest
+```
+
+Useful checks:
+
+```bash
+docker run --rm --entrypoint /opt/robodataset-studio/venv/bin/python \
+  robodataset-studio:latest \
+  -c 'import robodataset_studio_v3, PySide6, fastapi, numpy; print("import-ok", numpy.__version__)'
+
+docker ps --filter name=robodataset-studio
+docker logs --tail 120 robodataset-studio
+docker rm -f robodataset-studio
+```
 
 The default Docker run uses the code baked into the image. It does not mount the
 whole repository over the app path. For development-only hot reloading from the

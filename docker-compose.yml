@@ -8,6 +8,7 @@ services:
     ipc: host
     environment:
       DISPLAY: ${DISPLAY}
+      XAUTHORITY: /root/.Xauthority
       QT_X11_NO_MITSHM: "1"
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       ROS_LOCALHOST_ONLY: ${ROS_LOCALHOST_ONLY:-0}
@@ -22,6 +23,6 @@ services:
     volumes:
       - ./robodataset:/workspace/robodataset-studio/robodataset
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
-      - ${HOME}/.Xauthority:/root/.Xauthority:ro
+      - ${XAUTHORITY:-${HOME}/.Xauthority}:/root/.Xauthority:ro
       - /opt/ros:/opt/ros:ro
     devices: []

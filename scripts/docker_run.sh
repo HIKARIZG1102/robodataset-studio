@@ -9,6 +9,7 @@ IMAGE_REF="${IMAGE_NAME}:${IMAGE_TAG}"
 DATA_DIR="${ROBODATASET_DOCKER_DATA_DIR:-${ROOT_DIR}/robodataset}"
 MOUNT_SOURCE="${ROBODATASET_DOCKER_MOUNT_SOURCE:-0}"
 ROS_SETUP="${ROS_SETUP:-}"
+XAUTHORITY_PATH="${XAUTHORITY:-}"
 if [[ -z "${ROS_SETUP}" ]]; then
   for candidate in /opt/ros/humble/setup.bash /opt/ros/jazzy/setup.bash /opt/ros/iron/setup.bash; do
     if [[ -f "${candidate}" ]]; then
@@ -24,6 +25,7 @@ docker_args=(
   --network host
   --ipc host
   -e DISPLAY="${DISPLAY:-}"
+  -e XAUTHORITY=/root/.Xauthority
   -e QT_X11_NO_MITSHM=1
   -e ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
   -e ROS_LOCALHOST_ONLY="${ROS_LOCALHOST_ONLY:-0}"
@@ -49,8 +51,17 @@ if [[ "${MOUNT_SOURCE}" == "1" || "${MOUNT_SOURCE}" == "true" || "${MOUNT_SOURCE
   docker_args+=(-v "${ROOT_DIR}:/workspace/robodataset-studio")
 fi
 
-if [[ -f "${HOME}/.Xauthority" ]]; then
-  docker_args+=(-v "${HOME}/.Xauthority:/root/.Xauthority:ro")
+if [[ -z "${XAUTHORITY_PATH}" || ! -f "${XAUTHORITY_PATH}" ]]; then
+  for candidate in "${HOME}/.Xauthority" "/run/user/$(id -u)/gdm/Xauthority"; do
+    if [[ -f "${candidate}" ]]; then
+      XAUTHORITY_PATH="${candidate}"
+      break
+    fi
+  done
+fi
+
+if [[ -n "${XAUTHORITY_PATH}" && -f "${XAUTHORITY_PATH}" ]]; then
+  docker_args+=(-v "${XAUTHORITY_PATH}:/root/.Xauthority:ro")
 fi
 
 if [[ -d /opt/ros ]]; then
