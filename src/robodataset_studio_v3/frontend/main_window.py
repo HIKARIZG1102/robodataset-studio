@@ -1039,7 +1039,9 @@ class MainWindow(QMainWindow):
     def _make_action_page(self, tab_id: str) -> QWidget:
         project = self.current_project
         if tab_id == "project":
-            return ProjectPage(self.api, project)
+            page = ProjectPage(self.api, project)
+            page.projectConfigChanged.connect(self._project_config_changed)
+            return page
         if tab_id == "collect":
             return CollectPage(self.api, project)
         if tab_id == "ros":

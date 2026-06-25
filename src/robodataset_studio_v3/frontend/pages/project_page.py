@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QFileSystemWatcher, QTimer
-from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QPlainTextEdit, QSplitter, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget
+from PySide6.QtCore import QFileSystemWatcher, QTimer, Signal
+from PySide6.QtWidgets import QComboBox, QDialog, QHBoxLayout, QLabel, QMessageBox, QPushButton, QPlainTextEdit, QSplitter, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget
 
 from robodataset_studio_v3.frontend.api_client import ApiClient, ProjectSummary
 from robodataset_studio_v3.frontend.i18n import text
@@ -12,8 +12,12 @@ from robodataset_studio_v3.frontend.pages.base import BasePage
 
 
 class ProjectPage(BasePage):
+    projectConfigChanged = Signal(object)
+
     def __init__(self, api: ApiClient, project: ProjectSummary | None = None) -> None:
         super().__init__("Properties", api, project)
+        self.config_select = QComboBox()
+        self.configs: list[dict] = []
         self.info = QPlainTextEdit()
         self.info.setReadOnly(True)
         self.info.setMaximumHeight(170)
@@ -38,8 +42,16 @@ class ProjectPage(BasePage):
         buttons = QHBoxLayout()
         refresh = QPushButton("Refresh")
         refresh.clicked.connect(self.refresh)
+        refresh_library = QPushButton("Refresh Library")
+        refresh_library.clicked.connect(self.refresh_library)
+        load_config = QPushButton("Load Config Into Project")
+        load_config.clicked.connect(self.load_config_into_project)
         structure = QPushButton("Open Structure Window")
         structure.clicked.connect(self.open_structure_window)
+        buttons.addWidget(QLabel("Library config"))
+        buttons.addWidget(self.config_select, 2)
+        buttons.addWidget(refresh_library)
+        buttons.addWidget(load_config)
         buttons.addWidget(refresh)
         buttons.addWidget(structure)
         buttons.addStretch(1)
@@ -91,6 +103,51 @@ class ProjectPage(BasePage):
         self.output.setPlainText("\n".join(self._ascii_tree(root)))
         self.status.setText("Project properties refreshed")
         self._reset_watches(self._watch_paths(root))
+        self.refresh_library()
+
+    def refresh_library(self) -> None:
+        current = self.project.config_id if self.project is not None else ""
+        try:
+            self.configs = self.api.list_configs()
+        except Exception as exc:
+            self.status.setText(f"Cannot list configs: {exc}")
+            return
+        self.config_select.blockSignals(True)
+        self.config_select.clear()
+        for config in self.configs:
+            config_id = str(config.get("id") or "")
+            name = str(config.get("name") or config_id)
+            streams = config.get("stream_count", "")
+            self.config_select.addItem(f"{name} [{config_id}] - {streams} streams", config_id)
+        if current:
+            index = self.config_select.findData(current)
+            if index >= 0:
+                self.config_select.setCurrentIndex(index)
+        self.config_select.blockSignals(False)
+
+    def load_config_into_project(self) -> None:
+        if self.project is None:
+            QMessageBox.information(self, "Load Config", "Open or create a project first.")
+            return
+        config_id = str(self.config_select.currentData() or "")
+        if not config_id:
+            QMessageBox.information(self, "Load Config", "Select a library config first.")
+            return
+        if self.project.has_recorded_data and config_id != self.project.config_id:
+            QMessageBox.warning(
+                self,
+                "Load Config",
+                "This project already has recorded data. You can reload the current library config, but create a new project version before switching to another config.",
+            )
+            return
+        try:
+            self.project = self.api.bind_project_config(self.project.key, config_id)
+        except Exception as exc:
+            self.status.setText(f"Cannot load config into project: {exc}")
+            return
+        self.status.setText(f"Loaded config into project: {config_id}")
+        self.projectConfigChanged.emit(self.project)
+        self.refresh()
 
     def open_structure_window(self) -> None:
         dialog = QDialog(self)
