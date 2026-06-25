@@ -19,6 +19,9 @@ class ProjectConfigPage(QWidget):
         self.configs: list[dict] = []
         self.project_yaml = QPlainTextEdit()
         self.dataset_yaml = QPlainTextEdit()
+        self.preview_output = QPlainTextEdit()
+        self.preview_output.setReadOnly(True)
+        self.preview_output.setMaximumHeight(180)
         self.status = QLabel("")
         self._build()
         self.refresh()
@@ -38,7 +41,7 @@ class ProjectConfigPage(QWidget):
         refresh_library.clicked.connect(self.refresh_library)
         load_config = QPushButton("Load Config Into Project")
         load_config.clicked.connect(self.load_config_into_project)
-        preview = QPushButton("Preview")
+        preview = QPushButton("Validate Preview")
         preview.clicked.connect(self.preview)
         save = QPushButton("Save Project Config")
         save.clicked.connect(self.save)
@@ -63,6 +66,8 @@ class ProjectConfigPage(QWidget):
         layout.addWidget(self.title)
         layout.addLayout(buttons)
         layout.addWidget(tabs)
+        layout.addWidget(QLabel("Preview result"))
+        layout.addWidget(self.preview_output)
         layout.addWidget(self.status)
         scroll.setWidget(content)
         root.addWidget(scroll)
@@ -139,8 +144,10 @@ class ProjectConfigPage(QWidget):
             result = self.api.post("/api/config/project/preview", project_config)
         except Exception as exc:
             self.status.setText(f"Cannot preview config: {exc}")
+            self.preview_output.setPlainText("")
             return
-        self.status.setText(str(result))
+        self.preview_output.setPlainText(yaml.safe_dump(result, sort_keys=False, allow_unicode=True))
+        self.status.setText("Preview generated")
 
     def save(self) -> None:
         if self.read_only:

@@ -424,7 +424,8 @@ class MainWindow(QMainWindow):
             self.open_action_tab("project")
         elif action is config_action:
             self._open_project_item(item)
-            self.open_project_config_tab(read_only=True)
+            read_only = bool(self.current_project and self.current_project.has_recorded_data)
+            self.open_project_config_tab(read_only=read_only)
         elif action is collect_action:
             self._open_project_item(item)
             self.open_action_tab("collect")
@@ -1069,6 +1070,7 @@ class MainWindow(QMainWindow):
             "settings": "Settings",
             "tutorial": "Tutorial",
             "logs": "Logs",
+            "project_config": "Project Config",
             "project_config_readonly": "Project Config",
         }.get(tab_id, tab_id.title())
 

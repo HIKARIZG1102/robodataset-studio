@@ -81,6 +81,8 @@ TEXTS: dict[str, dict[str, str]] = {
     "Refresh Library": {"zh": "刷新配置库", "en": "Refresh Library"},
     "Load Config Into Project": {"zh": "加载配置到项目", "en": "Load Config Into Project"},
     "Preview": {"zh": "预览", "en": "Preview"},
+    "Validate Preview": {"zh": "校验预览", "en": "Validate Preview"},
+    "Preview result": {"zh": "预览结果", "en": "Preview result"},
     "Save Project Config": {"zh": "保存项目配置", "en": "Save Project Config"},
     "Library config": {"zh": "配置库条目", "en": "Library config"},
     "Load Settings": {"zh": "加载设置", "en": "Load Settings"},

@@ -122,9 +122,13 @@ class SettingsPage(BasePage):
 
     def save(self) -> None:
         try:
-            settings = yaml.safe_load(self.yaml_editor.toPlainText())
-            if not isinstance(settings, dict):
-                settings = {}
+            current_settings = self.api.get("/api/settings", timeout=5.0)
+            settings = current_settings if isinstance(current_settings, dict) else {}
+            editor_settings = yaml.safe_load(self.yaml_editor.toPlainText())
+            if isinstance(editor_settings, dict):
+                for key, value in editor_settings.items():
+                    if key not in {"ui", "recent_projects"}:
+                        settings[key] = value
             settings["language"] = str(self.language.currentData() or "en")
             settings.setdefault("ai", {})
             settings["ai"].update(
