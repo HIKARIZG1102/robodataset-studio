@@ -279,9 +279,14 @@ class MainWindow(QMainWindow):
         self._set_elided_status_value(self.project_folder_value, path, mode=Qt.ElideMiddle)
 
     def _set_elided_status_value(self, label: QLabel, value: str, *, mode: Qt.TextElideMode = Qt.ElideRight) -> None:
-        width = max(label.width() - 6, label.minimumWidth())
         metrics = QFontMetrics(label.font())
-        label.setText(metrics.elidedText(value, mode, width))
+        maximum = label.maximumWidth()
+        width = maximum if maximum < 100000 else max(label.width(), label.minimumWidth())
+        width = max(width - 6, label.minimumWidth())
+        if metrics.horizontalAdvance(value) <= width:
+            label.setText(value)
+        else:
+            label.setText(metrics.elidedText(value, mode, width))
         label.setToolTip(value)
 
     def resizeEvent(self, event) -> None:

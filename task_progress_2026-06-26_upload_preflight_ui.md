@@ -2,6 +2,9 @@
 
 ## Task Checklist
 
+- [x] Fix status bar project/config/path values being over-elided to `..`.
+- [x] Reduce Inspector dock minimum width so it can be compressed further.
+- [x] Shorten Inspector button labels and keep full descriptions in tooltips.
 - [x] Investigate bottom status bar text overlap.
 - [x] Make project/config/path labels elide long text instead of overlapping.
 - [x] Investigate Upload API 500 behavior.
@@ -16,6 +19,10 @@
 
 ## Completed Changes
 
+- Status bar elision now uses the configured maximum width instead of transient startup widget width.
+- Normal project/config labels display fully when they fit.
+- Inspector image preview minimum size was reduced.
+- Inspector controls use shorter labels and split image controls into two rows.
 - Status bar labels now show elided text and keep full values in tooltips.
 - Upload endpoints now return readable 400 errors for common local/remote/path/auth failures.
 - Frontend API client now surfaces backend error details instead of generic HTTP errors.
