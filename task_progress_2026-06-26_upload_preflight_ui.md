@@ -36,6 +36,10 @@
 - [x] Test new Docker packaging and identify runtime Qt dependency gaps.
 - [x] Add missing Docker runtime libraries required by PySide6/Qt.
 - [x] Make Docker run script work in non-interactive terminals by only adding `-it` for real TTY sessions.
+- [x] Test Docker ROS2 CLI discovery path with host `/opt/ros` mounted.
+- [x] Add Docker libraries required by mounted ROS Humble `rclpy`.
+- [x] Add Docker library required by mounted FastDDS RMW.
+- [x] Add Docker system Python dependencies required by ROS2 CLI plugins.
 - [x] Investigate bottom status bar text overlap.
 - [x] Make project/config/path labels elide long text instead of overlapping.
 - [x] Investigate Upload API 500 behavior.
@@ -79,6 +83,9 @@
 - Inspector now restores the previous dock side and width on startup instead of always using the default layout.
 - Docker image now installs `libdbus-1-3`, `libfontconfig1`, and `libfreetype6`, which PySide6/Qt needs at runtime.
 - `scripts/docker_run.sh` now supports non-interactive launches without Docker failing on `the input device is not a TTY`.
+- Docker image now installs `libpython3.10` and `libspdlog1`, which are required for mounted ROS Humble Python nodes/CLI to import `rclpy`.
+- Docker image now installs `libtinyxml2-9`, which mounted `rmw_fastrtps_cpp` needs at runtime.
+- Docker image now installs `python3-packaging`, `python3-numpy`, `python3-netifaces`, and `python3-yaml` so mounted ROS2 CLI plugins can load.
 - Status bar labels now show elided text and keep full values in tooltips.
 - Upload endpoints now return readable 400 errors for common local/remote/path/auth failures.
 - Frontend API client now surfaces backend error details instead of generic HTTP errors.
@@ -96,6 +103,9 @@
 - `git fetch` against `origin/v3-fastapi-pyside` succeeded; local and remote commit counts are even.
 - Original Docker image reproduced `ImportError: libfontconfig.so.1` on startup.
 - Patched Docker image passed backend/frontend import smoke tests.
+- Docker ROS CLI test initially found mounted `/opt/ros/humble`, but `ros2 topic list` failed because `rclpy` could not load `libpython3.10.so.1.0` and `libspdlog.so.1`.
+- After fixing `rclpy`, FastDDS RMW loading exposed another missing runtime library: `libtinyxml2.so.9`.
+- After fixing RMW loading, ROS2 CLI plugin loading exposed missing system Python modules: `packaging`, `numpy`, `netifaces`, and `yaml`.
 
 ## Issues Encountered
 
@@ -103,6 +113,7 @@
 - HDF5 conversion previously failed on `dtype('<U5')` because h5py cannot directly create a compressed dataset from numpy Unicode arrays. This came from string/generic ROS fields, not from merge itself.
 - Docker default DNS in this environment could not resolve Ubuntu package hosts during build; building with `docker build --network host ...` works here.
 - The newly added Docker packaging depended on Qt libraries that were not included in the first image version.
+- Mounting host `/opt/ros` into a minimal Ubuntu image still requires matching runtime libraries inside the container; otherwise ROS2 CLI commands exist but cannot import `rclpy`.
 
 ## Pending Manual Checks
 

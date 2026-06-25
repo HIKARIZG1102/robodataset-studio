@@ -11,12 +11,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     python3-pip \
     python3-venv \
+    python3-packaging \
+    python3-numpy \
+    python3-netifaces \
+    python3-yaml \
+    libpython3.10 \
     libegl1 \
     libdbus-1-3 \
     libfontconfig1 \
     libfreetype6 \
     libgl1 \
     libglib2.0-0 \
+    libtinyxml2-9 \
     libx11-6 \
     libx11-xcb1 \
     libxcb1 \
@@ -36,6 +42,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxcb-xkb1 \
     libxkbcommon0 \
     libxkbcommon-x11-0 \
+    libspdlog1 \
     openssh-client \
     rsync \
     xauth \
