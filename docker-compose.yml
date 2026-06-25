@@ -6,9 +6,11 @@ services:
       dockerfile: Dockerfile
     network_mode: host
     ipc: host
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
     environment:
       DISPLAY: ${DISPLAY}
-      XAUTHORITY: /root/.Xauthority
+      XAUTHORITY: /workspace/robodataset-studio/.docker.Xauthority
+      HOME: /workspace/robodataset-studio
       QT_X11_NO_MITSHM: "1"
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       ROS_LOCALHOST_ONLY: ${ROS_LOCALHOST_ONLY:-0}
@@ -20,9 +22,11 @@ services:
       COLCON_PREFIX_PATH: ${COLCON_PREFIX_PATH:-}
       LD_LIBRARY_PATH: ${LD_LIBRARY_PATH:-}
       PYTHONPATH: ${PYTHONPATH:-}
+      ROBODATASET_DOCKER: "1"
+      ROBODATASET_ALLOWED_ROOT: /workspace/robodataset-studio
     volumes:
-      - ./robodataset:/workspace/robodataset-studio/robodataset
+      - .:/workspace/robodataset-studio
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
-      - ${XAUTHORITY:-${HOME}/.Xauthority}:/root/.Xauthority:ro
+      - ${XAUTHORITY:-${HOME}/.Xauthority}:/workspace/robodataset-studio/.docker.Xauthority:ro
       - /opt/ros:/opt/ros:ro
     devices: []

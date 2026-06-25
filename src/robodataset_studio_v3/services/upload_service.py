@@ -14,6 +14,7 @@ from threading import Thread
 from typing import Any
 
 from robodataset_studio_v3.upload.manifest import UploadManifest
+from robodataset_studio_v3.services.path_policy import path_policy
 from robodataset_studio_v3.services.task_service import task_service
 
 
@@ -62,6 +63,8 @@ class UploadService:
 
     def connect(self, host: str, username: str = "", port: int = 22, password: str = "", key_path: str = "") -> dict[str, Any]:
         deps = self.dependency_check()
+        if key_path:
+            key_path = str(path_policy.check(key_path, label="SSH key path"))
         connection = self._connection(host, username, "/", port, password, key_path)
         result = {"host": host, "username": username, "port": port, "auth_mode": connection.auth_mode, "dependencies": deps}
         if not host:
@@ -74,7 +77,7 @@ class UploadService:
         return {"task_id": task.task_id, "result": result}
 
     def manifest(self, local_path: str) -> dict[str, Any]:
-        local = Path(local_path).expanduser()
+        local = path_policy.check(Path(local_path).expanduser(), label="upload local path")
         manifest = UploadManifest().build(local)
         manifest_path = self._write_temp_manifest(manifest)
         preview_files = manifest.get("files", [])[:200]
@@ -94,8 +97,8 @@ class UploadService:
         return {"task_id": task.task_id, "result": result}
 
     def verify_local_manifest(self, local_path: str, manifest_path: str = "") -> dict[str, Any]:
-        local = Path(local_path).expanduser()
-        manifest_file = Path(manifest_path).expanduser() if manifest_path else Path()
+        local = path_policy.check(Path(local_path).expanduser(), label="upload local path")
+        manifest_file = path_policy.check(Path(manifest_path).expanduser(), label="manifest path") if manifest_path else Path()
         if manifest_path and manifest_file.exists():
             verify_result = UploadManifest().verify(manifest_file)
             manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
@@ -139,7 +142,7 @@ class UploadService:
         return {"task_id": task.task_id, "result": result}
 
     def cleanup_manifest(self, manifest_path: str) -> dict[str, Any]:
-        path = Path(manifest_path).expanduser()
+        path = path_policy.check(Path(manifest_path).expanduser(), label="manifest path")
         removed = False
         if path in self._temp_manifests and path.exists():
             path.unlink()
@@ -148,6 +151,8 @@ class UploadService:
         return {"ok": True, "manifest_path": str(path), "removed": removed}
 
     def remote_list(self, host: str, username: str, remote_path: str, port: int = 22, password: str = "", key_path: str = "") -> dict[str, Any]:
+        if key_path:
+            key_path = str(path_policy.check(key_path, label="SSH key path"))
         connection = self._connection(host, username, remote_path, port, password, key_path)
         if connection.password or connection.key_path:
             payload = self._remote_list_paramiko(connection)
@@ -161,6 +166,8 @@ class UploadService:
         return {"task_id": task.task_id, "result": payload}
 
     def remote_mkdir(self, host: str, username: str, remote_path: str, folder_name: str, port: int = 22, password: str = "", key_path: str = "") -> dict[str, Any]:
+        if key_path:
+            key_path = str(path_policy.check(key_path, label="SSH key path"))
         clean = "".join(ch for ch in folder_name.strip() if ch.isalnum() or ch in {"_", "-", "."})
         if not clean:
             raise ValueError("folder name is empty")
@@ -178,6 +185,8 @@ class UploadService:
         return {"task_id": task.task_id, "result": result}
 
     def remote_space(self, host: str, username: str, remote_path: str, port: int = 22, password: str = "", key_path: str = "") -> dict[str, Any]:
+        if key_path:
+            key_path = str(path_policy.check(key_path, label="SSH key path"))
         connection = self._connection(host, username, remote_path, port, password, key_path)
         if connection.password or connection.key_path:
             payload = self._remote_space_paramiko(connection)
@@ -225,7 +234,9 @@ class UploadService:
         return {"task_id": task_id, "cancel_requested": True}
 
     def _start_sync(self, task_id: str, local_path: str, remote_path: str, host: str = "", username: str = "", repair: bool = False, port: int = 22, password: str = "", key_path: str = "") -> dict[str, Any]:
-        local = Path(local_path).expanduser()
+        local = path_policy.check(Path(local_path).expanduser(), label="upload local path")
+        if key_path:
+            key_path = str(path_policy.check(key_path, label="SSH key path"))
         deps = self.dependency_check()
         connection = self._connection(host, username, remote_path, port, password, key_path)
         result = {
@@ -280,14 +291,19 @@ class UploadService:
         return result
 
     def verify(self, local_path: str, remote_path: str, host: str = "", username: str = "", port: int = 22, password: str = "", key_path: str = "") -> dict[str, Any]:
+        if key_path:
+            key_path = str(path_policy.check(key_path, label="SSH key path"))
         task = task_service.create_task("upload_verify", "remote verification started")
         Thread(target=self._verify_worker, args=(task.task_id, local_path, remote_path, host, username, port, password, key_path), daemon=True).start()
         return {"task_id": task.task_id, "local_path": local_path, "remote_path": remote_path, "host": host, "username": username, "port": port, "auth_mode": self._connection(host, username, remote_path, port, password, key_path).auth_mode}
 
     def _verify_worker(self, task_id: str, local_path: str, remote_path: str, host: str, username: str, port: int, password: str, key_path: str) -> None:
         local = Path(local_path).expanduser()
-        connection = self._connection(host, username, remote_path, port, password, key_path)
         try:
+            local = path_policy.check(local, label="upload local path")
+            if key_path:
+                key_path = str(path_policy.check(key_path, label="SSH key path"))
+            connection = self._connection(host, username, remote_path, port, password, key_path)
             result = self._remote_verify_connection(local, connection)
             task_service.complete_task(task_id, message="remote verification finished", result=result)
         except Exception as exc:

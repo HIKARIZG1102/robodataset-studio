@@ -8,6 +8,7 @@ import yaml
 
 from robodataset_studio_v3.models.project import ProjectCreateRequest, ProjectSummary
 from robodataset_studio_v3.services.config_service import ConfigService
+from robodataset_studio_v3.services.path_policy import path_policy
 
 
 def repo_root() -> Path:
@@ -30,6 +31,8 @@ class ProjectService:
                 paths_by_resolved[path.resolve()] = path
         for indexed in self._load_project_index().values():
             path = Path(indexed)
+            if not self._path_allowed(path):
+                continue
             if path.exists() and path.is_dir() and (path / "project.yaml").exists():
                 paths_by_resolved.setdefault(path.resolve(), path)
         for path in sorted(paths_by_resolved.values(), key=lambda item: (item.name.lower(), str(item))):
@@ -51,15 +54,18 @@ class ProjectService:
         safe_key = self._safe_part(key)
         known = self._project_path_for_key(safe_key)
         if known is not None and known.exists() and known.is_dir():
+            path_policy.check(known, label="project folder")
             self._known_paths[safe_key] = known
             return known
         path = self.root / safe_key
+        path_policy.check(path, label="project folder")
         if not path.exists() or not path.is_dir():
             raise FileNotFoundError(f"project not found: {key}")
         return path
 
     def open_path(self, path_text: str) -> ProjectSummary:
         path = self._resolve_project_path(path_text)
+        path_policy.check(path, label="project folder")
         if not path.exists() or not path.is_dir():
             raise FileNotFoundError(f"project folder not found: {path}")
         key = path.name
@@ -115,6 +121,7 @@ class ProjectService:
         version = self._safe_part(request.version or "v1")
         key = f"{name}_{version}"
         root = self._resolve_user_path(request.root_path) if request.root_path.strip() else self.root
+        path_policy.check(root, label="project root")
         existing = self._project_path_for_key(key)
         if existing is not None:
             raise FileExistsError(f"project already exists: {key} ({existing})")
@@ -219,7 +226,7 @@ class ProjectService:
         path = Path(path_text).expanduser()
         if not path.is_absolute():
             path = repo_root() / path
-        return path
+        return path_policy.check(path, label="path")
 
     def _resolve_project_path(self, path_text: str) -> Path:
         path = self._resolve_user_path(path_text)
@@ -237,12 +244,14 @@ class ProjectService:
         safe_key = self._safe_part(key)
         known = self._known_paths.get(safe_key)
         if known is not None and known.exists() and known.is_dir():
+            if not self._path_allowed(known):
+                return None
             return known
         index = self._load_project_index()
         indexed = index.get(safe_key)
         if indexed:
             indexed_path = Path(indexed)
-            if indexed_path.exists() and indexed_path.is_dir() and (indexed_path / "project.yaml").exists():
+            if self._path_allowed(indexed_path) and indexed_path.exists() and indexed_path.is_dir() and (indexed_path / "project.yaml").exists():
                 return indexed_path
             self._unregister_project_path(safe_key)
         default_path = self.root / safe_key
@@ -250,6 +259,7 @@ class ProjectService:
             return default_path
         for path in self._discover_project_dirs(self.root):
             if path.name == safe_key:
+                path_policy.check(path, label="project folder")
                 return path
         return None
 
@@ -317,6 +327,13 @@ class ProjectService:
             raise ValueError(f"refusing to permanently delete project outside project root: {resolved}") from exc
         if resolved == projects_root or resolved.name.startswith("."):
             raise ValueError(f"refusing to permanently delete protected path: {resolved}")
+
+    def _path_allowed(self, path: Path) -> bool:
+        try:
+            path_policy.check(path, label="project folder")
+        except ValueError:
+            return False
+        return True
 
 
 project_service = ProjectService()

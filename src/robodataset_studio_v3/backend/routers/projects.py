@@ -30,6 +30,8 @@ def create_project(request: ProjectCreateRequest) -> ProjectSummary:
         return service.create_project(request)
     except FileExistsError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/open-path", response_model=ProjectSummary)
@@ -40,6 +42,8 @@ def open_project_path(request: ProjectOpenPathRequest) -> ProjectSummary:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except FileExistsError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.put("/{project_key}/config", response_model=ProjectSummary)

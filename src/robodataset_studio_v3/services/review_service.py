@@ -10,6 +10,7 @@ import yaml
 import h5py
 
 from robodataset_studio_v3.dataset.validator import DatasetValidator
+from robodataset_studio_v3.services.path_policy import path_policy
 from robodataset_studio_v3.services.task_service import task_service
 
 
@@ -155,7 +156,7 @@ class ReviewService:
     def cleanup_recycle_bin(self, project_dir: str) -> dict[str, Any]:
         if not str(project_dir).strip():
             raise ValueError("project_dir is required")
-        root = Path(project_dir).expanduser()
+        root = path_policy.check(Path(project_dir).expanduser(), label="project directory")
         if not root.exists() or not root.is_dir():
             raise FileNotFoundError(f"project folder not found: {root}")
         targets = [root / ".delete", *root.glob("raw_sessions/session_*/review_deleted")]
@@ -239,20 +240,20 @@ class ReviewService:
         return {"task_id": task.task_id, "result": result}
 
     def inspect_hdf5(self, hdf5_path: str) -> dict[str, Any]:
-        path = Path(hdf5_path).expanduser()
+        path = path_policy.check(Path(hdf5_path).expanduser(), label="HDF5 file")
         result = {"path": str(path), "summary_text": self.validator.describe_hdf5(path)}
         task = task_service.run_instant("hdf5_inspect", f"inspected HDF5 {path}", result)
         return {"task_id": task.task_id, "result": result}
 
     def check_hdf5(self, hdf5_path: str) -> dict[str, Any]:
-        path = Path(hdf5_path).expanduser()
+        path = path_policy.check(Path(hdf5_path).expanduser(), label="HDF5 file")
         rows = self.validator.check_hdf5(path, self._load_hdf5_config(path))
         result = {"path": str(path), "rows": rows, "summary_text": self.validator.hdf5_check_summary(path, rows)}
         task = task_service.run_instant("hdf5_check", f"checked HDF5 {path}", result)
         return {"task_id": task.task_id, "result": result}
 
     def scan_layout(self, folder: str) -> dict[str, Any]:
-        root = Path(folder).expanduser()
+        root = path_policy.check(Path(folder).expanduser(), label="layout folder")
         rows: list[dict[str, object]] = []
         if not root.exists():
             rows.append({"path": str(root), "status": "error", "issue": "missing_root", "detail": "selected path does not exist"})
@@ -285,7 +286,7 @@ class ReviewService:
         return {"task_id": task.task_id, "result": result}
 
     def check_layout(self, folder: str) -> dict[str, Any]:
-        root = Path(folder).expanduser()
+        root = path_policy.check(Path(folder).expanduser(), label="layout folder")
         rows = self.validator.check_calvin_layout(root)
         result = {"folder": str(root), "rows": rows, "ok": all(str(row.get("status")) != "error" for row in rows)}
         task = task_service.run_instant("layout_check", f"checked layout {root}", result)
@@ -512,6 +513,7 @@ class ReviewService:
             return {}
 
     def _resolve_session_dir(self, path: Path) -> Path:
+        path = path_policy.check(path, label="session directory")
         if path.name.startswith("session_"):
             return path
         candidates = sorted([item for item in path.glob("session_*") if item.is_dir()])

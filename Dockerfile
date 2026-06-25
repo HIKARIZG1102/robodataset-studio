@@ -4,6 +4,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV QT_X11_NO_MITSHM=1
 ENV ROBODATASET_VENV=/opt/robodataset-studio/venv
+ENV ROBODATASET_DOCKER=1
+ENV ROBODATASET_ALLOWED_ROOT=/workspace/robodataset-studio
 ENV PATH=/opt/robodataset-studio/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 RUN apt-get update && apt-get install -y --no-install-recommends \

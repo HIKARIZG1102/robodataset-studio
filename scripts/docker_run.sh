@@ -6,8 +6,6 @@ IMAGE_NAME="${IMAGE_NAME:-robodataset-studio}"
 IMAGE_TAG="${IMAGE_TAG:-latest}"
 CONTAINER_NAME="${CONTAINER_NAME:-robodataset-studio}"
 IMAGE_REF="${IMAGE_NAME}:${IMAGE_TAG}"
-DATA_DIR="${ROBODATASET_DOCKER_DATA_DIR:-${ROOT_DIR}/robodataset}"
-MOUNT_SOURCE="${ROBODATASET_DOCKER_MOUNT_SOURCE:-0}"
 ROS_SETUP="${ROS_SETUP:-}"
 XAUTHORITY_PATH="${XAUTHORITY:-}"
 if [[ -z "${ROS_SETUP}" ]]; then
@@ -24,8 +22,10 @@ docker_args=(
   --name "${CONTAINER_NAME}"
   --network host
   --ipc host
+  --user "$(id -u):$(id -g)"
   -e DISPLAY="${DISPLAY:-}"
-  -e XAUTHORITY=/root/.Xauthority
+  -e XAUTHORITY=/workspace/robodataset-studio/.docker.Xauthority
+  -e HOME=/workspace/robodataset-studio
   -e QT_X11_NO_MITSHM=1
   -e ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
   -e ROS_LOCALHOST_ONLY="${ROS_LOCALHOST_ONLY:-0}"
@@ -37,18 +37,14 @@ docker_args=(
   -e COLCON_PREFIX_PATH="${COLCON_PREFIX_PATH:-}"
   -e LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
   -e PYTHONPATH="${PYTHONPATH:-}"
+  -e ROBODATASET_DOCKER=1
+  -e ROBODATASET_ALLOWED_ROOT=/workspace/robodataset-studio
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw
-  -v "${DATA_DIR}:/workspace/robodataset-studio/robodataset"
+  -v "${ROOT_DIR}:/workspace/robodataset-studio"
 )
-
-mkdir -p "${DATA_DIR}"
 
 if [[ -t 0 && -t 1 ]]; then
   docker_args+=(-it)
-fi
-
-if [[ "${MOUNT_SOURCE}" == "1" || "${MOUNT_SOURCE}" == "true" || "${MOUNT_SOURCE}" == "yes" ]]; then
-  docker_args+=(-v "${ROOT_DIR}:/workspace/robodataset-studio")
 fi
 
 if [[ -z "${XAUTHORITY_PATH}" || ! -f "${XAUTHORITY_PATH}" ]]; then
@@ -61,7 +57,7 @@ if [[ -z "${XAUTHORITY_PATH}" || ! -f "${XAUTHORITY_PATH}" ]]; then
 fi
 
 if [[ -n "${XAUTHORITY_PATH}" && -f "${XAUTHORITY_PATH}" ]]; then
-  docker_args+=(-v "${XAUTHORITY_PATH}:/root/.Xauthority:ro")
+  docker_args+=(-v "${XAUTHORITY_PATH}:/workspace/robodataset-studio/.docker.Xauthority:ro")
 fi
 
 if [[ -d /opt/ros ]]; then
@@ -78,12 +74,7 @@ if [[ -n "${ROS_WORKSPACE_MOUNTS:-}" ]]; then
 fi
 
 if [[ -n "${PROJECT_MOUNTS:-}" ]]; then
-  IFS=':' read -r -a project_mounts <<< "${PROJECT_MOUNTS}"
-  for mount_path in "${project_mounts[@]}"; do
-    if [[ -n "${mount_path}" && -e "${mount_path}" ]]; then
-      docker_args+=(-v "${mount_path}:${mount_path}:rw")
-    fi
-  done
+  echo "PROJECT_MOUNTS is ignored in restricted Docker mode; open projects under ${ROOT_DIR}" >&2
 fi
 
 if [[ -n "${DISPLAY:-}" ]] && command -v xhost >/dev/null 2>&1; then

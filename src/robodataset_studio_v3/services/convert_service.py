@@ -6,6 +6,7 @@ from typing import Any
 
 from robodataset_studio_v3.dataset.converter import Hdf5Converter
 from robodataset_studio_v3.dataset.merge_plan import CalvinMergePlanner, CalvinSessionMerger
+from robodataset_studio_v3.services.path_policy import path_policy
 from robodataset_studio_v3.services.task_service import task_service
 
 
@@ -16,7 +17,7 @@ class ConvertService:
         self.converter = Hdf5Converter()
 
     def scan(self, root: str) -> dict[str, Any]:
-        base = Path(root).expanduser()
+        base = path_policy.check(Path(root).expanduser(), label="scan root")
         plan = self.planner.build_plan(base, split="training")
         sessions = [
             {
@@ -67,18 +68,18 @@ class ConvertService:
             task_service.fail_task(task_id, message="HDF5 conversion failed", error=str(exc))
 
     def _merge_sync(self, sessions: list[str], output_dir: str, output_name: str = "") -> dict[str, Any]:
-        output = Path(output_dir).expanduser()
+        output = path_policy.check(Path(output_dir).expanduser(), label="merge output directory")
         raw_root = self._raw_root_from_sessions(sessions)
         target_root = self._unique_path(output / self._safe_name(output_name, "merged_calvin"))
         manifest = self.merger.merge(raw_root, target_root / "training", selected_sessions=sessions)
         return {"sessions": sessions, "output_dir": str(output), "merged_dir": str(target_root), "manifest": manifest}
 
     def _hdf5_sync(self, sessions: list[str], output_dir: str, output_name: str = "") -> dict[str, Any]:
-        output = Path(output_dir).expanduser()
+        output = path_policy.check(Path(output_dir).expanduser(), label="HDF5 output directory")
         output.mkdir(parents=True, exist_ok=True)
         episode_paths = []
         for session in sessions:
-            session_path = Path(session).expanduser()
+            session_path = path_policy.check(Path(session).expanduser(), label="selected session")
             episode_paths.extend(sorted((session_path / "training").glob("episode_*.npz")))
         if not episode_paths:
             raise RuntimeError("No episode_*.npz files found for selected sessions")
@@ -90,6 +91,7 @@ class ConvertService:
         if not sessions:
             raise RuntimeError("No sessions selected")
         first = Path(sessions[0]).expanduser()
+        first = path_policy.check(first, label="selected session")
         if first.name.startswith("session_"):
             return first.parent
         return first.parent

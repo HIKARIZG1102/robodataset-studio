@@ -171,7 +171,7 @@ Build and run the local image:
 Equivalent Compose workflow:
 
 ```bash
-docker compose up --build robodataset-studio
+LOCAL_UID=$(id -u) LOCAL_GID=$(id -g) docker compose up --build robodataset-studio
 ```
 
 After the GitHub Actions Docker workflow publishes a package, users can run a
@@ -189,8 +189,11 @@ open and the ROS2 graph can be discovered from the same ROS domain:
 - Container command: `robodataset-studio`
 - Container venv: `/opt/robodataset-studio/venv`
 - App path inside container: `/workspace/robodataset-studio`
-- Default data mount: host `./robodataset` to container
-  `/workspace/robodataset-studio/robodataset`
+- Default workspace mount: host repository root to container
+  `/workspace/robodataset-studio`
+- Docker path policy: project roots, recording output, review/convert inputs,
+  export outputs, upload local paths, and SSH key paths must stay under
+  `/workspace/robodataset-studio`
 - GUI forwarding: `DISPLAY`, `/tmp/.X11-unix`, and Xauthority. The run script
   mounts `$XAUTHORITY` first, then falls back to `~/.Xauthority` or
   `/run/user/$(id -u)/gdm/Xauthority`.
@@ -222,8 +225,10 @@ A fully expanded GUI run command, equivalent to the wrapper, is:
 ```bash
 docker run --rm --name robodataset-studio \
   --network host --ipc host \
+  --user "$(id -u):$(id -g)" \
   -e DISPLAY="$DISPLAY" \
-  -e XAUTHORITY=/root/.Xauthority \
+  -e XAUTHORITY=/workspace/robodataset-studio/.docker.Xauthority \
+  -e HOME=/workspace/robodataset-studio \
   -e QT_X11_NO_MITSHM=1 \
   -e ROS_SETUP="${ROS_SETUP:-/opt/ros/humble/setup.bash}" \
   -e ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}" \
@@ -236,8 +241,10 @@ docker run --rm --name robodataset-studio \
   -e LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}" \
   -e PYTHONPATH="${PYTHONPATH:-}" \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
-  -v "${XAUTHORITY:-/run/user/$(id -u)/gdm/Xauthority}:/root/.Xauthority:ro" \
-  -v "$PWD/robodataset:/workspace/robodataset-studio/robodataset" \
+  -v "${XAUTHORITY:-/run/user/$(id -u)/gdm/Xauthority}:/workspace/robodataset-studio/.docker.Xauthority:ro" \
+  -e ROBODATASET_DOCKER=1 \
+  -e ROBODATASET_ALLOWED_ROOT=/workspace/robodataset-studio \
+  -v "$PWD:/workspace/robodataset-studio" \
   -v /opt/ros:/opt/ros:ro \
   robodataset-studio:latest
 ```
@@ -254,18 +261,12 @@ docker logs --tail 120 robodataset-studio
 docker rm -f robodataset-studio
 ```
 
-The default Docker run uses the code baked into the image. It does not mount the
-whole repository over the app path. For development-only hot reloading from the
-local checkout, use:
+The default Docker run mounts the current checkout over the app path. This
+makes the container use the same visible project tree as the cloned repository
+on the host:
 
 ```bash
-ROBODATASET_DOCKER_MOUNT_SOURCE=1 ./scripts/docker_run.sh
-```
-
-To store project data somewhere other than `./robodataset`, set:
-
-```bash
-ROBODATASET_DOCKER_DATA_DIR=/data/robodataset ./scripts/docker_run.sh
+./scripts/docker_run.sh
 ```
 
 If your ROS overlay workspace is outside `/opt/ros`, pass it through with a
@@ -277,13 +278,28 @@ ROS_WORKSPACE_MOUNTS=/path/to/overlay:/another/overlay \
 ./scripts/docker_run.sh
 ```
 
-If a Studio project is stored outside the default data directory, mount that
-external project path too so the saved project index remains usable in the
-container:
+Docker mode intentionally keeps Studio file operations inside the cloned
+repository folder. The run wrapper mounts the host checkout as:
 
 ```bash
-PROJECT_MOUNTS=/mnt/datasets:/media/robot_disk ./scripts/docker_run.sh
+$PWD:/workspace/robodataset-studio
 ```
+
+In the GUI, create/open projects under `/workspace/robodataset-studio`, for
+example `/workspace/robodataset-studio/robodataset/projects`. Attempts to open
+or write project roots, collection sessions, review folders, conversion output,
+upload local paths, or SSH key paths outside that workspace are rejected with a
+clear error. This keeps Docker behavior predictable and ensures files are
+visible from the host clone.
+
+The run wrapper starts the container with the current host UID/GID, so files
+created by recording, review, conversion, and upload manifest generation remain
+editable from the host file manager.
+
+Do not mount the host root `/` over the container root `/`. That hides the
+container's Ubuntu system, Python environment, and Studio installation. The
+supported Docker workflow is intentionally limited to the cloned repository
+folder.
 
 The default image is based on Ubuntu 22.04 with Python 3.10, which matches ROS
 Humble's Python ABI. If the host ROS installation uses a different Python ABI,
@@ -375,12 +391,11 @@ robodataset/
       exports/
 ```
 
-Absolute paths may still be supported later when operators intentionally choose
-an external disk or shared dataset mount.
-
 When creating a project, the project root defaults to the relative path
-`robodataset/projects`. Operators can Browse to an external disk when they want
-the project data outside the repository.
+`robodataset/projects`. In a normal host/git-clone run, operators may browse to
+an external disk when they intentionally want project data outside the
+repository. In Docker mode, file operations are restricted to the mounted clone
+at `/workspace/robodataset-studio`, so create projects under that workspace.
 
 ## UI Direction
 
