@@ -82,6 +82,24 @@ editable mode. Python 3.10 is required because ROS Humble Python packages such
 as `rclpy` and `sensor_msgs` are installed for the system Python 3.10 ABI. Do
 not run the app from a conda/base Python 3.13 environment.
 
+On a clean Ubuntu 22.04 machine with ROS2 Humble already installed, install the
+recommended desktop/runtime packages before or during bootstrap:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y \
+  python3.10-venv fontconfig fonts-noto-cjk \
+  libdbus-1-3 libegl1 libgl1 libglib2.0-0 \
+  libxcb-cursor0 libxcb-xinerama0 libxkbcommon-x11-0 \
+  openssh-client rsync xauth
+```
+
+`scripts/bootstrap.sh` checks these packages on apt-based systems. In an
+interactive terminal it can ask to install missing packages; in non-interactive
+mode it prints the exact apt command. These packages cover Qt/PySide startup,
+Chinese text rendering, and upload tooling. Python packages are installed into
+the project-local environment from `pyproject.toml`.
+
 By default bootstrap tries `.venv` first and falls back to `.conda-env` if venv
 creation is not available. If an existing V3 environment is not Python 3.10, the
 launcher marks it invalid and bootstrap rebuilds it.
@@ -123,11 +141,14 @@ ROBODATASET_RMW_IMPLEMENTATION=rmw_fastrtps_cpp ./RoboDataset-Studio-V3.sh
 For ROS recording, launch the app from an environment where the robot/camera
 workspaces are available, or set `ROS_SETUP` to the correct setup script.
 
-Optional system tools for upload:
-
-```bash
-sudo apt install rsync openssh-client
-```
+On a blank machine, buttons that only touch local state should work after
+installation: project/config management, Settings/Environment, Logs, Tutorial,
+ROS graph refresh, simulated collection, Review, Merge, HDF5 export, and local
+upload manifest generation. Buttons that depend on external state still need
+that state to exist: real recording needs visible ROS2 topics matching the
+project config; image monitor needs an image topic; remote upload/connect/space
+checks need a reachable SSH server and credentials; AI buttons need a reachable
+OpenAI-compatible API endpoint and key.
 
 ## Docker Packaging
 

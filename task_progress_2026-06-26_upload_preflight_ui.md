@@ -146,6 +146,9 @@
 - Docker entrypoint now uses the wrapper script explicitly and sources ROS without `nounset`, so mounted ROS setup does not abort startup.
 - ROS environment normalization now imports sourced ROS PATH/LD_LIBRARY_PATH/AMENT variables into frontend/backend child processes.
 - Settings Environment command checks now use the sourced ROS PATH, preventing false `ros2 command not found` warnings in Docker.
+- Local/script install now declares Pillow in Python dependencies, matching the compressed-image decode path used by ROS image preview.
+- Bootstrap now checks recommended Ubuntu runtime packages for Qt/PySide, Chinese fonts, SSH/rsync upload tools, and Xauthority support.
+- README now documents the clean Ubuntu 22.04 + ROS2 install package set and clarifies which buttons require external ROS topics, SSH servers, or AI endpoints.
 
 ## Verification
 
@@ -178,6 +181,11 @@
 - Rebuilt `robodataset-studio:ros-final-test`; restarted Docker GUI container successfully.
 - Verified Docker backend environment includes `/opt/ros/humble/bin` in PATH and `/opt/ros/humble` in AMENT/LD paths.
 - Verified Docker fontconfig matches `Noto Sans CJK SC`, reports Chinese fonts, imports PIL, and Settings Environment returns `issue_count: 0`.
+- Local offscreen UI smoke test constructed MainWindow, Collect, Convert, Review, Upload, Logs, Settings, Tutorial, ROS, Config Library, and Inspector pages.
+- Docker offscreen UI smoke test constructed the same pages from the container runtime.
+- Local API chain smoke test passed: create project, simulated collection, review scan/check, merge, HDF5 export, upload manifest, settings, and environment diagnostics.
+- Docker API chain smoke test passed under `/workspace/robodataset-studio`: create project, simulated collection, review scan/check, merge, HDF5 export, upload manifest, settings, and environment diagnostics.
+- Bootstrap syntax check passed and a local bootstrap rerun completed with Python 3.10 and `rclpy: OK`.
 
 ## Issues Encountered
 

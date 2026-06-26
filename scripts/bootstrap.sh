@@ -7,6 +7,21 @@ VENV_DIR="${VENV_DIR:-${ROOT_DIR}/.venv}"
 CONDA_EXE="${CONDA_EXE:-$(command -v conda || true)}"
 CONDA_ENV_DIR="${CONDA_ENV_DIR:-${ROOT_DIR}/.conda-env}"
 ENV_BACKEND="${ENV_BACKEND:-auto}"
+SYSTEM_RUNTIME_PACKAGES=(
+  fontconfig
+  fonts-noto-cjk
+  libdbus-1-3
+  libegl1
+  libgl1
+  libglib2.0-0
+  libxcb-cursor0
+  libxcb-xinerama0
+  libxkbcommon-x11-0
+  openssh-client
+  rsync
+  xauth
+)
+
 select_ros_setup() {
   for candidate in "${ROS_SETUP:-}" /opt/ros/humble/setup.bash /opt/ros/jazzy/setup.bash; do
     if [[ -n "${candidate}" && -f "${candidate}" ]]; then
@@ -86,8 +101,64 @@ rmw_graph_score() {
   printf '%s\n' "${weighted}"
 }
 
+install_system_runtime_packages() {
+  local packages=("$@")
+  if [[ "${#packages[@]}" -eq 0 ]]; then
+    return 0
+  fi
+  if ! command -v sudo >/dev/null 2>&1; then
+    return 1
+  fi
+  sudo apt-get update
+  sudo apt-get install -y "${packages[@]}"
+}
+
+ensure_system_runtime_packages() {
+  if ! command -v apt-get >/dev/null 2>&1 || ! command -v dpkg-query >/dev/null 2>&1; then
+    return 0
+  fi
+  local missing=()
+  local package
+  for package in "${SYSTEM_RUNTIME_PACKAGES[@]}"; do
+    if ! dpkg-query -W -f='${Status}' "${package}" 2>/dev/null | grep -q "install ok installed"; then
+      missing+=("${package}")
+    fi
+  done
+  if [[ "${#missing[@]}" -eq 0 ]]; then
+    return 0
+  fi
+  echo "Missing recommended system runtime packages: ${missing[*]}" >&2
+  case "${AUTO_INSTALL_SYSTEM_DEPS:-ask}" in
+    1|yes|true)
+      install_system_runtime_packages "${missing[@]}" || true
+      ;;
+    0|no|false)
+      echo "Install them manually if Qt, Chinese text, or upload tools fail:" >&2
+      echo "  sudo apt-get update && sudo apt-get install -y ${missing[*]}" >&2
+      ;;
+    ask|*)
+      if [[ -t 0 ]]; then
+        read -r -p "Install recommended system runtime packages with sudo now? [Y/n] " answer
+        case "${answer}" in
+          n|N|no|NO)
+            echo "Install them manually if Qt, Chinese text, or upload tools fail:" >&2
+            echo "  sudo apt-get update && sudo apt-get install -y ${missing[*]}" >&2
+            ;;
+          *)
+            install_system_runtime_packages "${missing[@]}" || true
+            ;;
+        esac
+      else
+        echo "Install them manually if Qt, Chinese text, or upload tools fail:" >&2
+        echo "  sudo apt-get update && sudo apt-get install -y ${missing[*]}" >&2
+      fi
+      ;;
+  esac
+}
+
 ROS_SETUP="$(select_ros_setup)"
 ROBODATASET_RMW_IMPLEMENTATION="$(select_rmw)"
+ensure_system_runtime_packages
 
 python_version() {
   "$1" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")'
