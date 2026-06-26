@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from robodataset_studio_v3.services.recording_service import recording_service
@@ -27,17 +27,23 @@ def preflight(request: ProjectRequest) -> dict[str, Any]:
 
 @router.post("/start", response_model=dict[str, Any])
 def start(request: RecordingStartRequest) -> dict[str, Any]:
-    return recording_service.start(
-        request.project_key,
-        mode=request.mode,
-        duration_sec=request.duration_sec,
-        target_samples=request.target_samples,
-    )
+    try:
+        return recording_service.start(
+            request.project_key,
+            mode=request.mode,
+            duration_sec=request.duration_sec,
+            target_samples=request.target_samples,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/simulate", response_model=dict[str, Any])
 def simulate(request: RecordingStartRequest) -> dict[str, Any]:
-    return recording_service.simulate(request.project_key, target_samples=request.target_samples)
+    try:
+        return recording_service.simulate(request.project_key, target_samples=request.target_samples)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/stop", response_model=dict[str, Any])

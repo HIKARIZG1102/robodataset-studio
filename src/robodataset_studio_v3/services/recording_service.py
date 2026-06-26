@@ -19,6 +19,7 @@ from robodataset_studio_v3.core.runtime_env import apply_ros_environment, defaul
 from robodataset_studio_v3.ros.image_conversion import is_image_message_type
 from robodataset_studio_v3.ros.message_conversion import is_supported_generic_message_type, unsupported_message_type_warning
 from robodataset_studio_v3.services.project_service import project_service
+from robodataset_studio_v3.services.project_lock import ProjectLock
 from robodataset_studio_v3.services.ros_service import ros_service
 from robodataset_studio_v3.services.task_service import task_service
 
@@ -180,33 +181,39 @@ class RecordingService:
             recording["episode_duration_sec"] = float(duration_sec)
         if target_samples is not None:
             recording["target_samples"] = int(target_samples)
-        session_name = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        session_dir = project_dir / "raw_sessions" / session_name
-        training_dir = session_dir / "training"
-        training_dir.mkdir(parents=True, exist_ok=True)
-        payload = yaml.safe_dump(dataset_config, sort_keys=False, allow_unicode=True)
-        (session_dir / "dataset_config.yaml").write_text(payload, encoding="utf-8")
-        (session_dir / "collection_config.yaml").write_text(payload, encoding="utf-8")
-        stop_file = session_dir / ".recording_stop"
-        if stop_file.exists():
-            stop_file.unlink()
-        task = task_service.create_task("recording", f"recording started for {project_key}")
-        process = self._launch_recording_process(session_dir / "dataset_config.yaml", training_dir, stop_file, duration_sec, target_samples)
-        self.active[project_key] = {"task_id": task.task_id, "session_dir": str(session_dir), "mode": mode, "stop_file": stop_file, "process": process, "cancelled": False}
-        task_service.register_cancel_callback(task.task_id, lambda key=project_key: self.cancel_recording(key))
-        task_service.add_log(task.task_id, f"session: {session_dir}")
-        self._log_recording_plan(task.task_id, dataset_config, mode, duration_sec, target_samples)
-        Thread(
-            target=self._recording_monitor,
-            args=(task.task_id, process, training_dir, dataset_config, target_samples),
-            daemon=True,
-        ).start()
-        Thread(
-            target=self._record_worker,
-            args=(project_key, task.task_id, process, training_dir, stop_file),
-            daemon=True,
-        ).start()
-        return {"task_id": task.task_id, "session_dir": str(session_dir), "mode": mode}
+        lock = ProjectLock(project_dir, "recording")
+        lock.acquire()
+        try:
+            session_name = self._session_name()
+            session_dir = project_dir / "raw_sessions" / session_name
+            training_dir = session_dir / "training"
+            training_dir.mkdir(parents=True, exist_ok=False)
+            payload = yaml.safe_dump(dataset_config, sort_keys=False, allow_unicode=True)
+            (session_dir / "dataset_config.yaml").write_text(payload, encoding="utf-8")
+            (session_dir / "collection_config.yaml").write_text(payload, encoding="utf-8")
+            stop_file = session_dir / ".recording_stop"
+            if stop_file.exists():
+                stop_file.unlink()
+            task = task_service.create_task("recording", f"recording started for {project_key}")
+            process = self._launch_recording_process(session_dir / "dataset_config.yaml", training_dir, stop_file, duration_sec, target_samples)
+            self.active[project_key] = {"task_id": task.task_id, "session_dir": str(session_dir), "mode": mode, "stop_file": stop_file, "process": process, "cancelled": False, "lock": lock}
+            task_service.register_cancel_callback(task.task_id, lambda key=project_key: self.cancel_recording(key))
+            task_service.add_log(task.task_id, f"session: {session_dir}")
+            self._log_recording_plan(task.task_id, dataset_config, mode, duration_sec, target_samples)
+            Thread(
+                target=self._recording_monitor,
+                args=(task.task_id, process, training_dir, dataset_config, target_samples),
+                daemon=True,
+            ).start()
+            Thread(
+                target=self._record_worker,
+                args=(project_key, task.task_id, process, training_dir, stop_file),
+                daemon=True,
+            ).start()
+            return {"task_id": task.task_id, "session_dir": str(session_dir), "mode": mode}
+        except Exception:
+            lock.release()
+            raise
 
     def stop(self, project_key: str) -> dict[str, Any]:
         state = self.active.get(project_key)
@@ -232,12 +239,18 @@ class RecordingService:
         project_dir = self.projects.project_dir(project_key)
         dataset_config = self.configs.read_dataset_config(project_dir)
         self.configs.sync_dataset_schema(dataset_config)
-        session_name = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}_simulated"
-        session_dir = project_dir / "raw_sessions" / session_name
-        training_dir = session_dir / "training"
-        task = task_service.create_task("recording_simulate", f"simulating listener episode for {project_key}")
-        Thread(target=self._simulate_worker, args=(task.task_id, dataset_config, session_dir, training_dir, target_samples), daemon=True).start()
-        return {"task_id": task.task_id, "session_dir": str(session_dir), "mode": "simulate"}
+        lock = ProjectLock(project_dir, "simulate")
+        lock.acquire()
+        try:
+            session_name = self._session_name("simulated")
+            session_dir = project_dir / "raw_sessions" / session_name
+            training_dir = session_dir / "training"
+            task = task_service.create_task("recording_simulate", f"simulating listener episode for {project_key}")
+            Thread(target=self._simulate_worker, args=(task.task_id, dataset_config, session_dir, training_dir, target_samples, lock), daemon=True).start()
+            return {"task_id": task.task_id, "session_dir": str(session_dir), "mode": "simulate"}
+        except Exception:
+            lock.release()
+            raise
 
     def _record_worker(
         self,
@@ -272,6 +285,10 @@ class RecordingService:
         except Exception as exc:
             task_service.fail_task(task_id, message="recording failed", error=str(exc))
         finally:
+            state = self.active.get(project_key, {})
+            lock = state.get("lock") if isinstance(state, dict) else None
+            if isinstance(lock, ProjectLock):
+                lock.release()
             task_service.clear_cancel_callback(task_id)
             self.active.pop(project_key, None)
 
@@ -409,9 +426,9 @@ class RecordingService:
             except Exception:
                 return
 
-    def _simulate_worker(self, task_id: str, dataset_config: dict[str, Any], session_dir: Path, training_dir: Path, target_samples: int | None) -> None:
+    def _simulate_worker(self, task_id: str, dataset_config: dict[str, Any], session_dir: Path, training_dir: Path, target_samples: int | None, lock: ProjectLock) -> None:
         try:
-            training_dir.mkdir(parents=True, exist_ok=True)
+            training_dir.mkdir(parents=True, exist_ok=False)
             payload = yaml.safe_dump(dataset_config, sort_keys=False, allow_unicode=True)
             (session_dir / "dataset_config.yaml").write_text(payload, encoding="utf-8")
             (session_dir / "collection_config.yaml").write_text(payload, encoding="utf-8")
@@ -458,6 +475,8 @@ class RecordingService:
             task_service.complete_task(task_id, message="simulated episode written", result={"ok": True, "session_dir": str(session_dir), "steps": transition_count})
         except Exception as exc:
             task_service.fail_task(task_id, message="simulation failed", error=str(exc))
+        finally:
+            lock.release()
 
     def _simulated_frame(self, index: int) -> np.ndarray:
         height, width = 120, 160
@@ -482,6 +501,10 @@ class RecordingService:
             file.flush()
             os.fsync(file.fileno())
         tmp_path.replace(path)
+
+    def _session_name(self, suffix: str = "") -> str:
+        base = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_{os.getpid()}"
+        return f"{base}_{suffix}" if suffix else base
 
     def _parse_hz(self, stdout: str) -> float | None:
         for line in stdout.splitlines():

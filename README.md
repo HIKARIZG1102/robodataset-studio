@@ -304,6 +304,14 @@ The run wrapper starts the container with the current host UID/GID, so files
 created by recording, review, conversion, and upload manifest generation remain
 editable from the host file manager.
 
+Docker and host launches can run at the same time. Each PySide window starts
+its own FastAPI backend on the first free local port, so a Docker window and a
+host/git-clone window do not share backend state. Concurrent writes to the same
+project are protected by `.robodataset.lock` in the project root: recording and
+simulated recording refuse to start when another backend is already writing that
+project. Session folders also include microseconds and the backend PID in their
+name to avoid accidental name collisions.
+
 Do not mount the host root `/` over the container root `/`. That hides the
 container's Ubuntu system, Python environment, and Studio installation. The
 supported Docker workflow is intentionally limited to the cloned repository
@@ -332,9 +340,10 @@ the derived stream, state, action, recording, and schema description.
 
 ## Backend Startup
 
-The PySide frontend checks `http://127.0.0.1:8765/api/health` on startup. If
-the backend is not running, it starts a local FastAPI process automatically. If
-port `8765` is occupied, the frontend tries the next local ports.
+Each PySide frontend starts its own local FastAPI backend. The first window
+tries `http://127.0.0.1:8765`; if that port is occupied, the frontend tries the
+next local ports. Shutdown only stops the backend process started by that
+window.
 
 Backend auto-start logs are written under:
 

@@ -24,19 +24,6 @@ class BackendProcess:
         self.started_process = False
 
     def ensure_running(self, timeout_sec: float = 8.0) -> None:
-        reusable_port = self._find_compatible_backend_port(self.port)
-        if reusable_port is not None:
-            self.port = reusable_port
-            self.api.base_url = f"http://{self.host}:{self.port}"
-            self.started_process = False
-            return
-        self.cleanup_stale_backends()
-        reusable_port = self._find_compatible_backend_port(self.port)
-        if reusable_port is not None:
-            self.port = reusable_port
-            self.api.base_url = f"http://{self.host}:{self.port}"
-            self.started_process = False
-            return
         self.port = self._find_free_port(self.port)
         self.api.base_url = f"http://{self.host}:{self.port}"
         self.start()
@@ -89,36 +76,6 @@ class BackendProcess:
         )
         self.started_process = True
 
-    def cleanup_stale_backends(self) -> None:
-        marker = "robodataset_studio_v3.backend.main"
-        root_marker = str(self.root_dir)
-        try:
-            output = subprocess.check_output(["ps", "-eo", "pid,args"], text=True)
-        except Exception:
-            return
-        current_pid = os.getpid()
-        for line in output.splitlines():
-            line = line.strip()
-            if marker not in line:
-                continue
-            try:
-                pid_text = line.split(None, 1)[0]
-                pid = int(pid_text)
-            except Exception:
-                continue
-            if pid == current_pid:
-                continue
-            if not self._pid_cwd_matches(pid, root_marker):
-                continue
-            self._kill_pid(pid)
-
-    def _pid_cwd_matches(self, pid: int, root_marker: str) -> bool:
-        try:
-            cwd = os.readlink(f"/proc/{pid}/cwd")
-        except Exception:
-            return False
-        return cwd == root_marker
-
     def _python_executable(self) -> str:
         image_venv = os.environ.get("ROBODATASET_VENV", "")
         if os.environ.get("ROBODATASET_DOCKER") and image_venv:
@@ -129,19 +86,6 @@ class BackendProcess:
         if venv_python.exists():
             return str(venv_python)
         return sys.executable
-
-    def _find_compatible_backend_port(self, preferred: int) -> int | None:
-        original_base_url = self.api.base_url
-        for port in [preferred, *range(8766, 8790)]:
-            if not self._port_in_use(port):
-                continue
-            self.api.base_url = f"http://{self.host}:{port}"
-            try:
-                if self.is_healthy() and self.has_required_routes():
-                    return port
-            finally:
-                self.api.base_url = original_base_url
-        return None
 
     def _find_free_port(self, preferred: int) -> int:
         for port in [preferred, *range(8766, 8790)]:
@@ -216,28 +160,3 @@ class BackendProcess:
         finally:
             self.process = None
             self.started_process = False
-
-    def _kill_pid(self, pid: int) -> None:
-        try:
-            os.killpg(pid, signal.SIGTERM)
-        except ProcessLookupError:
-            return
-        except Exception:
-            try:
-                os.kill(pid, signal.SIGTERM)
-            except Exception:
-                return
-        deadline = time.time() + 1.0
-        while time.time() < deadline:
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                return
-            time.sleep(0.05)
-        try:
-            os.killpg(pid, signal.SIGKILL)
-        except Exception:
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except Exception:
-                pass

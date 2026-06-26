@@ -131,6 +131,13 @@
 - Frontend API client now surfaces backend error details instead of generic HTTP errors.
 - Preflight now samples the ROS graph first and reports runtime details.
 - Preflight topic probes run in parallel and use shorter echo/hz checks.
+- Each PySide window now starts its own FastAPI backend on the first free local port instead of reusing another running backend.
+- Frontend shutdown now only stops the backend process created by that frontend instance.
+- Recording and simulated recording now acquire a project-level `.robodataset.lock` before writing a session.
+- Project write locks work both within one backend process and across separate backend processes, including Docker + host runs over the same mounted project.
+- Recording session folder names now include microseconds and backend PID to reduce accidental name collisions.
+- Recording start/simulate lock conflicts now return readable HTTP 409 errors instead of generic backend failures.
+- README now explains Docker/host concurrent startup behavior and same-project write protection.
 
 ## Verification
 
@@ -155,6 +162,9 @@
 - AI smoke test against a local OpenAI-compatible mock service confirms `/api/ai/models`, `/api/ai/send`, and Settings model refresh return `mock-model`.
 - Reproduced Docker `Errno 111` as a live frontend with no backend listener on `8765` after an offscreen smoke test killed the shared backend.
 - Verified a second Docker `MainWindow` now reuses `http://127.0.0.1:8765` with `started_process=False`, opens Tutorial, exits, and leaves the Docker backend process running.
+- Verified two local backend managers with an existing `8765` listener start on `8766` and `8767`, and stopping one does not stop the other.
+- Verified project locks block a second acquisition inside the same backend process.
+- Verified project locks block a second acquisition from another process and report the holder PID/purpose.
 
 ## Issues Encountered
 
