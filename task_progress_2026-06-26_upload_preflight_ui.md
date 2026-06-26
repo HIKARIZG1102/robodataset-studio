@@ -141,6 +141,11 @@
 - User-facing app title is now `RoboDataset Studio` in the PySide title bar, About dialog, FastAPI docs title, README, and launcher/bootstrap messages.
 - Settings and Inspector Chinese translations now include newly added maintenance/image-monitor/session-AI buttons.
 - Runtime button text such as graph refresh and model refresh now restores through the active language instead of falling back to English.
+- Docker image now installs Noto CJK fonts/fontconfig so Chinese UI text renders as glyphs instead of boxes.
+- Docker image now installs Pillow through system packages so Settings Environment no longer warns about missing `PIL`.
+- Docker entrypoint now uses the wrapper script explicitly and sources ROS without `nounset`, so mounted ROS setup does not abort startup.
+- ROS environment normalization now imports sourced ROS PATH/LD_LIBRARY_PATH/AMENT variables into frontend/backend child processes.
+- Settings Environment command checks now use the sourced ROS PATH, preventing false `ros2 command not found` warnings in Docker.
 
 ## Verification
 
@@ -170,6 +175,9 @@
 - Verified project locks block a second acquisition from another process and report the holder PID/purpose.
 - Local offscreen UI smoke test confirmed the window title has no V3 and Chinese menu/Settings/Inspector buttons translate.
 - Docker offscreen UI smoke test confirmed the mounted Docker app title and Chinese menu/Settings/Inspector buttons translate.
+- Rebuilt `robodataset-studio:ros-final-test`; restarted Docker GUI container successfully.
+- Verified Docker backend environment includes `/opt/ros/humble/bin` in PATH and `/opt/ros/humble` in AMENT/LD paths.
+- Verified Docker fontconfig matches `Noto Sans CJK SC`, reports Chinese fonts, imports PIL, and Settings Environment returns `issue_count: 0`.
 
 ## Issues Encountered
 

@@ -112,11 +112,12 @@ class EnvironmentService:
             detail="Diagnostics could not source ROS setup; checks will use the current process environment." if not sourced_env else "",
             impact="If ROS setup is not sourced, ros2 CLI plugins and Python packages may appear missing.",
         )
+        diagnostics_env = sourced_env or os.environ.copy()
         available_rmw = available_rmw_implementations()
         add("Available RMW implementations", available_rmw, "ok" if available_rmw else "warning", detail="At least one ROS 2 RMW implementation should be available.", impact="ROS discovery and subscriptions require a working RMW implementation.")
         selected_rmw = select_rmw(probe_graph=True)
         add("Auto-selected RMW", selected_rmw)
-        rmw_diagnostics = self._rmw_diagnostics(sourced_env or os.environ.copy())
+        rmw_diagnostics = self._rmw_diagnostics(diagnostics_env)
         graph_scores = {name: int(info.get("topic_count", 0)) for name, info in rmw_diagnostics.items() if info.get("installed")}
         add("RMW graph probe scores", graph_scores)
         runnable_rmw = [name for name, info in rmw_diagnostics.items() if info.get("installed") and info.get("cli_ok")]
@@ -145,7 +146,7 @@ class EnvironmentService:
                 detail=" | ".join(detail_parts),
                 impact=RMW_NOTES.get(name, "ROS2 middleware runtime must match the publisher environment."),
             )
-        missing_cli_modules = self._missing_system_python_modules(ROS_CLI_SYSTEM_MODULES, sourced_env or os.environ.copy())
+        missing_cli_modules = self._missing_system_python_modules(ROS_CLI_SYSTEM_MODULES, diagnostics_env)
         add(
             "ROS CLI system Python modules",
             "ok" if not missing_cli_modules else "missing: " + ", ".join(missing_cli_modules),
@@ -164,7 +165,7 @@ class EnvironmentService:
         )
 
         for command in ["ros2", "ssh", "rsync", "sftp", "python3"]:
-            path = shutil.which(command)
+            path = self._which(command, diagnostics_env)
             add(f"System command: {command}", path or "missing", "ok" if path else "warning", detail=f"{command} command not found." if not path else "", impact=self._command_impact(command) if not path else "")
 
         return {
@@ -268,10 +269,11 @@ class EnvironmentService:
         return diagnostics
 
     def _ros_package_exists(self, name: str) -> bool:
-        if not shutil.which("ros2"):
+        env = self._ros_sourced_env(default_ros_setup()) or os.environ.copy()
+        if not self._which("ros2", env):
             return False
         try:
-            completed = subprocess.run(["ros2", "pkg", "prefix", name], check=False, capture_output=True, text=True, timeout=1.5)
+            completed = subprocess.run(["ros2", "pkg", "prefix", name], check=False, capture_output=True, text=True, timeout=1.5, env=env)
         except Exception:
             return False
         return completed.returncode == 0
@@ -373,6 +375,10 @@ class EnvironmentService:
         except Exception:
             return {}
         return {str(key): str(value) for key, value in payload.items()}
+
+    def _which(self, command: str, env: dict[str, str]) -> str:
+        path = shutil.which(command, path=env.get("PATH"))
+        return path or ""
 
     def _environment_guidance(self, rmw_diagnostics: dict[str, dict[str, Any]], missing_cli_modules: list[str]) -> list[str]:
         guidance = [

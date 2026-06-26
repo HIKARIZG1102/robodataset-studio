@@ -36,7 +36,6 @@ docker_args=(
   -e CMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH:-}"
   -e COLCON_PREFIX_PATH="${COLCON_PREFIX_PATH:-}"
   -e LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
-  -e PYTHONPATH="${PYTHONPATH:-}"
   -e ROBODATASET_DOCKER=1
   -e ROBODATASET_ALLOWED_ROOT=/workspace/robodataset-studio
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw

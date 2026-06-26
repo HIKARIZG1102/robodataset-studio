@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -42,10 +43,11 @@ def available_rmw_implementations() -> list[str]:
 
 
 def _ros_package_exists(name: str) -> bool:
-    if not shutil.which("ros2"):
+    env = _ros_sourced_env(default_ros_setup()) or os.environ.copy()
+    if not shutil.which("ros2", path=env.get("PATH")):
         return False
     try:
-        completed = subprocess.run(["ros2", "pkg", "prefix", name], check=False, capture_output=True, text=True, timeout=1.5)
+        completed = subprocess.run(["ros2", "pkg", "prefix", name], check=False, capture_output=True, text=True, timeout=1.5, env=env)
         return completed.returncode == 0
     except Exception:
         return False
@@ -70,6 +72,11 @@ def select_rmw(explicit: str | None = None, *, probe_graph: bool = True) -> str:
 def apply_ros_environment(env: dict[str, str] | None = None) -> dict[str, str]:
     target = env if env is not None else os.environ
     target.setdefault("ROS_SETUP", default_ros_setup())
+    sourced = _ros_sourced_env(target.get("ROS_SETUP", ""))
+    if sourced:
+        for key in ("AMENT_PREFIX_PATH", "CMAKE_PREFIX_PATH", "COLCON_PREFIX_PATH", "LD_LIBRARY_PATH", "PATH"):
+            if sourced.get(key):
+                target[key] = sourced[key]
     selected = select_rmw(target.get("ROBODATASET_RMW_IMPLEMENTATION") or target.get("RMW_IMPLEMENTATION"))
     target["ROBODATASET_RMW_IMPLEMENTATION"] = selected
     target["RMW_IMPLEMENTATION"] = selected
@@ -79,6 +86,31 @@ def apply_ros_environment(env: dict[str, str] | None = None) -> dict[str, str]:
     except Exception:
         target["ROS_LOG_DIR"] = "/tmp"
     return target
+
+
+def _ros_sourced_env(ros_setup: str) -> dict[str, str]:
+    if not ros_setup or not Path(ros_setup).is_file():
+        return {}
+    command = (
+        f"source {shlex.quote(ros_setup)} >/dev/null 2>&1 || exit 1; "
+        "python3 - <<'PY'\n"
+        "import json, os\n"
+        "print(json.dumps(dict(os.environ)))\n"
+        "PY"
+    )
+    try:
+        completed = subprocess.run(["/bin/bash", "-lc", command], check=False, capture_output=True, text=True, timeout=3)
+    except Exception:
+        return {}
+    if completed.returncode != 0:
+        return {}
+    try:
+        import json
+
+        payload = json.loads(completed.stdout)
+    except Exception:
+        return {}
+    return {str(key): str(value) for key, value in payload.items()}
 
 
 def _rmw_library_exists(name: str) -> bool:

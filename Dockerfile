@@ -15,7 +15,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-packaging \
     python3-numpy \
     python3-netifaces \
+    python3-pil \
     python3-yaml \
+    fontconfig \
+    fonts-noto-cjk \
     libpython3.10 \
     libegl1 \
     libdbus-1-3 \
@@ -75,9 +78,11 @@ RUN python3 -m venv --system-site-packages "${ROBODATASET_VENV}" \
 
 RUN printf '%s\n' \
     '#!/usr/bin/env bash' \
-    'set -euo pipefail' \
+    'set -eo pipefail' \
     'cd /workspace/robodataset-studio' \
     'if [[ -n "${ROS_SETUP:-}" && -f "${ROS_SETUP}" ]]; then source "${ROS_SETUP}" >/dev/null 2>&1 || true; fi' \
+    'if [[ -d /opt/ros/humble/bin ]]; then export PATH="/opt/ros/humble/bin:${PATH}"; fi' \
+    'if [[ -d /opt/ros/jazzy/bin ]]; then export PATH="/opt/ros/jazzy/bin:${PATH}"; fi' \
     'export PATH="${ROBODATASET_VENV:-/opt/robodataset-studio/venv}/bin:${PATH}"' \
     'export PYTHONPATH="/workspace/robodataset-studio/src:${PYTHONPATH:-}"' \
     'export ROS_LOG_DIR="${ROS_LOG_DIR:-/tmp/robodataset_ros_logs}"' \
@@ -85,4 +90,4 @@ RUN printf '%s\n' \
     'exec "${ROBODATASET_VENV:-/opt/robodataset-studio/venv}/bin/python" -m robodataset_studio_v3.frontend.main "$@"' \
     > /usr/local/bin/robodataset-studio && chmod +x /usr/local/bin/robodataset-studio
 
-ENTRYPOINT ["robodataset-studio"]
+ENTRYPOINT ["/usr/local/bin/robodataset-studio"]
