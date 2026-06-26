@@ -36,9 +36,6 @@ CORE_ROS_PYTHON_PACKAGES = {
     "tf2_msgs",
 }
 OPTIONAL_ROS_PYTHON_PACKAGES = {
-    "interbotix_xs_msgs",
-    "realsense2_camera_msgs",
-    "orbbec_camera_msgs",
     "cv_bridge",
 }
 ROS_PYTHON_PACKAGES = CORE_ROS_PYTHON_PACKAGES | OPTIONAL_ROS_PYTHON_PACKAGES
@@ -83,9 +80,6 @@ class EnvironmentService:
             "geometry_msgs",
             "nav_msgs",
             "tf2_msgs",
-            "interbotix_xs_msgs",
-            "realsense2_camera_msgs",
-            "orbbec_camera_msgs",
             "cv_bridge",
         ]
         for package in package_names:
@@ -235,9 +229,6 @@ class EnvironmentService:
 
     def _optional_ros_package_impact(self, package: str) -> str:
         return {
-            "interbotix_xs_msgs": "Only Interbotix-specific custom message topics need this package; generic ROS topics can still be discovered and recorded.",
-            "realsense2_camera_msgs": "Only RealSense-specific custom message topics need this package; standard image topics can still be handled.",
-            "orbbec_camera_msgs": "Only Orbbec-specific custom message topics need this package; standard image topics can still be handled.",
             "cv_bridge": "cv_bridge-specific conversion is unavailable; Pillow/QImage/raw image decode paths remain available.",
             "cv2": "OpenCV-specific image conversion is unavailable; Pillow/QImage/raw image decode paths remain available.",
         }.get(package, "This optional adapter is only required when selected ROS topics use that package.")

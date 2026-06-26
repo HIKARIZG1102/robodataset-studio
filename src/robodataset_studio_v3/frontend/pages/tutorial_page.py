@@ -77,7 +77,11 @@ class TutorialPage(QWidget):
               <li><b>QoS:</b> Image and sensor topics usually need sensor-data QoS.</li>
               <li><b>Messages:</b> V3 supports Image, CompressedImage, JointState,
               IMU, Odometry, geometry messages, and common std_msgs arrays/scalars.
-              Unsupported custom messages should fail or warn explicitly.</li>
+              Vendor/custom message packages are not hard-coded globally; when a
+              selected topic uses a custom type, Studio tries to load that exact
+              package from the active ROS workspace and reports that topic if it
+              is unavailable. Unsupported custom messages should fail or warn
+              explicitly.</li>
               <li><b>Image encodings:</b> rgb8, bgr8, mono/depth, float depth, and
               compressed image streams require separate decode handling.</li>
             </ul>

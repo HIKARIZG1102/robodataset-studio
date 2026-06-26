@@ -35,7 +35,8 @@
 - [x] Prevent local PySide windows from reusing a Docker-mode FastAPI backend on the same host port.
 - [x] Rename the frontend File menu to Project.
 - [x] Split HDF5 conversion into an export-format selector plus a separate Export button.
-- [x] Reclassify optional ROS adapter packages and optional OpenCV image backend as non-blocking environment capabilities.
+- [x] Remove hard-coded vendor ROS message packages from global environment diagnostics.
+- [x] Reclassify optional OpenCV/cv_bridge image backends as non-blocking environment capabilities.
 - [x] Clarify that remote ROS nodes can appear through live DDS discovery and are not GitHub/project data.
 - [x] Pull latest `v3-fastapi-pyside` from GitHub and verify local/remote are synchronized.
 - [x] Test new Docker packaging and identify runtime Qt dependency gaps.
@@ -99,7 +100,8 @@
 - If Docker is already serving `127.0.0.1:8765`, a local non-Docker frontend now skips it and starts a local backend on the next free port.
 - The main menu now shows Project instead of File.
 - Convert now exposes an export format dropdown, currently with HDF5 as the only selectable format, and a separate Export action.
-- Settings Environment no longer reports missing `interbotix_xs_msgs`, `realsense2_camera_msgs`, `orbbec_camera_msgs`, or `cv2` as blocking ROS/DDS issues when those adapters are not needed.
+- Settings Environment no longer checks arbitrary vendor message packages globally; custom topic message packages are handled dynamically when a selected ROS topic actually uses them.
+- Settings Environment no longer reports missing `cv2`/`cv_bridge` as blocking ROS/DDS issues when fallback image paths are available.
 - Help/README now explicitly state that visible nodes from another workstation are normal ROS2 DDS discovery when domain/network settings match.
 - Docker image now installs `libdbus-1-3`, `libfontconfig1`, and `libfreetype6`, which PySide6/Qt needs at runtime.
 - `scripts/docker_run.sh` now supports non-interactive launches without Docker failing on `the input device is not a TTY`.

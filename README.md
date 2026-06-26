@@ -48,6 +48,10 @@ The software must adapt several communication layers:
   metadata topics may use different reliability/durability settings.
 - ROS message families: images, compressed images, joint states, IMU, odometry,
   geometry messages, and common `std_msgs` scalar/array topics.
+  Vendor/custom message packages are not hard-coded as global dependencies.
+  When a selected topic uses a custom type, Studio tries to load that exact
+  `package/msg/Type` through the active ROS workspace and reports that topic's
+  missing package if it is unavailable.
 - Image encodings: `rgb8`, `bgr8`, `mono8`, `16UC1`, `16SC1`, `32FC1`, padded
   row strides, endian handling, and compressed JPEG/PNG-style streams.
 - Dataset storage mapping: ROS messages must be converted into arrays,
