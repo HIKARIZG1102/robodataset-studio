@@ -24,7 +24,12 @@ class BackendProcess:
 
     def ensure_running(self, timeout_sec: float = 8.0) -> None:
         self.cleanup_stale_backends()
-        self.port = self._find_available_port(self.port)
+        reusable_port = self._find_compatible_backend_port(self.port)
+        if reusable_port is not None:
+            self.port = reusable_port
+            self.api.base_url = f"http://{self.host}:{self.port}"
+            return
+        self.port = self._find_free_port(self.port)
         self.api.base_url = f"http://{self.host}:{self.port}"
         self.start()
         deadline = time.time() + timeout_sec
@@ -41,7 +46,7 @@ class BackendProcess:
             data = self.api.health()
         except Exception:
             return False
-        return data.get("status") == "ok"
+        return self._health_compatible(data)
 
     def has_required_routes(self) -> bool:
         try:
@@ -116,13 +121,49 @@ class BackendProcess:
             return str(venv_python)
         return sys.executable
 
-    def _find_available_port(self, preferred: int) -> int:
+    def _find_compatible_backend_port(self, preferred: int) -> int | None:
+        original_base_url = self.api.base_url
         for port in [preferred, *range(8766, 8790)]:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                sock.settimeout(0.1)
-                if sock.connect_ex((self.host, port)) != 0:
+            if not self._port_in_use(port):
+                continue
+            self.api.base_url = f"http://{self.host}:{port}"
+            try:
+                if self.is_healthy() and self.has_required_routes():
                     return port
+            finally:
+                self.api.base_url = original_base_url
+        return None
+
+    def _find_free_port(self, preferred: int) -> int:
+        for port in [preferred, *range(8766, 8790)]:
+            if not self._port_in_use(port):
+                return port
         raise RuntimeError("no available local backend port found")
+
+    def _port_in_use(self, port: int) -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.1)
+            return sock.connect_ex((self.host, port)) == 0
+
+    def _health_compatible(self, data: dict) -> bool:
+        if data.get("status") != "ok" or data.get("service") != "robodataset-studio-v3":
+            return False
+        if "docker" not in data or "root" not in data:
+            return False
+        expected_docker = self._docker_mode()
+        remote_docker = bool(data.get("docker"))
+        if remote_docker != expected_docker:
+            return False
+        remote_root = str(data.get("root") or "")
+        if remote_root:
+            try:
+                return Path(remote_root).resolve() == self.root_dir.resolve()
+            except Exception:
+                return remote_root == str(self.root_dir)
+        return not remote_docker
+
+    def _docker_mode(self) -> bool:
+        return str(os.environ.get("ROBODATASET_DOCKER", "")).lower() in {"1", "true", "yes"}
 
     def _port_from_url(self, url: str) -> int | None:
         try:

@@ -32,6 +32,7 @@
 - [x] Set Inspector default dock width around 320px and keep minimum at 260px so controls are visible without being overly wide.
 - [x] Split Inspector node/topic/image controls across rows so the right dock no longer opens with half-clipped controls.
 - [x] Persist Inspector dock width and left/right dock area in local settings.
+- [x] Prevent local PySide windows from reusing a Docker-mode FastAPI backend on the same host port.
 - [x] Pull latest `v3-fastapi-pyside` from GitHub and verify local/remote are synchronized.
 - [x] Test new Docker packaging and identify runtime Qt dependency gaps.
 - [x] Add missing Docker runtime libraries required by PySide6/Qt.
@@ -89,6 +90,9 @@
 - Logs page now shows an explicit empty-state message after task/log cleanup.
 - Inspector now receives a default right-dock width via `resizeDocks`, and its controls wrap into separate rows instead of relying on a very wide dock.
 - Inspector now restores the previous dock side and width on startup instead of always using the default layout.
+- Backend health now reports runtime identity: Docker mode, backend root, allowed root, and PID.
+- PySide backend startup now only reuses an already-running FastAPI backend when its runtime mode and repo root match the current frontend.
+- If Docker is already serving `127.0.0.1:8765`, a local non-Docker frontend now skips it and starts a local backend on the next free port.
 - Docker image now installs `libdbus-1-3`, `libfontconfig1`, and `libfreetype6`, which PySide6/Qt needs at runtime.
 - `scripts/docker_run.sh` now supports non-interactive launches without Docker failing on `the input device is not a TTY`.
 - Docker image now installs `libpython3.10` and `libspdlog1`, which are required for mounted ROS Humble Python nodes/CLI to import `rclpy`.
@@ -122,6 +126,7 @@
 - After fixing `rclpy`, FastDDS RMW loading exposed another missing runtime library: `libtinyxml2.so.9`.
 - After fixing RMW loading, ROS2 CLI plugin loading exposed missing system Python modules: `packaging`, `numpy`, `netifaces`, and `yaml`.
 - Current host ROS Humble install exposes FastDDS RMW libraries but does not expose CycloneDDS RMW libraries; new diagnostics now makes that explicit instead of leaving it as a silent missing graph.
+- With the old Docker backend occupying port `8765`, local `BackendProcess.ensure_running()` starts a non-Docker backend on `8766` and reports `docker: false` in `/api/health`.
 
 ## Issues Encountered
 
@@ -136,3 +141,4 @@
 - Visually confirm the bottom status bar no longer overlaps at your preferred zoom/window size.
 - Try the Upload page again with the intended server/path/password and confirm any remaining failure displays a specific reason.
 - Run Collect preflight from the UI and confirm the timeout warning is gone.
+- Restart the local PySide window and confirm external project/session paths no longer produce Docker workspace policy errors.
