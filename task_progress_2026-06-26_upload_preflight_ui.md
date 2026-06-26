@@ -33,6 +33,10 @@
 - [x] Split Inspector node/topic/image controls across rows so the right dock no longer opens with half-clipped controls.
 - [x] Persist Inspector dock width and left/right dock area in local settings.
 - [x] Prevent local PySide windows from reusing a Docker-mode FastAPI backend on the same host port.
+- [x] Rename the frontend File menu to Project.
+- [x] Split HDF5 conversion into an export-format selector plus a separate Export button.
+- [x] Reclassify optional ROS adapter packages and optional OpenCV image backend as non-blocking environment capabilities.
+- [x] Clarify that remote ROS nodes can appear through live DDS discovery and are not GitHub/project data.
 - [x] Pull latest `v3-fastapi-pyside` from GitHub and verify local/remote are synchronized.
 - [x] Test new Docker packaging and identify runtime Qt dependency gaps.
 - [x] Add missing Docker runtime libraries required by PySide6/Qt.
@@ -93,6 +97,10 @@
 - Backend health now reports runtime identity: Docker mode, backend root, allowed root, and PID.
 - PySide backend startup now only reuses an already-running FastAPI backend when its runtime mode and repo root match the current frontend.
 - If Docker is already serving `127.0.0.1:8765`, a local non-Docker frontend now skips it and starts a local backend on the next free port.
+- The main menu now shows Project instead of File.
+- Convert now exposes an export format dropdown, currently with HDF5 as the only selectable format, and a separate Export action.
+- Settings Environment no longer reports missing `interbotix_xs_msgs`, `realsense2_camera_msgs`, `orbbec_camera_msgs`, or `cv2` as blocking ROS/DDS issues when those adapters are not needed.
+- Help/README now explicitly state that visible nodes from another workstation are normal ROS2 DDS discovery when domain/network settings match.
 - Docker image now installs `libdbus-1-3`, `libfontconfig1`, and `libfreetype6`, which PySide6/Qt needs at runtime.
 - `scripts/docker_run.sh` now supports non-interactive launches without Docker failing on `the input device is not a TTY`.
 - Docker image now installs `libpython3.10` and `libspdlog1`, which are required for mounted ROS Humble Python nodes/CLI to import `rclpy`.
@@ -118,7 +126,7 @@
 - `/api/upload/manifest` with a missing local path returns `400 Bad Request` with a clear detail.
 - `/api/ros/graph` now sees mock arm and USB camera topics after app restart with `ROS_LOCALHOST_ONLY=1`.
 - `/api/recording/preflight` for `mock_test_v1` returns `ok: true` in about 9.5 seconds.
-- HDF5 conversion was reproduced against mock session data containing `mock_widowx_task_phase` with Unicode dtype and now succeeds.
+- HDF5 conversion was reproduced against mock session data containing `mock_robot_task_phase` with Unicode dtype and now succeeds.
 - `git fetch` against `origin/v3-fastapi-pyside` succeeded; local and remote commit counts are even.
 - Original Docker image reproduced `ImportError: libfontconfig.so.1` on startup.
 - Patched Docker image passed backend/frontend import smoke tests.
@@ -127,6 +135,8 @@
 - After fixing RMW loading, ROS2 CLI plugin loading exposed missing system Python modules: `packaging`, `numpy`, `netifaces`, and `yaml`.
 - Current host ROS Humble install exposes FastDDS RMW libraries but does not expose CycloneDDS RMW libraries; new diagnostics now makes that explicit instead of leaving it as a silent missing graph.
 - With the old Docker backend occupying port `8765`, local `BackendProcess.ensure_running()` starts a non-Docker backend on `8766` and reports `docker: false` in `/api/health`.
+- Environment diagnostics now reports `issue_count: 0` in the current local environment after optional package reclassification.
+- Offscreen UI smoke test confirms the menu starts with `Project` and the Convert export selector exposes `HDF5`.
 
 ## Issues Encountered
 

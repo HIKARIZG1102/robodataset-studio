@@ -25,7 +25,7 @@ class TutorialPage(QWidget):
 
             <h3>2. Create Project And Config</h3>
             <ol>
-              <li>Open <b>File</b>, then create or open a project from the Projects sidebar.</li>
+              <li>Open <b>Project</b>, then create or open a project from the Projects sidebar.</li>
               <li>Open <b>Config</b>, then create or open a reusable config from the Configs sidebar.</li>
               <li>In <b>Config Library -> ROS Topics</b>, select image, depth, state, sensor, or task topics.</li>
               <li>Click <b>Refresh config from selected topics</b> to build streams/state/action from selected topics.</li>
@@ -69,7 +69,11 @@ class TutorialPage(QWidget):
               ros2 CLI Python modules, and avoids known FastDDS shared-memory
               failures where possible.</li>
               <li><b>Discovery/network:</b> ROS_DOMAIN_ID, ROS_LOCALHOST_ONLY, multicast,
-              VPNs, and LAN routing can decide whether nodes see each other.</li>
+              VPNs, and LAN routing can decide whether nodes see each other.
+              Nodes from another machine can appear when they share the same
+              DDS domain and network; that is live ROS discovery, not project
+              data uploaded to GitHub. Use a separate ROS_DOMAIN_ID or
+              ROS_LOCALHOST_ONLY=1 when you want local-only testing.</li>
               <li><b>QoS:</b> Image and sensor topics usually need sensor-data QoS.</li>
               <li><b>Messages:</b> V3 supports Image, CompressedImage, JointState,
               IMU, Odometry, geometry messages, and common std_msgs arrays/scalars.

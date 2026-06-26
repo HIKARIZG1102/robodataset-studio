@@ -131,7 +131,7 @@ class MainWindow(QMainWindow):
             """
         )
 
-        file_menu = self.menuBar().addMenu("File")
+        file_menu = self.menuBar().addMenu("Project")
         file_menu.aboutToShow.connect(self._show_project_sidebar_from_menu)
         file_menu.addAction("New Project", self.new_project)
         file_menu.addAction("Open Project Folder", self.open_project_folder)

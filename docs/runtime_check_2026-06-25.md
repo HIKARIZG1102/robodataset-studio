@@ -5,7 +5,7 @@ Branch: `v3-fastapi-pyside`
 Clone path:
 
 ```text
-/home/hikarizg/codexworkspace/robodataset-studio-v3
+<repo-root>
 ```
 
 ## Environment

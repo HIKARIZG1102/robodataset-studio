@@ -40,6 +40,10 @@ The software must adapt several communication layers:
 - DDS transport and discovery: UDP/multicast, loopback/local-only mode,
   `ROS_DOMAIN_ID`, `ROS_LOCALHOST_ONLY`, shared-memory transport, LAN/VPN
   behavior, and FastDDS SHM failure modes.
+  Nodes from another workstation can appear in the graph when they share the
+  same DDS domain and network. That is live ROS2 discovery, not project data
+  stored in the repository. Use a separate `ROS_DOMAIN_ID` or
+  `ROS_LOCALHOST_ONLY=1` for local-only tests.
 - QoS: image/sensor topics usually require sensor-data QoS, while state and
   metadata topics may use different reliability/durability settings.
 - ROS message families: images, compressed images, joint states, IMU, odometry,

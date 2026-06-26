@@ -2,8 +2,8 @@
 
 ## Completed
 
-- Verified the ROS graph exposes `/usb_camera/image_raw`.
-- Verified `/usb_camera/image_raw` type is `sensor_msgs/msg/Image`.
+- Verified the ROS graph exposes `/example_camera/image_raw`.
+- Verified `/example_camera/image_raw` type is `sensor_msgs/msg/Image`.
 - Verified the temporary USB camera node is publishing real frames.
 - Verified `image_preview_cli` can subscribe and receive frames.
 - Found the Inspector image path depended on Qt decoding a base64 PPM payload.
@@ -35,13 +35,13 @@
 ## Verification
 
 ```text
-/usb_camera/image_raw sensor_msgs/msg/Image visible in /api/ros/graph
+/example_camera/image_raw sensor_msgs/msg/Image visible in /api/ros/graph
 image_preview_cli emitted status and frame payload
 rgb payload length: 1228800 bytes for 640x480 rgb8
 compileall passed
 offscreen Inspector frame decode produced a non-null QImage
-ROS_LOCALHOST_ONLY=1 with rmw_fastrtps_cpp shows /usb_camera/image_raw via ros2 topic list
-/api/ros/graph reports /usb_camera/image_raw after restarting the app with matching ROS_LOCALHOST_ONLY
+ROS_LOCALHOST_ONLY=1 with rmw_fastrtps_cpp shows /example_camera/image_raw via ros2 topic list
+/api/ros/graph reports /example_camera/image_raw after restarting the app with matching ROS_LOCALHOST_ONLY
 ```
 
 ## Remaining

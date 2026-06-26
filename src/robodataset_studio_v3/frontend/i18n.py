@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 TEXTS: dict[str, dict[str, str]] = {
     "RoboDataset Studio V3": {"zh": "RoboDataset Studio V3", "en": "RoboDataset Studio V3"},
     "File": {"zh": "文件", "en": "File"},
+    "Project": {"zh": "项目", "en": "Project"},
     "New Project": {"zh": "新建项目", "en": "New Project"},
     "Open Project": {"zh": "打开项目", "en": "Open Project"},
     "Refresh Projects": {"zh": "刷新项目", "en": "Refresh Projects"},
@@ -161,6 +162,8 @@ TEXTS: dict[str, dict[str, str]] = {
     "Scan Sessions": {"zh": "扫描 Sessions", "en": "Scan Sessions"},
     "Merge Sessions": {"zh": "合并 Sessions", "en": "Merge Sessions"},
     "Convert To HDF5": {"zh": "转换为 HDF5", "en": "Convert To HDF5"},
+    "Export": {"zh": "导出", "en": "Export"},
+    "HDF5": {"zh": "HDF5", "en": "HDF5"},
     "Raw sessions root": {"zh": "Raw sessions 根目录", "en": "Raw sessions root"},
     "Output dir": {"zh": "输出目录", "en": "Output dir"},
     "Output name": {"zh": "输出名称", "en": "Output name"},

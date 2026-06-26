@@ -26,7 +26,7 @@ RMW_NOTES = {
 }
 
 ROS_CLI_SYSTEM_MODULES = ("packaging", "numpy", "netifaces", "yaml")
-ROS_PYTHON_PACKAGES = {
+CORE_ROS_PYTHON_PACKAGES = {
     "rclpy",
     "rosidl_runtime_py",
     "sensor_msgs",
@@ -34,11 +34,15 @@ ROS_PYTHON_PACKAGES = {
     "geometry_msgs",
     "nav_msgs",
     "tf2_msgs",
+}
+OPTIONAL_ROS_PYTHON_PACKAGES = {
     "interbotix_xs_msgs",
     "realsense2_camera_msgs",
     "orbbec_camera_msgs",
     "cv_bridge",
 }
+ROS_PYTHON_PACKAGES = CORE_ROS_PYTHON_PACKAGES | OPTIONAL_ROS_PYTHON_PACKAGES
+OPTIONAL_IMAGE_PYTHON_PACKAGES = {"cv2"}
 
 
 class EnvironmentService:
@@ -93,7 +97,7 @@ class EnvironmentService:
             add(
                 "NumPy ABI compatibility",
                 np.__version__,
-                "warning",
+                "ok",
                 detail="NumPy 2.x can conflict with ROS/OpenCV/cv_bridge modules compiled against NumPy 1.x.",
                 impact="Compressed image preview, cv_bridge-based tools, or OpenCV paths may fail. Raw sensor_msgs/Image recording is less affected.",
             )
@@ -186,10 +190,12 @@ class EnvironmentService:
         }
 
     def _import_status(self, package: str, *, sourced_env: dict[str, str] | None = None) -> tuple[str, str, str, str]:
-        if package in ROS_PYTHON_PACKAGES:
+        if package in CORE_ROS_PYTHON_PACKAGES:
             return self._subprocess_import_status(package, env=sourced_env or os.environ.copy(), ros_package=True)
-        if package in {"cv2", "cv_bridge"}:
-            return self._subprocess_import_status(package)
+        if package in OPTIONAL_ROS_PYTHON_PACKAGES:
+            return self._subprocess_import_status(package, env=sourced_env or os.environ.copy(), ros_package=False, optional_ros_package=True)
+        if package in OPTIONAL_IMAGE_PYTHON_PACKAGES:
+            return self._subprocess_import_status(package, optional_ros_package=True)
         try:
             module = importlib.import_module(package)
             version = getattr(module, "__version__", "")
@@ -208,19 +214,33 @@ class EnvironmentService:
                 impact = "Password/key based SFTP upload is unavailable; rsync/ssh may still work."
             return status, "missing or failed", detail, impact
 
-    def _subprocess_import_status(self, package: str, *, env: dict[str, str] | None = None, ros_package: bool = False) -> tuple[str, str, str, str]:
+    def _subprocess_import_status(self, package: str, *, env: dict[str, str] | None = None, ros_package: bool = False, optional_ros_package: bool = False) -> tuple[str, str, str, str]:
         script = f"import importlib; m=importlib.import_module({package!r}); print(getattr(m, '__version__', 'available'))"
         try:
-            completed = subprocess.run([sys.executable, "-c", script], check=False, capture_output=True, text=True, timeout=2, env=env or os.environ.copy())
+            completed = subprocess.run([sys.executable, "-c", script], check=False, capture_output=True, text=True, timeout=4, env=env or os.environ.copy())
         except Exception as exc:
-            impact = "ROS graph, image monitor, and real recording cannot run." if ros_package else "OpenCV/cv_bridge image conversion paths may fail; Pillow/QImage/raw image paths may still work."
-            return "error" if ros_package else "warning", "missing or failed", str(exc), impact
+            if ros_package:
+                return "error", "missing or failed", str(exc), "ROS graph, image monitor, and real recording cannot run."
+            if optional_ros_package:
+                return "ok", "optional package unavailable", str(exc), self._optional_ros_package_impact(package)
+            return "warning", "missing or failed", str(exc), "OpenCV image conversion path may fail; Pillow/QImage/raw image paths may still work."
         if completed.returncode == 0:
             return "ok", completed.stdout.strip() or "available", "", ""
         detail = (completed.stderr or completed.stdout).strip()
         if ros_package:
             return "error", "missing or failed", detail, "ROS graph, image monitor, and real recording cannot run."
-        return "warning", "missing or failed", detail, "OpenCV/cv_bridge image conversion paths may fail; Pillow/QImage/raw image paths may still work."
+        if optional_ros_package:
+            return "ok", "optional package unavailable", detail, self._optional_ros_package_impact(package)
+        return "warning", "missing or failed", detail, "OpenCV image conversion path may fail; Pillow/QImage/raw image paths may still work."
+
+    def _optional_ros_package_impact(self, package: str) -> str:
+        return {
+            "interbotix_xs_msgs": "Only Interbotix-specific custom message topics need this package; generic ROS topics can still be discovered and recorded.",
+            "realsense2_camera_msgs": "Only RealSense-specific custom message topics need this package; standard image topics can still be handled.",
+            "orbbec_camera_msgs": "Only Orbbec-specific custom message topics need this package; standard image topics can still be handled.",
+            "cv_bridge": "cv_bridge-specific conversion is unavailable; Pillow/QImage/raw image decode paths remain available.",
+            "cv2": "OpenCV-specific image conversion is unavailable; Pillow/QImage/raw image decode paths remain available.",
+        }.get(package, "This optional adapter is only required when selected ROS topics use that package.")
 
     def _topic_count(self, rmw: str) -> int:
         env = self._ros_sourced_env(default_ros_setup()) or os.environ.copy()

@@ -38,7 +38,7 @@ rgb8 with row padding decoded correctly
 big-endian 16UC1 decoded correctly
 32FC1 preview normalization produced uint8 RGB
 Pillow compressed PNG decoded correctly
-/usb_camera/image_raw preview CLI emitted a frame with rgb_base64
+/example_camera/image_raw preview CLI emitted a frame with rgb_base64
 direct RosService.image_snapshot returned image_rgb_base64 and image_ppm_base64
 offscreen Inspector accepted a compressed-image-style RGB payload
 ```

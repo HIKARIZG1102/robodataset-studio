@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QApplication, QFileDialog, QFormLayout, QHeaderView, QHBoxLayout, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, QWidget
+from PySide6.QtWidgets import QApplication, QComboBox, QFileDialog, QFormLayout, QHeaderView, QHBoxLayout, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, QWidget
 
 from robodataset_studio_v3.frontend.api_client import ApiClient, ProjectSummary
 from robodataset_studio_v3.frontend.pages.base import BasePage
@@ -14,6 +14,8 @@ class ConvertPage(BasePage):
         self.root = QLineEdit()
         self.output_dir = QLineEdit()
         self.output_name = QLineEdit("calvin")
+        self.export_format = QComboBox()
+        self.export_format.addItem("HDF5", "hdf5")
         for field in [self.root, self.output_dir]:
             make_path_field(field)
         self.session_table = QTableWidget(0, 5)
@@ -41,10 +43,14 @@ class ConvertPage(BasePage):
             button.clicked.connect(handler)
             selection_buttons.addWidget(button)
         buttons = QHBoxLayout()
-        for label, handler in [("Scan Sessions", self.scan), ("Merge Sessions", self.merge), ("Convert To HDF5", self.hdf5)]:
+        for label, handler in [("Scan Sessions", self.scan), ("Merge Sessions", self.merge)]:
             button = QPushButton(label)
             button.clicked.connect(handler)
             buttons.addWidget(button)
+        buttons.addWidget(self.export_format)
+        export_button = QPushButton("Export")
+        export_button.clicked.connect(self.export_selected)
+        buttons.addWidget(export_button)
         self.layout.addLayout(form)
         self.layout.addLayout(selection_buttons)
         self.layout.addLayout(buttons)
@@ -77,8 +83,12 @@ class ConvertPage(BasePage):
     def merge(self) -> None:
         self._convert("/api/convert/merge", "Merge task created")
 
-    def hdf5(self) -> None:
-        self._convert("/api/convert/hdf5", "HDF5 task created")
+    def export_selected(self) -> None:
+        export_format = str(self.export_format.currentData() or "hdf5")
+        if export_format == "hdf5":
+            self._convert("/api/convert/hdf5", "HDF5 export task created")
+            return
+        self.status.setText(f"Unsupported export format: {self.export_format.currentText()}")
 
     def _convert(self, path: str, status: str) -> None:
         selected = self.selected_session_paths()

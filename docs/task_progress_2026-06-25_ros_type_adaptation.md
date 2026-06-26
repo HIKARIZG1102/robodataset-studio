@@ -42,7 +42,7 @@ std_msgs/msg/Float64MultiArray converted to a numeric array
 sensor_msgs/msg/Imu produced extension stream defaults
 custom_msgs/msg/Foo failed with a topic/type-specific error
 JointState-only config is treated as supported and fails only if no samples arrive
-/usb_camera/image_raw preview CLI still emits rgb_base64 frames
+/example_camera/image_raw preview CLI still emits rgb_base64 frames
 ```
 
 ## Remaining
