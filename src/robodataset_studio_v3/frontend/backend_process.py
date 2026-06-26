@@ -21,13 +21,21 @@ class BackendProcess:
         self.host = "127.0.0.1"
         self.port = self._port_from_url(api.base_url) or 8765
         self.log_path: Path | None = None
+        self.started_process = False
 
     def ensure_running(self, timeout_sec: float = 8.0) -> None:
+        reusable_port = self._find_compatible_backend_port(self.port)
+        if reusable_port is not None:
+            self.port = reusable_port
+            self.api.base_url = f"http://{self.host}:{self.port}"
+            self.started_process = False
+            return
         self.cleanup_stale_backends()
         reusable_port = self._find_compatible_backend_port(self.port)
         if reusable_port is not None:
             self.port = reusable_port
             self.api.base_url = f"http://{self.host}:{self.port}"
+            self.started_process = False
             return
         self.port = self._find_free_port(self.port)
         self.api.base_url = f"http://{self.host}:{self.port}"
@@ -79,6 +87,7 @@ class BackendProcess:
             text=True,
             start_new_session=True,
         )
+        self.started_process = True
 
     def cleanup_stale_backends(self) -> None:
         marker = "robodataset_studio_v3.backend.main"
@@ -189,7 +198,7 @@ class BackendProcess:
         return "\n".join(parts)
 
     def stop(self) -> None:
-        if self.process is None or self.process.poll() is not None:
+        if not self.started_process or self.process is None or self.process.poll() is not None:
             return
         pid = self.process.pid
         try:
@@ -206,6 +215,7 @@ class BackendProcess:
             self.process.wait(timeout=1.5)
         finally:
             self.process = None
+            self.started_process = False
 
     def _kill_pid(self, pid: int) -> None:
         try:

@@ -43,6 +43,7 @@
 - [x] Make i18n source-text based so Chinese/English switching is reversible.
 - [x] Make Collect page safe to construct without an open project and show a clear project-required message.
 - [x] Smoke-test major pages, Docker tutorial access, and AI model/send communication with an OpenAI-compatible mock server.
+- [x] Fix secondary frontend/test windows killing the active Docker backend and causing `Errno 111 connection refused`.
 - [x] Pull latest `v3-fastapi-pyside` from GitHub and verify local/remote are synchronized.
 - [x] Test new Docker packaging and identify runtime Qt dependency gaps.
 - [x] Add missing Docker runtime libraries required by PySide6/Qt.
@@ -111,6 +112,8 @@
 - Tutorial now opens inside the PySide workspace by default; the HTML file remains available through a separate menu item.
 - UI translation now stores canonical source text on widgets/actions/table headers/tabs before translating, so switching languages does not depend on the currently displayed text.
 - Collect page no longer crashes when constructed without a project; project-required actions now display a readable status message.
+- Backend startup now checks for a compatible running backend before cleaning stale processes, so Docker smoke/test windows reuse the active backend instead of killing it.
+- Frontend shutdown now only stops a backend process it started itself; reused/shared backends are left running.
 - Docker image now installs `libdbus-1-3`, `libfontconfig1`, and `libfreetype6`, which PySide6/Qt needs at runtime.
 - `scripts/docker_run.sh` now supports non-interactive launches without Docker failing on `the input device is not a TTY`.
 - Docker image now installs `libpython3.10` and `libspdlog1`, which are required for mounted ROS Humble Python nodes/CLI to import `rclpy`.
@@ -150,6 +153,8 @@
 - Offscreen UI smoke tests construct Project, Collect, ROS, Review, Convert, Upload, Logs, Settings, Tutorial, Config Library, and Inspector pages.
 - Docker smoke test confirms the guide HTML exists in `/workspace/robodataset-studio`, Help/Tutorial opens the in-app tab, and Chinese menu labels render.
 - AI smoke test against a local OpenAI-compatible mock service confirms `/api/ai/models`, `/api/ai/send`, and Settings model refresh return `mock-model`.
+- Reproduced Docker `Errno 111` as a live frontend with no backend listener on `8765` after an offscreen smoke test killed the shared backend.
+- Verified a second Docker `MainWindow` now reuses `http://127.0.0.1:8765` with `started_process=False`, opens Tutorial, exits, and leaves the Docker backend process running.
 
 ## Issues Encountered
 
