@@ -24,7 +24,11 @@ Docker 安装和本地脚本安装二选一即可。
 Docker 适合新机器快速启动，因为 Python、Qt、FastAPI 等软件依赖都在镜像里。
 宿主机仍需要 Docker、图形桌面，以及用于 ROS 发现的 ROS2 环境。
 
+Docker 命令需要在 git clone 下来的仓库根目录运行，也就是包含 `Dockerfile`、
+`README.md`、`scripts/` 的目录：
+
 ```bash
+cd robodataset-studio
 ./scripts/docker_build.sh
 ./scripts/docker_run.sh
 ```
@@ -32,6 +36,7 @@ Docker 适合新机器快速启动，因为 Python、Qt、FastAPI 等软件依�
 如果使用已经发布的镜像：
 
 ```bash
+cd robodataset-studio
 docker pull ghcr.io/hikarizg1102/robodataset-studio:latest
 IMAGE_NAME=ghcr.io/hikarizg1102/robodataset-studio ./scripts/docker_run.sh
 ```
@@ -41,6 +46,9 @@ IMAGE_NAME=ghcr.io/hikarizg1102/robodataset-studio ./scripts/docker_run.sh
 ```text
 宿主机当前仓库  ->  /workspace/robodataset-studio
 ```
+
+不要把 `docker_run.sh` 单独复制到别的目录运行；脚本会根据自己所在位置计算要
+挂载的仓库根目录，复制出去会挂错目录。
 
 所以 Docker 里创建的项目、采集到的 `raw_sessions`、review 结果、导出文件、
 manifest 和日志，都会落到宿主机这个仓库目录里。宿主机文件管理器可以直接看

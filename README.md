@@ -39,7 +39,11 @@ Python/Qt environment. The repository folder is mounted into the container at
 `/workspace/robodataset-studio`, so project files created in Docker are normal
 host files under the checkout.
 
+Run Docker commands from the repository root, the directory that contains
+`Dockerfile`, `README.md`, and `scripts/`:
+
 ```bash
+cd robodataset-studio
 ./scripts/docker_build.sh
 ./scripts/docker_run.sh
 ```
@@ -47,9 +51,14 @@ host files under the checkout.
 Or run the published image:
 
 ```bash
+cd robodataset-studio
 docker pull ghcr.io/hikarizg1102/robodataset-studio:latest
 IMAGE_NAME=ghcr.io/hikarizg1102/robodataset-studio ./scripts/docker_run.sh
 ```
+
+`scripts/docker_run.sh` computes the repository root from its own location and
+mounts that folder into the container. If you start it from somewhere else with
+a copied script, Docker will not mount the expected project checkout.
 
 Docker mode intentionally restricts project roots and collection output paths to
 the mounted checkout. Use paths under:
