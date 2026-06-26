@@ -159,6 +159,7 @@ class MainWindow(QMainWindow):
 
         help_menu = self.menuBar().addMenu("Help")
         help_menu.addAction("Tutorial", self.open_tutorial_guide)
+        help_menu.addAction("Open HTML Guide", self.open_html_guide)
         help_menu.addAction("Logs / Tasks", self.toggle_logs_sidebar)
         help_menu.addAction("Environment Diagnostics", self.open_environment_diagnostics)
         help_menu.addAction("About", self.show_about)
@@ -1429,9 +1430,13 @@ class MainWindow(QMainWindow):
             self._write_settings(settings)
 
     def open_tutorial_guide(self) -> None:
+        self.open_action_tab("tutorial")
+
+    def open_html_guide(self) -> None:
         guide = Path(__file__).resolve().parents[3] / "RoboDataset-Studio-V3-Guide.html"
         if guide.exists():
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(guide)))
+            if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(guide))):
+                QMessageBox.warning(self, "Tutorial", f"Cannot open HTML guide with the desktop browser:\n{guide}")
             return
         self.open_action_tab("tutorial")
 

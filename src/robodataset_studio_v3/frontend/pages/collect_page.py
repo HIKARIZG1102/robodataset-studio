@@ -22,8 +22,9 @@ from robodataset_studio_v3.frontend.pages.base import BasePage
 
 
 class CollectPage(BasePage):
-    def __init__(self, api: ApiClient, project: ProjectSummary) -> None:
-        super().__init__(f"Collect - {project.key}", api, project)
+    def __init__(self, api: ApiClient, project: ProjectSummary | None = None) -> None:
+        title = f"Collect - {project.key}" if project is not None else "Collect"
+        super().__init__(title, api, project)
         self.mode = QComboBox()
         self.mode.addItem("Manual", "manual")
         self.mode.addItem("Duration", "duration_sec")
@@ -56,7 +57,10 @@ class CollectPage(BasePage):
         self.task_timer.setInterval(1000)
         self.task_timer.timeout.connect(self.poll_active_task)
         self._build()
-        self.refresh_plan()
+        if self.project is not None:
+            self.refresh_plan()
+        else:
+            self._show_no_project()
 
     def _build(self) -> None:
         controls = QHBoxLayout()
@@ -107,6 +111,8 @@ class CollectPage(BasePage):
             self.refresh_plan()
 
     def refresh_plan(self) -> None:
+        if not self._require_project("Open or create a project before reloading the dataset config."):
+            return
         self.status.setText("Reloading dataset config...")
         self.run_async(self.api.get_dataset_config, self._finish_refresh_plan, self.project_key())
 
@@ -186,6 +192,8 @@ class CollectPage(BasePage):
         return {"summary": summary, "mode": mode, "sample_rate_hz": sample_rate, "samples": samples, "estimated_transitions": transitions}
 
     def preflight(self) -> None:
+        if not self._require_project("Open or create a project before checking configured topics."):
+            return
         self.status.setText("Checking configured nodes/topics...")
         self.run_async(
             self.api.post,
@@ -196,6 +204,8 @@ class CollectPage(BasePage):
         )
 
     def start_recording(self) -> None:
+        if not self._require_project("Open or create a project before recording."):
+            return
         mode = str(self.mode.currentData() or "manual")
         payload: dict[str, Any] = {"project_key": self.project_key(), "mode": mode}
         if mode == "duration_sec":
@@ -219,6 +229,8 @@ class CollectPage(BasePage):
         )
 
     def simulate_episode(self) -> None:
+        if not self._require_project("Open or create a project before simulating an episode."):
+            return
         plan = self._plan_payload()
         target_samples = plan.get("samples")
         if not isinstance(target_samples, int) or target_samples <= 0:
@@ -241,6 +253,8 @@ class CollectPage(BasePage):
         )
 
     def stop_recording(self) -> None:
+        if not self._require_project("Open or create a project before stopping a recording."):
+            return
         self.status.setText("Stopping recording...")
         self.run_async(
             self.api.post,
@@ -337,3 +351,17 @@ class CollectPage(BasePage):
         else:
             header.extend(["", "live logs:", "waiting for recorder heartbeat..."])
         self.output.setPlainText("\n".join(header))
+
+    def _show_no_project(self) -> None:
+        self.current_dataset_config = {}
+        self.streams.setRowCount(0)
+        self.session_label.setText("Current session: no project open")
+        self.task_label.setText("Task: -")
+        self.show_result({"project": None, "message": "Open or create a project before collecting data."}, "No project open")
+
+    def _require_project(self, message: str) -> bool:
+        if self.project is not None and self.project_key():
+            return True
+        self._show_no_project()
+        self.status.setText(message)
+        return False

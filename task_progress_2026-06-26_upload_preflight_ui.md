@@ -38,6 +38,11 @@
 - [x] Remove hard-coded vendor ROS message packages from global environment diagnostics.
 - [x] Reclassify optional OpenCV/cv_bridge image backends as non-blocking environment capabilities.
 - [x] Clarify that remote ROS nodes can appear through live DDS discovery and are not GitHub/project data.
+- [x] Make Help > Tutorial open the in-app tutorial page so Docker does not depend on an external browser.
+- [x] Add a separate Help > Open HTML Guide action for browser-based guide opening.
+- [x] Make i18n source-text based so Chinese/English switching is reversible.
+- [x] Make Collect page safe to construct without an open project and show a clear project-required message.
+- [x] Smoke-test major pages, Docker tutorial access, and AI model/send communication with an OpenAI-compatible mock server.
 - [x] Pull latest `v3-fastapi-pyside` from GitHub and verify local/remote are synchronized.
 - [x] Test new Docker packaging and identify runtime Qt dependency gaps.
 - [x] Add missing Docker runtime libraries required by PySide6/Qt.
@@ -103,6 +108,9 @@
 - Settings Environment no longer checks arbitrary vendor message packages globally; custom topic message packages are handled dynamically when a selected ROS topic actually uses them.
 - Settings Environment no longer reports missing `cv2`/`cv_bridge` as blocking ROS/DDS issues when fallback image paths are available.
 - Help/README now explicitly state that visible nodes from another workstation are normal ROS2 DDS discovery when domain/network settings match.
+- Tutorial now opens inside the PySide workspace by default; the HTML file remains available through a separate menu item.
+- UI translation now stores canonical source text on widgets/actions/table headers/tabs before translating, so switching languages does not depend on the currently displayed text.
+- Collect page no longer crashes when constructed without a project; project-required actions now display a readable status message.
 - Docker image now installs `libdbus-1-3`, `libfontconfig1`, and `libfreetype6`, which PySide6/Qt needs at runtime.
 - `scripts/docker_run.sh` now supports non-interactive launches without Docker failing on `the input device is not a TTY`.
 - Docker image now installs `libpython3.10` and `libspdlog1`, which are required for mounted ROS Humble Python nodes/CLI to import `rclpy`.
@@ -139,6 +147,9 @@
 - With the old Docker backend occupying port `8765`, local `BackendProcess.ensure_running()` starts a non-Docker backend on `8766` and reports `docker: false` in `/api/health`.
 - Environment diagnostics now reports `issue_count: 0` in the current local environment after optional package reclassification.
 - Offscreen UI smoke test confirms the menu starts with `Project` and the Convert export selector exposes `HDF5`.
+- Offscreen UI smoke tests construct Project, Collect, ROS, Review, Convert, Upload, Logs, Settings, Tutorial, Config Library, and Inspector pages.
+- Docker smoke test confirms the guide HTML exists in `/workspace/robodataset-studio`, Help/Tutorial opens the in-app tab, and Chinese menu labels render.
+- AI smoke test against a local OpenAI-compatible mock service confirms `/api/ai/models`, `/api/ai/send`, and Settings model refresh return `mock-model`.
 
 ## Issues Encountered
 

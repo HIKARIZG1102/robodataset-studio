@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QAbstractButton,
@@ -15,6 +16,9 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QWidget,
 )
+
+
+I18N_SOURCE_PROP = "robodataset_i18n_source_text"
 
 
 TEXTS: dict[str, dict[str, str]] = {
@@ -63,6 +67,8 @@ TEXTS: dict[str, dict[str, str]] = {
     "Merge All Panes": {"zh": "合并所有分屏", "en": "Merge All Panes"},
     "Help": {"zh": "帮助", "en": "Help"},
     "Tutorial": {"zh": "操作教程", "en": "Tutorial"},
+    "Open HTML Guide": {"zh": "打开 HTML 指南", "en": "Open HTML Guide"},
+    "Environment Diagnostics": {"zh": "环境诊断", "en": "Environment Diagnostics"},
     "About": {"zh": "关于", "en": "About"},
     "Refresh Nodes/Topics": {"zh": "刷新节点/Topics", "en": "Refresh Nodes/Topics"},
     "Refreshing...": {"zh": "刷新中...", "en": "Refreshing..."},
@@ -314,34 +320,59 @@ def text(value: str, language: str) -> str:
     return TEXTS[key].get(normalize_language(language), key)
 
 
+def _source_text(obj: object, current: str) -> str:
+    getter = getattr(obj, "property", None)
+    setter = getattr(obj, "setProperty", None)
+    if callable(getter):
+        stored = getter(I18N_SOURCE_PROP)
+        if isinstance(stored, str) and stored:
+            return stored
+    source = _canonical_key(current) or current
+    if callable(setter) and source:
+        setter(I18N_SOURCE_PROP, source)
+    return source
+
+
 def apply_i18n(root: QWidget, language: str) -> None:
     language = normalize_language(language)
     if isinstance(root, QMainWindow):
-        root.setWindowTitle(text(root.windowTitle(), language))
+        root.setWindowTitle(text(_source_text(root, root.windowTitle()), language))
         _translate_menu_bar(root.menuBar(), language)
     widgets = [root, *root.findChildren(QWidget)]
     for widget in widgets:
         if isinstance(widget, QAbstractButton):
-            widget.setText(text(widget.text(), language))
+            widget.setText(text(_source_text(widget, widget.text()), language))
         elif isinstance(widget, QLabel):
-            widget.setText(text(widget.text(), language))
+            widget.setText(text(_source_text(widget, widget.text()), language))
         elif isinstance(widget, QComboBox):
             for index in range(widget.count()):
-                widget.setItemText(index, text(widget.itemText(index), language))
+                source = widget.itemData(index, role=Qt.UserRole + 1000)
+                if not isinstance(source, str) or not source:
+                    source = _canonical_key(widget.itemText(index)) or widget.itemText(index)
+                    widget.setItemData(index, source, role=Qt.UserRole + 1000)
+                widget.setItemText(index, text(source, language))
         elif isinstance(widget, QGroupBox):
-            widget.setTitle(text(widget.title(), language))
+            widget.setTitle(text(_source_text(widget, widget.title()), language))
         elif isinstance(widget, QLineEdit):
-            widget.setPlaceholderText(text(widget.placeholderText(), language))
+            widget.setPlaceholderText(text(_source_text(widget, widget.placeholderText()), language))
         elif isinstance(widget, QPlainTextEdit):
-            widget.setPlaceholderText(text(widget.placeholderText(), language))
+            widget.setPlaceholderText(text(_source_text(widget, widget.placeholderText()), language))
         elif isinstance(widget, QTabWidget):
             for index in range(widget.count()):
-                widget.setTabText(index, text(widget.tabText(index), language))
+                source = widget.tabBar().tabData(index)
+                if not isinstance(source, str) or not source:
+                    source = _canonical_key(widget.tabText(index)) or widget.tabText(index)
+                    widget.tabBar().setTabData(index, source)
+                widget.setTabText(index, text(source, language))
         elif isinstance(widget, QTableWidget):
             for column in range(widget.columnCount()):
                 item = widget.horizontalHeaderItem(column)
                 if item is not None:
-                    item.setText(text(item.text(), language))
+                    source = item.data(Qt.UserRole + 1000)
+                    if not isinstance(source, str) or not source:
+                        source = _canonical_key(item.text()) or item.text()
+                        item.setData(Qt.UserRole + 1000, source)
+                    item.setText(text(source, language))
 
 
 def _translate_menu_bar(menu_bar: QMenuBar, language: str) -> None:
@@ -350,10 +381,10 @@ def _translate_menu_bar(menu_bar: QMenuBar, language: str) -> None:
 
 
 def _translate_action(action: QAction, language: str) -> None:
-    action.setText(text(action.text(), language))
+    action.setText(text(_source_text(action, action.text()), language))
     menu = action.menu()
     if isinstance(menu, QMenu):
-        menu.setTitle(text(menu.title(), language))
+        menu.setTitle(text(_source_text(menu, menu.title()), language))
         for child in menu.actions():
             _translate_action(child, language)
 
