@@ -106,6 +106,11 @@ class BackendProcess:
         return cwd == root_marker
 
     def _python_executable(self) -> str:
+        image_venv = os.environ.get("ROBODATASET_VENV", "")
+        if os.environ.get("ROBODATASET_DOCKER") and image_venv:
+            image_python = Path(image_venv) / "bin" / "python"
+            if image_python.exists():
+                return str(image_python)
         venv_python = self.root_dir / ".venv" / "bin" / "python"
         if venv_python.exists():
             return str(venv_python)
