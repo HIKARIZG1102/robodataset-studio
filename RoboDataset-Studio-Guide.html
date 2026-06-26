@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RoboDataset Studio 操作流程与按键说明</title>
+  <style>
+    body { margin: 0; color: #1f2933; background: #f5f7fa; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif; line-height: 1.58; }
+    main { max-width: 1080px; margin: 0 auto; min-height: 100vh; padding: 32px 24px 72px; background: #fff; }
+    h1 { margin: 0 0 8px; font-size: 30px; }
+    h2 { margin-top: 34px; padding-top: 24px; border-top: 1px solid #d9e1ea; font-size: 23px; }
+    h3 { margin-top: 22px; font-size: 18px; }
+    code { padding: 2px 5px; border-radius: 4px; background: #eef2f6; }
+    pre { overflow-x: auto; padding: 14px; border-radius: 6px; color: #e5e7eb; background: #111827; }
+    table { width: 100%; margin: 12px 0 22px; border-collapse: collapse; }
+    th, td { padding: 8px 10px; border: 1px solid #d7dde5; vertical-align: top; }
+    th { background: #edf2f7; text-align: left; }
+    .note { padding: 10px 12px; border-left: 4px solid #d99b00; background: #fff7df; }
+    .ok { padding: 10px 12px; border-left: 4px solid #2e9d55; background: #eefaf1; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>RoboDataset Studio 操作流程与按键说明</h1>
+  <p>本文记录从项目、配置、ROS topic 选择、采集、Review、Convert 到 Upload 的完整操作顺序。软件默认是 listener-only：只监听 ROS2 topic 采集数据，不主动向机器人或外部设备发布控制命令。</p>
+
+  <h2>0. 启动前准备</h2>
+  <ol>
+    <li>在外部启动需要采集的数据源，使 ROS2 topic 正常发布。常见数据包括图像、深度图、关节状态、末端状态、传感器状态、指令或任务标注。</li>
+    <li>确认这些 topic 能被当前 ROS2 环境发现，必要时检查 <code>ROS_SETUP</code>、<code>ROS_DOMAIN_ID</code>、<code>ROS_LOCALHOST_ONLY</code>、RMW/DDS 和网络连通性。</li>
+    <li>如果动作由外部遥操作、脚本、策略或人工流程产生，先在外部完成启动。Studio 只记录已有 topic，不负责控制执行器。</li>
+    <li>启动 Studio：
+      <pre><code>cd /home/microsate/robotarm_control_ws/ROBODATASET/robodataset-studio
+./RoboDataset-Studio.sh</code></pre>
+    </li>
+  </ol>
+
+  <h2>0.1 ROS2 通信层适配范围</h2>
+  <p>软件主要适配 ROS2 数据采集场景：发现已有 ROS2 节点和 topic，订阅图像、机器人状态、传感器状态等数据，并整合成数据集。默认不向机器人发布控制命令。</p>
+  <ul>
+    <li><b>ROS setup / workspace：</b>需要正确 source ROS2 和机器人工作空间，例如 Humble、Jazzy 或自定义 overlay。</li>
+    <li><b>RMW / DDS：</b><code>rmw_fastrtps_cpp</code> / FastDDS、<code>rmw_cyclonedds_cpp</code> / CycloneDDS 是常见开源路径；<code>rmw_fastrtps_dynamic_cpp</code>、Connext、GurumDDS、Zenoh RMW 如果已安装也会被检测。厂商 DDS 可能需要额外 runtime/license。DDS/RMW 属于 ROS2 runtime 通信层，不是本软件的 pip 依赖。</li>
+    <li><b>发现与网络：</b><code>ROS_DOMAIN_ID</code>、<code>ROS_LOCALHOST_ONLY</code>、UDP/multicast、局域网、VPN、跨机器路由都会影响 topic 是否可见。</li>
+    <li><b>QoS：</b>图像和传感器 topic 通常需要 sensor-data QoS；状态、参数和普通 topic 可能使用不同可靠性设置。</li>
+    <li><b>消息类型：</b>当前重点支持 <code>Image</code>、<code>CompressedImage</code>、<code>JointState</code>、IMU、Odometry、geometry_msgs 以及常见 std_msgs 标量/数组。自定义消息需要新增 converter。</li>
+    <li><b>图像编码：</b>需要适配 <code>rgb8</code>、<code>bgr8</code>、mono/depth、float depth、压缩图像、stride padding 和 endian。</li>
+  </ul>
+  <p class="note">如果某一层不支持或配置不匹配，软件会尽量显示明确 warning/error，例如 topic、message type、encoding、RMW、缺失动态库、ros2 CLI Python 模块或 ROS 环境问题，不应该静默失败。Settings &gt; Environment 会列出每个 RMW 的检测结果。</p>
+
+  <h2>1. 从零创建项目并采集真实 episode</h2>
+  <h3>1.1 新建或打开项目</h3>
+  <ol>
+    <li>点击顶部 <b>File</b>。它不是下拉菜单，会在左侧打开 <b>Projects</b> 项目栏。</li>
+    <li>在项目栏点击 <b>New Project</b> 新建项目，或 <b>Open Project Folder</b> 从已有项目目录打开。打开目录时默认从上一次打开项目的父目录开始；第一次使用时默认从 Studio 的 <code>robodataset/projects</code> 开始。</li>
+    <li>也可以右键项目列表中的项目，选择 <b>Open Project</b>、<b>Properties</b>、<b>Current Project Config</b>、<b>Rename</b>、<b>Delete</b>、<b>Permanent Delete</b> 等操作。</li>
+    <li><b>Delete</b> 会把项目目录移动到同级 <code>.deleted_projects</code>，列表中消失但磁盘数据仍可找回；<b>Permanent Delete</b> 会弹出警告确认，并直接从磁盘永久删除该项目目录。</li>
+    <li>新建项目时填写项目名、版本、operator、项目根目录，选择一个配置库条目或先留空。</li>
+    <li>创建或打开后，底部状态栏会常驻显示 <b>project:</b>、<b>config:</b>、<b>status:</b>、<b>path:</b>；项目打开后默认出现 <b>Properties</b>、<b>Collect</b>、<b>Review</b>、<b>Convert</b>、<b>Upload</b> 五个核心标签页。</li>
+  </ol>
+
+  <h3>1.1.1 Properties 页查看项目结构</h3>
+  <ol>
+    <li>打开项目后进入 <b>Properties</b> 标签页。</li>
+    <li>上方 <b>Project Summary</b> 显示项目名、版本、配置 ID、是否已有记录数据、项目路径、目录大小和修改时间。</li>
+    <li>下方 <b>Project Structure Tree</b> 用 <code>|--</code>、<code>`--</code> 分支显示当前实际目录内容，不再显示固定 expected structure。</li>
+    <li><code>raw_sessions/session_*</code> 只显示到 session 层，并用文件/目录数量摘要表示内部内容；merged/export 数据目录同样只显示到数据集目录层，避免 episode 文件刷屏。</li>
+    <li>项目页会监听项目目录变化，并定时检查目录签名；采集、转换、导出、删除文件后，大小和结构会自动刷新。</li>
+    <li>点击 <b>Open Structure Window</b> 可打开独立结构窗口，左侧是可展开目录树，右侧可只读预览 <code>.yaml</code>、<code>.json</code>、<code>.txt</code>、<code>.md</code> 等文本文件。</li>
+  </ol>
+
+  <h3>1.2 刷新 ROS 图并选择 topic</h3>
+  <ol>
+    <li>点击窗口右上角 <b>Refresh Nodes/Topics</b>。</li>
+    <li>点击顶部 <b>Config</b>。它不是下拉菜单，会在左侧打开 <b>Configs</b> 配置栏。</li>
+    <li>在配置栏双击配置进入 <b>Config Library</b>；也可以右键配置进行 <b>Open Config</b>、<b>Duplicate</b>、<b>Rename</b>、<b>Delete</b>、<b>New</b>。</li>
+    <li>进入 <b>ROS Topics</b> 标签页，展开 topic 分组。</li>
+    <li>勾选本次要记录的 topic，例如 RGB 图像、深度图、状态量、传感器量或任务相关消息。表中会显示 topic 名称和 message type。</li>
+    <li>点击 <b>Refresh config from selected topics</b>，根据已选 topic 同步生成 streams/state/action。</li>
+    <li>点击 <b>Apply form -> YAML</b>，把表单内容写入 <code>total_config.yaml</code>。</li>
+    <li>点击 <b>Save</b> 保存配置库条目。如果当前项目已经绑定此配置，项目会同步刷新。</li>
+  </ol>
+
+  <h3>1.3 用 AI 辅助补配置</h3>
+  <ol>
+    <li>先在 <b>Settings -> Settings</b> 中启用 AI，填写 base URL、API key、model。</li>
+    <li>回到 <b>Config Library -> AI Match Config</b>。独立 AI Assist 页面已移除，AI 功能集中在配置库和 Review 内。</li>
+    <li>点击 <b>Default prompt</b>。如果 topic probe 失败或 prompt 超预算，界面会提示，不会静默发送坏 prompt。</li>
+    <li>点击 <b>Send</b> 发送给模型。</li>
+    <li>确认 AI 预览 YAML 没问题后，点击 <b>Replace dataset_config from AI preview</b> 显式替换 dataset_config。</li>
+    <li>点击 <b>Save</b> 保存配置。</li>
+  </ol>
+
+  <h3>1.4 配置完成后直接采集 episode</h3>
+  <ol>
+    <li>完成配置保存并绑定到项目后，进入同一项目的 <b>Collect</b> 标签页。</li>
+    <li>点击 <b>Reload Dataset Config</b>，让 Collect 页重新读取当前项目的 <code>dataset_config.yaml</code>，并在表格中确认 streams/state/action 映射。</li>
+    <li>点击 <b>Check Configured Topics</b>，检查配置内 topic 的 info、echo once、hz。这个按钮用于检查配置内 topic 是否可采，不是刷新 ROS 图；刷新 ROS 图请使用右上角 <b>Refresh Nodes/Topics</b>。</li>
+    <li>选择 <b>Stop mode</b>：
+      <ul>
+        <li><b>Manual</b>：手动点 Start/Stop，适合外部流程长度不固定的采集。</li>
+        <li><b>Duration</b>：按秒数自动结束。</li>
+        <li><b>Sample count</b>：按同步样本数自动结束。</li>
+      </ul>
+    </li>
+    <li>启动外部执行流程，或确认外部数据源已经开始发布。</li>
+    <li>点击 <b>Start Recording</b> 开始采集。此时会按当前时间创建新的 session 目录。</li>
+    <li>执行本次任务流程，让已配置 topic 持续发布数据。</li>
+    <li>Manual 模式下点击 <b>Stop Recording</b>；Duration 和 Sample count 模式会自动结束，但 <b>Stop Recording</b> 仍可提前停止。完成后 Collect 页会显示最后完成的 session 路径和任务日志。</li>
+    <li>如果只是测试数据结构，不连接真实数据源，可点击 <b>Simulate Test Episode</b> 生成模拟 session。它用于验证项目目录、Review、Convert 流程，不代表真实采集质量。</li>
+  </ol>
+
+  <h2>2. Review 数据是否正常</h2>
+  <ol>
+    <li>进入 <b>Review</b> 标签页。</li>
+    <li>先看 <b>Overview</b> 页。左侧显示当前项目目录树，包括 raw session、merge/export、review report、yaml 等；点击 yaml/json/txt 文件可在右侧预览。</li>
+    <li>进入 <b>Episode Review</b> 页，点击 <b>Use Current Session</b>，或点击 <b>Browse</b> 选择 raw session 根目录。</li>
+    <li>点击 <b>Scan Session</b> 扫描 episode。</li>
+    <li>点击 <b>Run Local Checks</b> 检查字段、shape、黑白帧、action/state 等质量问题。</li>
+    <li>点击 episode 表格中的某一行，下方 <b>Selected NPZ Details</b> 会显示该 episode 的字段和摘要。</li>
+    <li>用 <b>Status filter</b> 过滤 ok/warning/error/uncheck。</li>
+    <li>用 <b>Manual mark</b> 选择 good/bad/uncertain/unmarked，然后点击 <b>Mark Selected</b> 标记。</li>
+    <li>确认坏数据后可点击 <b>Delete Selected</b>，数据会移动到 <code>review_deleted</code>。</li>
+    <li>点击 <b>Export Quality Report</b> 导出质量报告。</li>
+  </ol>
+
+  <h2>3. Convert：合并 session 或导出 HDF5</h2>
+  <ol>
+    <li>进入 <b>Convert</b> 标签页。</li>
+    <li>点击 <b>Browse</b> 选择 <b>Raw sessions root</b>，通常是项目下的 <code>raw_sessions</code>。</li>
+    <li>点击 <b>Scan Sessions</b>。所有 session 默认勾选。</li>
+    <li>可用 <b>Select All</b>、<b>Clear</b>、<b>Invert</b> 快速选择，也可以在 Use 列拖动批量勾选/取消。</li>
+    <li>填写 <b>Output dir</b> 和 <b>Output name</b>。如果目标同名，系统会自动生成防撞名称，例如 <code>calvin_2.hdf5</code>。</li>
+    <li>点击 <b>Merge Sessions</b> 合并为 CALVIN-like 目录，或点击 <b>Convert To HDF5</b> 导出 HDF5。</li>
+    <li>任务完成后回到 Review 的 <b>Overview</b> 或 <b>HDF5 Review</b> 页检查结果。旧的 <b>CALVIN Layout</b> 页已经移除。</li>
+  </ol>
+
+  <h2>4. Upload：上传数据</h2>
+  <ol>
+    <li>上传服务器的 host、port、username、key path 来自当前项目 total_config 的 upload 字段，页面里不可随意改。</li>
+    <li>密码只在 Upload 页临时输入，不会写入配置文件。</li>
+    <li>进入 <b>Upload</b> 标签页后，点击 <b>Reload from project config</b> 同步服务器信息。</li>
+    <li>在 <b>File or folder</b> 选择要上传的本地文件或目录。</li>
+    <li>点击 <b>Check Dependencies</b> 检查 rsync/ssh 等依赖。</li>
+    <li>点击 <b>Build Manifest</b> 生成临时本地 manifest。</li>
+    <li>点击 <b>Verify Local Manifest</b> 检查本地文件。</li>
+    <li>填写或选择 <b>Remote directory</b>，点击 <b>Connect and list</b> 浏览远端目录。</li>
+    <li>可用 <b>Up</b>、路径面包屑、<b>Create Folder</b> 选择远端目录。</li>
+    <li>点击 <b>Start rsync upload</b> 上传。</li>
+    <li>中断后可点击 <b>Repair / Resume verified upload</b> 续传修复。</li>
+    <li>上传后点击 <b>Verify remote manifest</b> 校验远端文件。</li>
+  </ol>
+
+  <h2>5. Settings：语言、缩放、AI</h2>
+  <table>
+    <tr><th>控件</th><th>作用</th></tr>
+    <tr><td>Language</td><td>选择 English 或 中文。保存后菜单、主流程按钮、标签页和主要表格标题会即时切换。</td></tr>
+    <tr><td>Zoom In</td><td>菜单 <b>Settings -> Zoom In</b>，快捷键 <code>Ctrl++</code> 或 <code>Ctrl+=</code>。</td></tr>
+    <tr><td>Zoom Out</td><td>菜单 <b>Settings -> Zoom Out</b>，快捷键 <code>Ctrl+-</code>。</td></tr>
+    <tr><td>Reset Zoom</td><td>菜单 <b>Settings -> Reset Zoom</b>，快捷键 <code>Ctrl+0</code>。</td></tr>
+    <tr><td>Enable AI</td><td>启用 OpenAI-compatible AI 功能。</td></tr>
+    <tr><td>Refresh models</td><td>检测当前 base URL/API key 能访问的模型列表。</td></tr>
+  </table>
+
+  <h2>6. Inspector、Logs、Help 和分屏</h2>
+  <h3>6.1 Inspector</h3>
+  <ol>
+    <li>点击顶部 <b>Inspector</b> 打开或隐藏全局检查器。Inspector 是固定的 dock 面板，不会被工作区分屏替换。</li>
+    <li><b>Topic Inspector</b> 可查看 node/topic info、echo、hz。</li>
+    <li><b>Image Monitor</b> 可选择当前 ROS 图里的 image topic，也会保留项目配置里的多个 image topic，例如 static、wrist、depth 图像流。</li>
+    <li>点击 <b>Monitor project image</b> 会优先使用当前选中的可监视 image topic；如果当前选择不可用，才回退到项目配置中的第一个 image topic。</li>
+  </ol>
+
+  <h3>6.2 Logs</h3>
+  <ol>
+    <li>点击顶部 <b>Logs</b>。它不是下拉菜单，会打开日志/任务侧边栏。</li>
+    <li><b>File</b>、<b>Config</b>、<b>Logs</b> 三个侧边栏默认合并在左侧同一个 dock tab 组里；点击哪个顶部入口，就切到哪个侧栏。只有手动拖动 dock 标签后，才会分离成独立分屏。</li>
+    <li>侧边栏列出当前后端任务；双击任务会打开 <b>Logs</b> 标签并定位到该任务。</li>
+    <li><b>Logs</b> 标签左侧同时列出任务和项目中的日志文件，右侧显示任务详情、运行 logs、result，或日志文件内容。</li>
+  </ol>
+
+  <h3>6.3 Help / About</h3>
+  <ol>
+    <li><b>Help -> Tutorial</b> 打开本操作指南。</li>
+    <li><b>Help -> About</b> 查看 RoboDataset Studio、开发者名单、版权和项目用途信息。</li>
+  </ol>
+
+  <h3>6.4 工作区分屏和合并</h3>
+  <ol>
+    <li>右键任意工作区标签页，可选择 <b>Split Left</b>、<b>Split Right</b>、<b>Split Up</b>、<b>Split Down</b> 把当前页面拆到新 pane。</li>
+    <li>最多同时存在 3 个工作区 pane。Inspector 仍然保持在 dock 区域，不参与替换。</li>
+    <li>右键标签页选择 <b>Merge All Panes</b> 可把所有工作区 pane 合并回一个。</li>
+    <li>拖动分隔条可调整各 pane 大小；窗口缩放时页面会保留滚动条和自适应布局。</li>
+  </ol>
+
+  <h2>7. 常用任务按键顺序速查</h2>
+  <table>
+    <tr><th>任务</th><th>按键顺序</th></tr>
+    <tr><td>新建采集配置</td><td>File -> Projects 侧边栏 -> New Project -> Refresh Nodes/Topics -> Config -> Configs 侧边栏 -> 打开 Config Library -> ROS Topics 勾选 -> Refresh config from selected topics -> Apply form -> YAML -> Save</td></tr>
+    <tr><td>真实采集</td><td>Collect -> Reload Dataset Config -> Check Configured Topics -> 选择 Stop mode -> 确认外部流程/数据源发布 -> Start Recording -> 执行任务流程 -> Stop Recording 或自动结束</td></tr>
+    <tr><td>检查刚采 session</td><td>Review -> Overview 看项目树 -> Episode Review -> Use Current Session -> Scan Session -> Run Local Checks -> 点击 episode 行查看详情 -> Mark Selected 或 Delete Selected</td></tr>
+    <tr><td>导出 HDF5</td><td>Convert -> Browse raw_sessions -> Scan Sessions -> 勾选 sessions -> 设置 Output name -> Convert To HDF5</td></tr>
+    <tr><td>上传服务器</td><td>Upload -> Reload from project config -> Browse local file/folder -> Check Dependencies -> Build Manifest -> Connect and list -> Start rsync upload -> Verify remote manifest</td></tr>
+    <tr><td>查看任务日志</td><td>Logs -> 日志侧边栏双击任务 -> Logs 页右侧查看 task logs/result</td></tr>
+  </table>
+
+  <h2>8. Docker 封装运行</h2>
+  <p>仓库提供通用 Docker 封装，镜像名使用 <code>robodataset-studio</code>。Docker 镜像内会创建 <code>/opt/robodataset-studio/venv</code>，预装 Studio GUI、FastAPI backend、Python 依赖和上传工具；不在镜像内安装 ROS。运行时通过挂载宿主机 ROS 环境和透传环境变量，让容器匹配当前机器。</p>
+  <pre><code>./scripts/docker_build.sh
+./scripts/docker_run.sh</code></pre>
+  <ul>
+    <li>如果宿主机已经在发布 ROS2 topic，推荐使用 host network，并保持容器内外 <code>ROS_DOMAIN_ID</code>、RMW/DDS 设置一致。</li>
+    <li>脚本会自动挂载宿主机 <code>/opt/ros</code>，并透传 <code>ROS_SETUP</code>、<code>PYTHONPATH</code>、<code>LD_LIBRARY_PATH</code>、<code>AMENT_PREFIX_PATH</code> 等 ROS 相关环境。</li>
+    <li>如果 ROS overlay workspace 不在 <code>/opt/ros</code>，可用 <code>ROS_WORKSPACE_MOUNTS=/path/to/overlay</code> 挂载。</li>
+    <li>需要 GUI 时，脚本会透传 X11 socket 和 <code>DISPLAY</code>。</li>
+    <li>需要访问本地数据时，脚本会把仓库目录挂载到容器内 <code>/workspace/robodataset-studio</code>。</li>
+    <li>需要设备访问时，可按实际设备增加 <code>--device</code> 或挂载对应目录；通用镜像只内置软件虚拟环境，不内置 ROS、特定机器人驱动或厂商 SDK。</li>
+  </ul>
+
+  <p class="note">如果 ROS graph 看不到 topic，先检查外部数据源是否启动、ROS_DOMAIN_ID/RMW 是否一致、topic 是否真的发布。Studio 只发现和监听已有 topic。</p>
+  <p class="ok">推荐每次真实采集后立即 Review 一遍，确认图像、robot_obs、rel_actions 都存在，再继续大批量采集。</p>
+</main>
+</body>
+</html>

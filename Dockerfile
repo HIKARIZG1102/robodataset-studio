@@ -64,11 +64,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace/robodataset-studio
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md README.zh-CN.md ./
 COPY src ./src
 COPY scripts ./scripts
 COPY config ./config
-COPY RoboDataset-Studio-V3.sh RoboDataset-Studio-V3-Guide.html ./
+COPY RoboDataset-Studio.sh RoboDataset-Studio-Guide.html ./
 
 RUN mkdir -p /workspace/robodataset-studio/robodataset/projects
 
@@ -87,7 +87,7 @@ RUN printf '%s\n' \
     'export PYTHONPATH="/workspace/robodataset-studio/src:${PYTHONPATH:-}"' \
     'export ROS_LOG_DIR="${ROS_LOG_DIR:-/tmp/robodataset_ros_logs}"' \
     'mkdir -p "${ROS_LOG_DIR}"' \
-    'exec "${ROBODATASET_VENV:-/opt/robodataset-studio/venv}/bin/python" -m robodataset_studio_v3.frontend.main "$@"' \
+    'exec "${ROBODATASET_VENV:-/opt/robodataset-studio/venv}/bin/python" -m robodataset_studio.frontend.main "$@"' \
     > /usr/local/bin/robodataset-studio && chmod +x /usr/local/bin/robodataset-studio
 
 ENTRYPOINT ["/usr/local/bin/robodataset-studio"]

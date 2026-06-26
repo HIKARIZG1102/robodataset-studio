@@ -128,15 +128,15 @@ PY
     echo "Configured environment is not Python 3.10. Run scripts/bootstrap.sh first." >&2
     exit 1
   fi
-  exec "${ENV_PYTHON}" -m robodataset_studio_v3.frontend.main "$@"
+  exec "${ENV_PYTHON}" -m robodataset_studio.frontend.main "$@"
 fi
 
 if [[ -x "${ROOT_DIR}/.venv/bin/python" ]]; then
-  exec "${ROOT_DIR}/.venv/bin/python" -m robodataset_studio_v3.frontend.main "$@"
+  exec "${ROOT_DIR}/.venv/bin/python" -m robodataset_studio.frontend.main "$@"
 fi
 
 if [[ -x "${ROOT_DIR}/.conda-env/bin/python" ]]; then
-  exec "${ROOT_DIR}/.conda-env/bin/python" -m robodataset_studio_v3.frontend.main "$@"
+  exec "${ROOT_DIR}/.conda-env/bin/python" -m robodataset_studio.frontend.main "$@"
 fi
 
-exec python3 -m robodataset_studio_v3.frontend.main "$@"
+exec python3 -m robodataset_studio.frontend.main "$@"

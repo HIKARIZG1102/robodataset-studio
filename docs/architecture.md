@@ -1,8 +1,8 @@
-# V3 Architecture Notes
+# Architecture Notes
 
 ## Product Shape
 
-V3 keeps PySide6 as the desktop frontend and introduces FastAPI as a local
+RoboDataset Studio keeps PySide6 as the desktop frontend and introduces FastAPI as a local
 backend. The app should behave like a common desktop tool:
 
 - Before a project is opened, only the menu bar is active.

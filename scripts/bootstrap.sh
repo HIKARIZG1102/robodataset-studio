@@ -236,7 +236,7 @@ create_venv() {
     echo "Install python3.10-venv for venv mode, or use ENV_BACKEND=conda." >&2
     return 1
   fi
-  ENV_COMMAND="${VENV_DIR}/bin/robodataset-studio-v3"
+  ENV_COMMAND="${VENV_DIR}/bin/robodataset-studio"
   ENV_KIND="venv"
 }
 
@@ -249,7 +249,7 @@ create_conda_env() {
     "${CONDA_EXE}" create -y -p "${CONDA_ENV_DIR}" python=3.10 pip
   fi
   ENV_PYTHON="${CONDA_ENV_DIR}/bin/python"
-  ENV_COMMAND="${CONDA_ENV_DIR}/bin/robodataset-studio-v3"
+  ENV_COMMAND="${CONDA_ENV_DIR}/bin/robodataset-studio"
   ENV_KIND="conda"
   if ! check_python "${ENV_PYTHON}"; then
     echo "Existing conda env is not Python 3.10; rebuilding ${CONDA_ENV_DIR}." >&2
@@ -314,4 +314,4 @@ PY
 echo "Environment: ${ENV_KIND}"
 echo "Python: ${ENV_PYTHON}"
 echo "Command: ${ENV_COMMAND}"
-echo "Launcher: ${ROOT_DIR}/RoboDataset-Studio-V3.sh"
+echo "Launcher: ${ROOT_DIR}/RoboDataset-Studio.sh"

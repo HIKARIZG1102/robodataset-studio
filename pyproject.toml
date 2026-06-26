@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "robodataset-studio-v3"
+name = "robodataset-studio"
 version = "0.1.0"
 description = "PySide6 desktop frontend with FastAPI local backend for robot dataset collection"
 requires-python = ">=3.10"
@@ -27,10 +27,8 @@ dev = [
 upload = ["paramiko>=3.4"]
 
 [project.scripts]
-robodataset-studio = "robodataset_studio_v3.frontend.main:main"
-robodataset-studio-v3 = "robodataset_studio_v3.frontend.main:main"
-robodataset-studio-backend = "robodataset_studio_v3.backend.main:main"
-robodataset-studio-v3-backend = "robodataset_studio_v3.backend.main:main"
+robodataset-studio = "robodataset_studio.frontend.main:main"
+robodataset-studio-backend = "robodataset_studio.backend.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
