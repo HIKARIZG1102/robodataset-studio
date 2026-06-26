@@ -64,23 +64,73 @@ detail instead of failing silently.
 
 ## Install And Start
 
-The recommended path is the project launcher. It uses the same environment
-selection style as V2:
+Start from a local checkout. Choose one runtime path: Docker or local script.
+You do not need to install both.
 
 ```bash
-./RoboDataset-Studio-V3.sh
+git clone https://github.com/HIKARIZG1102/robodataset-studio.git
+cd robodataset-studio
+git checkout v3-fastapi-pyside
 ```
 
-On first run, or when required Python packages are missing, the launcher calls:
+### Option A: Docker Runtime
+
+Docker is the quickest path on a clean machine because the Python environment is
+inside the image. The host still needs Docker, a desktop display, and ROS2 under
+`/opt/ros` if ROS graph/recording features are needed.
+
+Build and start from the checked-out repository:
 
 ```bash
-scripts/bootstrap.sh
+./scripts/docker_build.sh
+./scripts/docker_run.sh
 ```
 
-Bootstrap creates a project-local Python 3.10 environment and installs V3 in
-editable mode. Python 3.10 is required because ROS Humble Python packages such
-as `rclpy` and `sensor_msgs` are installed for the system Python 3.10 ABI. Do
-not run the app from a conda/base Python 3.13 environment.
+Or run a published image:
+
+```bash
+docker pull ghcr.io/hikarizg1102/robodataset-studio:latest
+IMAGE_NAME=ghcr.io/hikarizg1102/robodataset-studio ./scripts/docker_run.sh
+```
+
+`scripts/docker_run.sh` already contains the required file mount:
+
+```bash
+-v "${ROOT_DIR}:/workspace/robodataset-studio"
+```
+
+So Docker does not require `scripts/bootstrap.sh` or a host `.venv`. Project
+files, recordings, review outputs, exports, manifests, and logs are written
+under the host checkout because `/workspace/robodataset-studio` is the mounted
+Git folder. Docker mode intentionally rejects project roots and data paths
+outside that mounted workspace.
+
+You do not need to pre-create project folders. The app creates missing project,
+`raw_sessions`, `review`, and `exports` folders as needed. The recommended
+Docker project location is under:
+
+```text
+/workspace/robodataset-studio/robodataset/projects
+```
+
+The run wrapper also mounts host ROS when available:
+
+```bash
+-v /opt/ros:/opt/ros:ro
+```
+
+For custom ROS overlays outside `/opt/ros`, pass read-only overlay mounts:
+
+```bash
+ROS_SETUP=/path/to/overlay/install/setup.bash \
+ROS_WORKSPACE_MOUNTS=/path/to/overlay:/another/overlay \
+./scripts/docker_run.sh
+```
+
+### Option B: Local Script Runtime
+
+Local script runtime installs a project-local Python environment on the host and
+can read/write normal host paths outside the repository.
 
 On a clean Ubuntu 22.04 machine with ROS2 Humble already installed, install the
 recommended desktop/runtime packages before or during bootstrap:
@@ -99,6 +149,23 @@ interactive terminal it can ask to install missing packages; in non-interactive
 mode it prints the exact apt command. These packages cover Qt/PySide startup,
 Chinese text rendering, and upload tooling. Python packages are installed into
 the project-local environment from `pyproject.toml`.
+
+Start the local app:
+
+```bash
+./RoboDataset-Studio-V3.sh
+```
+
+On first run, or when required Python packages are missing, the launcher calls:
+
+```bash
+scripts/bootstrap.sh
+```
+
+Bootstrap creates a project-local Python 3.10 environment and installs V3 in
+editable mode. Python 3.10 is required because ROS Humble Python packages such
+as `rclpy` and `sensor_msgs` are installed for the system Python 3.10 ABI. Do
+not run the app from a conda/base Python 3.13 environment.
 
 By default bootstrap tries `.venv` first and falls back to `.conda-env` if venv
 creation is not available. If an existing V3 environment is not Python 3.10, the
@@ -190,7 +257,7 @@ sudo systemctl daemon-reload
 sudo systemctl restart docker
 ```
 
-Build and run the local image:
+Detailed local image build/run commands are:
 
 ```bash
 ./scripts/docker_build.sh
@@ -203,8 +270,8 @@ Equivalent Compose workflow:
 LOCAL_UID=$(id -u) LOCAL_GID=$(id -g) docker compose up --build robodataset-studio
 ```
 
-After the GitHub Actions Docker workflow publishes a package, users can run a
-prebuilt image without building locally:
+When a GitHub Actions Docker package is available, users can run a prebuilt
+image without building locally:
 
 ```bash
 docker pull ghcr.io/hikarizg1102/robodataset-studio:latest
