@@ -19,7 +19,7 @@ import sys
 raise SystemExit(0 if sys.version_info[:2] == (3, 10) else 1)
 PY
   then
-    echo "Existing RoboDataset Studio V3 environment is not Python 3.10; rebuilding."
+    echo "Existing RoboDataset Studio environment is not Python 3.10; rebuilding."
     NEEDS_BOOTSTRAP=1
   elif ! PYTHONPATH="${ROOT_DIR}/src:${PYTHONPATH:-}" "${ENV_PYTHON:-${ROOT_DIR}/.venv/bin/python}" - <<'PY' >/dev/null 2>&1
 import importlib

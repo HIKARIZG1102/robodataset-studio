@@ -10,7 +10,7 @@ from robodataset_studio_v3.core.runtime_env import apply_ros_environment
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="RoboDataset Studio V3 Backend", version="0.1.0")
+    app = FastAPI(title="RoboDataset Studio Backend", version="0.1.0")
     app.include_router(health.router, prefix="/api")
     app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
     app.include_router(config.router, prefix="/api/config", tags=["config"])

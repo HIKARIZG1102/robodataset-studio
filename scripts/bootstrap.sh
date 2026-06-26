@@ -237,7 +237,7 @@ try:
     print("rclpy: OK")
 except Exception as exc:
     print(f"rclpy: unavailable ({exc}); real ROS recording needs ROS2 sourced before launch")
-print("RoboDataset Studio V3 bootstrap complete.")
+print("RoboDataset Studio bootstrap complete.")
 PY
 
 echo "Environment: ${ENV_KIND}"

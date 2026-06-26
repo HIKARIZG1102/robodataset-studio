@@ -138,6 +138,9 @@
 - Recording session folder names now include microseconds and backend PID to reduce accidental name collisions.
 - Recording start/simulate lock conflicts now return readable HTTP 409 errors instead of generic backend failures.
 - README now explains Docker/host concurrent startup behavior and same-project write protection.
+- User-facing app title is now `RoboDataset Studio` in the PySide title bar, About dialog, FastAPI docs title, README, and launcher/bootstrap messages.
+- Settings and Inspector Chinese translations now include newly added maintenance/image-monitor/session-AI buttons.
+- Runtime button text such as graph refresh and model refresh now restores through the active language instead of falling back to English.
 
 ## Verification
 
@@ -165,6 +168,8 @@
 - Verified two local backend managers with an existing `8765` listener start on `8766` and `8767`, and stopping one does not stop the other.
 - Verified project locks block a second acquisition inside the same backend process.
 - Verified project locks block a second acquisition from another process and report the holder PID/purpose.
+- Local offscreen UI smoke test confirmed the window title has no V3 and Chinese menu/Settings/Inspector buttons translate.
+- Docker offscreen UI smoke test confirmed the mounted Docker app title and Chinese menu/Settings/Inspector buttons translate.
 
 ## Issues Encountered
 

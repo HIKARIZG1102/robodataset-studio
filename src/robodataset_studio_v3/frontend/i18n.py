@@ -19,10 +19,11 @@ from PySide6.QtWidgets import (
 
 
 I18N_SOURCE_PROP = "robodataset_i18n_source_text"
+I18N_NO_TRANSLATE_PROP = "robodataset_i18n_no_translate"
 
 
 TEXTS: dict[str, dict[str, str]] = {
-    "RoboDataset Studio V3": {"zh": "RoboDataset Studio V3", "en": "RoboDataset Studio V3"},
+    "RoboDataset Studio": {"zh": "RoboDataset Studio", "en": "RoboDataset Studio"},
     "File": {"zh": "文件", "en": "File"},
     "Project": {"zh": "项目", "en": "Project"},
     "New Project": {"zh": "新建项目", "en": "New Project"},
@@ -72,6 +73,7 @@ TEXTS: dict[str, dict[str, str]] = {
     "About": {"zh": "关于", "en": "About"},
     "Refresh Nodes/Topics": {"zh": "刷新节点/Topics", "en": "Refresh Nodes/Topics"},
     "Refreshing...": {"zh": "刷新中...", "en": "Refreshing..."},
+    "Checking...": {"zh": "检查中...", "en": "Checking..."},
     "Project: none | Config: none": {"zh": "项目：无 | 配置：无", "en": "Project: none | Config: none"},
     "Create or open a project to start.": {"zh": "创建或打开项目后开始。", "en": "Create or open a project to start."},
     "Project Config": {"zh": "项目配置", "en": "Project Config"},
@@ -96,6 +98,7 @@ TEXTS: dict[str, dict[str, str]] = {
     "Save Settings": {"zh": "保存设置", "en": "Save Settings"},
     "General": {"zh": "通用", "en": "General"},
     "Advanced YAML": {"zh": "高级 YAML", "en": "Advanced YAML"},
+    "Maintenance": {"zh": "维护", "en": "Maintenance"},
     "Language": {"zh": "语言", "en": "Language"},
     "Enable AI": {"zh": "启用 AI", "en": "Enable AI"},
     "OpenAI-compatible base URL": {"zh": "OpenAI 兼容 Base URL", "en": "OpenAI-compatible base URL"},
@@ -106,6 +109,13 @@ TEXTS: dict[str, dict[str, str]] = {
     "Prompt budget": {"zh": "Prompt 字符预算", "en": "Prompt budget"},
     "Probe stdout budget": {"zh": "探测输出预算", "en": "Probe stdout budget"},
     "Model status": {"zh": "模型状态", "en": "Model status"},
+    "Refresh Environment Diagnostics": {"zh": "刷新环境诊断", "en": "Refresh Environment Diagnostics"},
+    "Refresh Maintenance Status": {"zh": "刷新维护状态", "en": "Refresh Maintenance Status"},
+    "Clean Recycle Bin": {"zh": "清理回收站", "en": "Clean Recycle Bin"},
+    "Clear Log Cache": {"zh": "清理日志缓存", "en": "Clear Log Cache"},
+    "Summary": {"zh": "摘要", "en": "Summary"},
+    "Issues": {"zh": "问题", "en": "Issues"},
+    "Details": {"zh": "详情", "en": "Details"},
     "AI settings are stored locally and are not written into total_config.yaml.": {
         "zh": "AI 设置只保存在本机，不写入 total_config.yaml。",
         "en": "AI settings are stored locally and are not written into total_config.yaml.",
@@ -163,6 +173,7 @@ TEXTS: dict[str, dict[str, str]] = {
     "Status": {"zh": "状态", "en": "Status"},
     "Path": {"zh": "路径", "en": "Path"},
     "Select All": {"zh": "全选", "en": "Select All"},
+    "Select All Episodes": {"zh": "全选 Episodes", "en": "Select All Episodes"},
     "Clear": {"zh": "清空选择", "en": "Clear"},
     "Invert": {"zh": "反选", "en": "Invert"},
     "Scan Sessions": {"zh": "扫描 Sessions", "en": "Scan Sessions"},
@@ -197,8 +208,11 @@ TEXTS: dict[str, dict[str, str]] = {
     },
     "Selected NPZ Details": {"zh": "选中 NPZ 详情", "en": "Selected NPZ Details"},
     "AI Review": {"zh": "AI 检查", "en": "AI Review"},
+    "AI Session Review": {"zh": "AI Session 检查", "en": "AI Session Review"},
     "Default AI Review Prompt": {"zh": "默认 AI 检查 Prompt", "en": "Default AI Review Prompt"},
     "Send AI Review": {"zh": "发送 AI 检查", "en": "Send AI Review"},
+    "Build Session AI Prompt": {"zh": "生成 Session AI Prompt", "en": "Build Session AI Prompt"},
+    "Send Session AI Review": {"zh": "发送 Session AI 检查", "en": "Send Session AI Review"},
     "Inspect HDF5": {"zh": "检查 HDF5", "en": "Inspect HDF5"},
     "Run HDF5 Checks": {"zh": "运行 HDF5 检查", "en": "Run HDF5 Checks"},
     "Show HDF5 Structure": {"zh": "查看 HDF5 结构", "en": "Show HDF5 Structure"},
@@ -252,6 +266,8 @@ TEXTS: dict[str, dict[str, str]] = {
     "Topic Inspector": {"zh": "Topic 检查器", "en": "Topic Inspector"},
     "Image Monitor": {"zh": "图像监视", "en": "Image Monitor"},
     "Node": {"zh": "节点", "en": "Node"},
+    "Topic": {"zh": "Topic", "en": "Topic"},
+    "Image": {"zh": "图像", "en": "Image"},
     "Start node info": {"zh": "开始节点信息", "en": "Start node info"},
     "Stop node info": {"zh": "停止节点信息", "en": "Stop node info"},
     "Generic topic": {"zh": "通用 Topic", "en": "Generic topic"},
@@ -264,8 +280,11 @@ TEXTS: dict[str, dict[str, str]] = {
     "Topic Hz": {"zh": "Topic 频率", "en": "Topic Hz"},
     "Image monitor topic": {"zh": "图像监视 Topic", "en": "Image monitor topic"},
     "Sync image from project": {"zh": "从项目同步图像", "en": "Sync image from project"},
+    "Sync from project": {"zh": "从项目同步", "en": "Sync from project"},
     "Start image monitor": {"zh": "开始图像监视", "en": "Start image monitor"},
     "Stop image monitor": {"zh": "停止图像监视", "en": "Stop image monitor"},
+    "Start monitor": {"zh": "开始监视", "en": "Start monitor"},
+    "Stop monitor": {"zh": "停止监视", "en": "Stop monitor"},
     "Pause / Resume": {"zh": "暂停 / 继续", "en": "Pause / Resume"},
     "Frame stats": {"zh": "帧统计", "en": "Frame stats"},
     "Preview Log": {"zh": "预览日志", "en": "Preview Log"},
@@ -320,6 +339,18 @@ def text(value: str, language: str) -> str:
     return TEXTS[key].get(normalize_language(language), key)
 
 
+def set_source_text(obj: object, source: str) -> None:
+    setter = getattr(obj, "setProperty", None)
+    if callable(setter):
+        setter(I18N_SOURCE_PROP, source)
+
+
+def set_no_translate(obj: object) -> None:
+    setter = getattr(obj, "setProperty", None)
+    if callable(setter):
+        setter(I18N_NO_TRANSLATE_PROP, True)
+
+
 def _source_text(obj: object, current: str) -> str:
     getter = getattr(obj, "property", None)
     setter = getattr(obj, "setProperty", None)
@@ -336,10 +367,14 @@ def _source_text(obj: object, current: str) -> str:
 def apply_i18n(root: QWidget, language: str) -> None:
     language = normalize_language(language)
     if isinstance(root, QMainWindow):
+        if root.property(I18N_NO_TRANSLATE_PROP):
+            return
         root.setWindowTitle(text(_source_text(root, root.windowTitle()), language))
         _translate_menu_bar(root.menuBar(), language)
     widgets = [root, *root.findChildren(QWidget)]
     for widget in widgets:
+        if widget.property(I18N_NO_TRANSLATE_PROP):
+            continue
         if isinstance(widget, QAbstractButton):
             widget.setText(text(_source_text(widget, widget.text()), language))
         elif isinstance(widget, QLabel):
@@ -381,6 +416,8 @@ def _translate_menu_bar(menu_bar: QMenuBar, language: str) -> None:
 
 
 def _translate_action(action: QAction, language: str) -> None:
+    if action.property(I18N_NO_TRANSLATE_PROP):
+        return
     action.setText(text(_source_text(action, action.text()), language))
     menu = action.menu()
     if isinstance(menu, QMenu):

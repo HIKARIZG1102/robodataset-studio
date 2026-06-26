@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 
 from robodataset_studio_v3.frontend.api_client import ApiClient, ProjectSummary
 from robodataset_studio_v3.frontend.backend_process import BackendProcess
-from robodataset_studio_v3.frontend.i18n import apply_i18n, normalize_language, text
+from robodataset_studio_v3.frontend.i18n import apply_i18n, normalize_language, set_source_text, text
 from robodataset_studio_v3.frontend.pages.collect_page import CollectPage
 from robodataset_studio_v3.frontend.pages.convert_page import ConvertPage
 from robodataset_studio_v3.frontend.pages.logs_page import LogsPage
@@ -47,7 +47,7 @@ from robodataset_studio_v3.frontend.worker import ApiWorker
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("RoboDataset Studio V3")
+        self.setWindowTitle("RoboDataset Studio")
         self.resize(1280, 860)
         self.setMinimumSize(760, 520)
         self.api = ApiClient()
@@ -166,6 +166,7 @@ class MainWindow(QMainWindow):
 
     def _build_graph_button(self) -> None:
         refresh = QPushButton("Refresh Nodes/Topics")
+        set_source_text(refresh, "Refresh Nodes/Topics")
         refresh.setObjectName("refreshGraphButton")
         refresh.setToolTip("Refresh the global ROS nodes and topics for Config, Discovery, and Inspector.")
         refresh.setCursor(Qt.PointingHandCursor)
@@ -1147,7 +1148,7 @@ class MainWindow(QMainWindow):
         self.set_status_message("Refreshing ROS graph...")
         if self.refresh_graph_button is not None:
             self.refresh_graph_button.setEnabled(False)
-            self.refresh_graph_button.setText("Refreshing...")
+            self.refresh_graph_button.setText(text("Refreshing...", self.language))
         worker = ApiWorker(self.api.get, "/api/ros/graph", timeout=30.0)
         self._workers.append(worker)
 
@@ -1164,7 +1165,7 @@ class MainWindow(QMainWindow):
             finally:
                 if self.refresh_graph_button is not None:
                     self.refresh_graph_button.setEnabled(True)
-                    self.refresh_graph_button.setText("Refresh Nodes/Topics")
+                    self.refresh_graph_button.setText(text("Refresh Nodes/Topics", self.language))
                 if item in self._workers:
                     self._workers.remove(item)
 
@@ -1443,10 +1444,10 @@ class MainWindow(QMainWindow):
     def show_about(self) -> None:
         QMessageBox.about(
             self,
-            "About RoboDataset Studio V3",
+            "About RoboDataset Studio",
             "\n".join(
                 [
-                    "RoboDataset Studio V3",
+                    "RoboDataset Studio",
                     "Copyright (c) 2026 RoboDataset Studio contributors.",
                     "",
                     "Developers:",

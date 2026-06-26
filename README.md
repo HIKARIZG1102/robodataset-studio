@@ -1,6 +1,6 @@
-# RoboDataset Studio V3
+# RoboDataset Studio
 
-RoboDataset Studio V3 is a fresh project for the next architecture:
+RoboDataset Studio is a fresh project for the next architecture:
 
 - PySide6 remains the desktop frontend.
 - FastAPI runs as a local backend service.
@@ -22,7 +22,7 @@ backend migration is fully validated on the robot.
 
 ## ROS2-First Communication Scope
 
-RoboDataset Studio V3 is primarily a ROS2 listener-based robot dataset tool.
+RoboDataset Studio is primarily a ROS2 listener-based robot dataset tool.
 It is designed to discover existing ROS2 nodes/topics, subscribe to selected
 streams, record synchronized dataset samples, review sessions, convert outputs,
 and upload results. It does not send robot control commands by default.

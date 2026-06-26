@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from robodataset_studio_v3.frontend.api_client import ApiClient, ProjectSummary
+from robodataset_studio_v3.frontend.i18n import apply_i18n, set_source_text, text
 from robodataset_studio_v3.frontend.pages.base import BasePage
 
 
@@ -74,6 +75,8 @@ class SettingsPage(BasePage):
         buttons = QHBoxLayout()
         load = QPushButton("Load Settings")
         save = QPushButton("Save Settings")
+        set_source_text(load, "Load Settings")
+        set_source_text(save, "Save Settings")
         load.clicked.connect(self.load)
         save.clicked.connect(self.save)
         buttons.addWidget(load)
@@ -87,6 +90,7 @@ class SettingsPage(BasePage):
         ai_form.addRow("API key", self.ai_api_key)
         model_row = QHBoxLayout()
         refresh_models = QPushButton("Refresh models")
+        set_source_text(refresh_models, "Refresh models")
         self.refresh_models_button = refresh_models
         refresh_models.clicked.connect(self.refresh_models)
         model_row.addWidget(self.ai_model, 1)
@@ -105,6 +109,7 @@ class SettingsPage(BasePage):
         self.environment_widget = QWidget()
         environment_layout = QFormLayout(self.environment_widget)
         refresh_environment = QPushButton("Refresh Environment Diagnostics")
+        set_source_text(refresh_environment, "Refresh Environment Diagnostics")
         refresh_environment.clicked.connect(self.refresh_environment)
         environment_layout.addRow(refresh_environment)
         environment_layout.addRow("Summary", self.environment_summary)
@@ -117,6 +122,9 @@ class SettingsPage(BasePage):
         refresh_maintenance = QPushButton("Refresh Maintenance Status")
         cleanup_recycle = QPushButton("Clean Recycle Bin")
         clear_log_cache = QPushButton("Clear Log Cache")
+        set_source_text(refresh_maintenance, "Refresh Maintenance Status")
+        set_source_text(cleanup_recycle, "Clean Recycle Bin")
+        set_source_text(clear_log_cache, "Clear Log Cache")
         refresh_maintenance.clicked.connect(self.refresh_maintenance)
         cleanup_recycle.clicked.connect(self.cleanup_recycle_bin)
         clear_log_cache.clicked.connect(self.clear_log_cache)
@@ -188,6 +196,7 @@ class SettingsPage(BasePage):
         self.settings = saved if isinstance(saved, dict) else settings
         self.yaml_editor.setPlainText(yaml.safe_dump(self.settings, sort_keys=False, allow_unicode=True))
         self.status.setText("Settings saved")
+        apply_i18n(self, str(self.settings.get("language") or settings.get("language") or "en"))
         self.settingsSaved.emit(self.settings)
 
     def refresh_models(self) -> None:
@@ -203,7 +212,7 @@ class SettingsPage(BasePage):
             self.model_status.setText(f"checking models from {base_url.rstrip('/')}/models ...")
         if self.refresh_models_button is not None:
             self.refresh_models_button.setEnabled(False)
-            self.refresh_models_button.setText("Checking...")
+            self.refresh_models_button.setText(text("Checking...", str(self.language.currentData() or "en")))
         self.status.setText("Refreshing AI model list...")
         self.run_async(
             self.api.post,
@@ -365,7 +374,8 @@ class SettingsPage(BasePage):
     def finish_model_refresh(self, result: object, error: object) -> None:
         if self.refresh_models_button is not None:
             self.refresh_models_button.setEnabled(True)
-            self.refresh_models_button.setText("Refresh models")
+            set_source_text(self.refresh_models_button, "Refresh models")
+            self.refresh_models_button.setText(text("Refresh models", str(self.language.currentData() or "en")))
         if error is not None:
             self.model_status.setText(f"model list failed: {error}")
             self.status.setText("AI model refresh failed")
