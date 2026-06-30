@@ -11,7 +11,7 @@ services:
     user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
     environment:
       DISPLAY: ${DISPLAY}
-      XAUTHORITY: /workspace/robodataset-studio/.docker.Xauthority
+      XAUTHORITY: /tmp/robodataset-studio.Xauthority
       HOME: /workspace/robodataset-studio
       QT_X11_NO_MITSHM: "1"
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
@@ -25,6 +25,6 @@ services:
       - .:/workspace/robodataset-studio
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - /dev/shm:/dev/shm
-      - ${XAUTHORITY:-${HOME}/.Xauthority}:/workspace/robodataset-studio/.docker.Xauthority:ro
+      - ${XAUTHORITY:-${HOME}/.Xauthority}:/tmp/robodataset-studio.Xauthority:ro
       - /opt/ros:/opt/ros:ro
     devices: []

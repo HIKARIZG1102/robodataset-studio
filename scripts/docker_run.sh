@@ -10,6 +10,7 @@ IMAGE_REF="${IMAGE_NAME}:${IMAGE_TAG}"
 ROS_SETUP="${ROS_SETUP:-}"
 CONTAINER_ROS_SETUP="${ROS_SETUP}"
 XAUTHORITY_PATH="${XAUTHORITY:-}"
+CONTAINER_XAUTHORITY="/tmp/robodataset-studio.Xauthority"
 LOCAL_UID="${LOCAL_UID:-${SUDO_UID:-$(id -u)}}"
 LOCAL_GID="${LOCAL_GID:-${SUDO_GID:-$(id -g)}}"
 declare -a workspace_mounts=()
@@ -159,7 +160,7 @@ docker_args=(
   --pid host
   --user "${LOCAL_UID}:${LOCAL_GID}"
   -e DISPLAY="${DISPLAY:-}"
-  -e XAUTHORITY=/workspace/robodataset-studio/.docker.Xauthority
+  -e XAUTHORITY="${CONTAINER_XAUTHORITY}"
   -e HOME=/workspace/robodataset-studio
   -e QT_X11_NO_MITSHM=1
   -e ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
@@ -188,7 +189,7 @@ if [[ -z "${XAUTHORITY_PATH}" || ! -f "${XAUTHORITY_PATH}" ]]; then
 fi
 
 if [[ -n "${XAUTHORITY_PATH}" && -f "${XAUTHORITY_PATH}" ]]; then
-  docker_args+=(-v "${XAUTHORITY_PATH}:/workspace/robodataset-studio/.docker.Xauthority:ro")
+  docker_args+=(-v "${XAUTHORITY_PATH}:${CONTAINER_XAUTHORITY}:ro")
 fi
 
 if [[ -d /opt/ros ]]; then
