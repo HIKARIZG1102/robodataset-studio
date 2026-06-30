@@ -1160,7 +1160,16 @@ class ConfigLibraryPage(QWidget):
             self.status.setText(f"AI failed: {error}")
             return
         payload = result.get("result", result) if isinstance(result, dict) else {}
+        if isinstance(payload, dict) and payload.get("error"):
+            message = str(payload.get("error", "AI request failed"))
+            self.ai_preview.setPlainText(f"AI failed:\n{message}")
+            self.status.setText(f"AI failed: {message}")
+            return
         text = str(payload.get("response", "")) if isinstance(payload, dict) else str(result)
+        if not text.strip():
+            self.ai_preview.setPlainText("AI returned an empty response.")
+            self.status.setText("AI returned an empty response.")
+            return
         self.ai_preview.setPlainText(text)
         self.status.setText("AI response received.")
 

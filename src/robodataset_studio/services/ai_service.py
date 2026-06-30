@@ -201,7 +201,12 @@ class AiService:
             response = httpx.post(
                 url,
                 headers=headers,
-                json={"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.1},
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.1,
+                    "max_tokens": 2048,
+                },
                 timeout=90.0,
             )
             response.raise_for_status()
