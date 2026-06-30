@@ -1149,7 +1149,7 @@ class MainWindow(QMainWindow):
         if self.refresh_graph_button is not None:
             self.refresh_graph_button.setEnabled(False)
             self.refresh_graph_button.setText(text("Refreshing...", self.language))
-        worker = ApiWorker(self.api.get, "/api/ros/graph", timeout=30.0)
+        worker = ApiWorker(self.api.get, "/api/ros/graph", timeout=60.0)
         self._workers.append(worker)
 
         def finish(result: object, error: object, item: ApiWorker = worker) -> None:

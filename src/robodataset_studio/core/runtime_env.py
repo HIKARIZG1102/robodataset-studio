@@ -21,6 +21,8 @@ RMW_ERROR_PENALTY_TOKENS = (
     "open_and_lock_file failed",
     "fastrtps_port",
 )
+_ROS_SOURCED_ENV_CACHE: dict[str, dict[str, str]] = {}
+_AVAILABLE_RMW_CACHE: list[str] | None = None
 
 
 def default_ros_setup() -> str:
@@ -35,10 +37,14 @@ def default_ros_setup() -> str:
 
 
 def available_rmw_implementations() -> list[str]:
+    global _AVAILABLE_RMW_CACHE
+    if _AVAILABLE_RMW_CACHE is not None:
+        return list(_AVAILABLE_RMW_CACHE)
     found: list[str] = []
     for name in RMW_PREFERENCE:
         if _ros_package_exists(name) or _rmw_library_exists(name):
             found.append(name)
+    _AVAILABLE_RMW_CACHE = list(found)
     return found
 
 
@@ -55,11 +61,9 @@ def _ros_package_exists(name: str) -> bool:
 
 def select_rmw(explicit: str | None = None, *, probe_graph: bool = True) -> str:
     explicit = explicit or os.environ.get("ROBODATASET_RMW_IMPLEMENTATION") or os.environ.get("RMW_IMPLEMENTATION")
-    available = available_rmw_implementations()
     if explicit:
-        if explicit in available or not available:
-            return explicit
-        return available[0]
+        return explicit
+    available = available_rmw_implementations()
     if probe_graph and len(available) > 1:
         probed = _select_rmw_by_graph_probe(available)
         if probed:
@@ -91,6 +95,9 @@ def apply_ros_environment(env: dict[str, str] | None = None) -> dict[str, str]:
 def _ros_sourced_env(ros_setup: str) -> dict[str, str]:
     if not ros_setup or not Path(ros_setup).is_file():
         return {}
+    cache_key = str(Path(ros_setup).resolve())
+    if cache_key in _ROS_SOURCED_ENV_CACHE:
+        return dict(_ROS_SOURCED_ENV_CACHE[cache_key])
     command = (
         f"source {shlex.quote(ros_setup)} >/dev/null 2>&1 || exit 1; "
         "python3 - <<'PY'\n"
@@ -99,7 +106,7 @@ def _ros_sourced_env(ros_setup: str) -> dict[str, str]:
         "PY"
     )
     try:
-        completed = subprocess.run(["/bin/bash", "-lc", command], check=False, capture_output=True, text=True, timeout=3)
+        completed = subprocess.run(["/bin/bash", "-lc", command], check=False, capture_output=True, text=True, timeout=12)
     except Exception:
         return {}
     if completed.returncode != 0:
@@ -110,7 +117,9 @@ def _ros_sourced_env(ros_setup: str) -> dict[str, str]:
         payload = json.loads(completed.stdout)
     except Exception:
         return {}
-    return {str(key): str(value) for key, value in payload.items()}
+    result = {str(key): str(value) for key, value in payload.items()}
+    _ROS_SOURCED_ENV_CACHE[cache_key] = dict(result)
+    return result
 
 
 def _rmw_library_exists(name: str) -> bool:
@@ -165,8 +174,8 @@ def _rmw_graph_score(name: str) -> int:
     lines = [line for line in completed.stdout.splitlines() if line.strip()]
     score = len(lines)
     output = completed.stdout
-    if any(token in combined for token in RMW_ERROR_PENALTY_TOKENS):
-        score -= 5000
+    # FastDDS can print shared-memory lock warnings while still discovering the
+    # graph correctly. Treat successful graph content as authoritative.
     if "sensor_msgs/msg/Image" in output:
         score += 1000
     if "sensor_msgs/msg/CompressedImage" in output:

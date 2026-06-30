@@ -86,7 +86,6 @@ rmw_graph_score() {
   fi
   count="$(printf '%s\n' "${output}" | grep -v 'RTPS_TRANSPORT_SHM Error\\|Failed init_port\\|open_and_lock_file failed\\|fastrtps_port' | sed '/^[[:space:]]*$/d' | wc -l)"
   weighted="$((count))"
-  if printf '%s\n' "${output}" | grep -qE 'RTPS_TRANSPORT_SHM Error|Failed init_port|open_and_lock_file failed|fastrtps_port'; then weighted="$((weighted - 5000))"; fi
   if printf '%s\n' "${output}" | grep -q 'sensor_msgs/msg/Image'; then weighted="$((weighted + 1000))"; fi
   if printf '%s\n' "${output}" | grep -q 'sensor_msgs/msg/CompressedImage'; then weighted="$((weighted + 800))"; fi
   if printf '%s\n' "${output}" | grep -q 'sensor_msgs/msg/JointState'; then weighted="$((weighted + 1000))"; fi

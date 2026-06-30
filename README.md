@@ -67,8 +67,10 @@ the mounted checkout. Use paths under:
 /workspace/robodataset-studio
 ```
 
-The wrapper also mounts `/opt/ros` read-only when it exists and runs with host
-networking and host IPC, which is required for normal ROS2/DDS discovery:
+The wrapper also mounts `/opt/ros` read-only when it exists and starts Docker
+with host networking, host IPC, host PID, privileged mode, and shared
+`/dev/shm`. This matches ROS2/DDS discovery behavior on machines where FastDDS
+or camera/robot nodes rely on host shared memory and process namespace access:
 
 ```bash
 ROS_SETUP=/opt/ros/humble/setup.bash ./scripts/docker_run.sh
@@ -81,6 +83,13 @@ ROS_SETUP=/path/to/overlay/install/setup.bash \
 ROS_WORKSPACE_MOUNTS=/path/to/overlay:/another/overlay \
 ./scripts/docker_run.sh
 ```
+
+If the launch shell already sourced ROS overlay workspaces, the Docker wrapper
+auto-detects workspace roots from `COLCON_PREFIX_PATH` and `AMENT_PREFIX_PATH`
+and mounts them read-only. Set `ROS_WORKSPACE_MOUNTS` only when the automatic
+detection misses a required workspace. Prefer the top-level overlay setup file
+that already chains its dependencies. The container sources `ROS_SETUP`; it does
+not directly reuse host `PYTHONPATH` or `LD_LIBRARY_PATH`.
 
 ### Local Runtime
 

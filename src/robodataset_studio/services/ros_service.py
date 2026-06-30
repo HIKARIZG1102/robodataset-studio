@@ -18,26 +18,26 @@ from robodataset_studio.services.task_service import task_service
 
 
 class RosService:
-    def graph(self, *, topic_samples: int = 3, node_samples: int = 1, service_samples: int = 1) -> dict[str, Any]:
+    def graph(self, *, topic_samples: int = 1, node_samples: int = 1, service_samples: int = 1) -> dict[str, Any]:
         topics_result = self._sample_ros_graph(
             ["ros2", "topic", "list", "--no-daemon", "-t"],
             ["ros2", "topic", "list", "-t"],
             parser=self._parse_name_type_lines,
-            timeout=4,
+            timeout=3,
             samples=topic_samples,
         )
         nodes_result = self._sample_ros_graph(
             ["ros2", "node", "list", "--no-daemon"],
             ["ros2", "node", "list"],
             parser=self._parse_name_lines,
-            timeout=3,
+            timeout=2,
             samples=node_samples,
         )
         services_result = self._sample_ros_graph(
             ["ros2", "service", "list", "--no-daemon", "-t"],
             ["ros2", "service", "list", "-t"],
             parser=self._parse_name_type_lines,
-            timeout=3,
+            timeout=2,
             samples=service_samples,
         )
         available = bool(topics_result.get("ok") or nodes_result.get("ok") or services_result.get("ok"))
@@ -676,7 +676,10 @@ class RosService:
         return last
 
     def _rmw_candidates(self) -> list[str]:
-        configured = select_rmw(os.environ.get("RMW_IMPLEMENTATION") or os.environ.get("ROBODATASET_RMW_IMPLEMENTATION"))
+        configured = os.environ.get("RMW_IMPLEMENTATION") or os.environ.get("ROBODATASET_RMW_IMPLEMENTATION")
+        if configured:
+            return [configured]
+        configured = select_rmw()
         candidates = [
             configured,
             *available_rmw_implementations(),

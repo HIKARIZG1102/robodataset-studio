@@ -6,6 +6,8 @@ services:
       dockerfile: Dockerfile
     network_mode: host
     ipc: host
+    pid: host
+    privileged: true
     user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
     environment:
       DISPLAY: ${DISPLAY}
@@ -17,16 +19,12 @@ services:
       ROS_SETUP: ${ROS_SETUP:-/opt/ros/humble/setup.bash}
       ROBODATASET_RMW_IMPLEMENTATION: ${ROBODATASET_RMW_IMPLEMENTATION:-}
       RMW_IMPLEMENTATION: ${RMW_IMPLEMENTATION:-}
-      AMENT_PREFIX_PATH: ${AMENT_PREFIX_PATH:-}
-      CMAKE_PREFIX_PATH: ${CMAKE_PREFIX_PATH:-}
-      COLCON_PREFIX_PATH: ${COLCON_PREFIX_PATH:-}
-      LD_LIBRARY_PATH: ${LD_LIBRARY_PATH:-}
-      PYTHONPATH: ${PYTHONPATH:-}
       ROBODATASET_DOCKER: "1"
       ROBODATASET_ALLOWED_ROOT: /workspace/robodataset-studio
     volumes:
       - .:/workspace/robodataset-studio
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - /dev/shm:/dev/shm
       - ${XAUTHORITY:-${HOME}/.Xauthority}:/workspace/robodataset-studio/.docker.Xauthority:ro
       - /opt/ros:/opt/ros:ro
     devices: []

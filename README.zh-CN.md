@@ -67,8 +67,10 @@ Docker 模式为了避免“容器里看不见宿主机路径”的黑盒问题�
 /workspace/robodataset-studio/robodataset/projects
 ```
 
-如果需要使用 ROS2，启动脚本会尽量挂载 `/opt/ros` 并使用 host network / host
-IPC，让容器能看见宿主机 ROS graph：
+如果需要使用 ROS2，启动脚本会尽量挂载 `/opt/ros`，并默认使用 host network、
+host IPC、host PID、privileged 模式和共享 `/dev/shm`。这可以贴近宿主机
+ROS2/DDS 发现行为，适配依赖 FastDDS 共享内存、相机节点或机器人节点进程命名空间
+访问的环境：
 
 ```bash
 ROS_SETUP=/opt/ros/humble/setup.bash ./scripts/docker_run.sh
@@ -81,6 +83,13 @@ ROS_SETUP=/path/to/overlay/install/setup.bash \
 ROS_WORKSPACE_MOUNTS=/path/to/overlay:/another/overlay \
 ./scripts/docker_run.sh
 ```
+
+如果启动前的 shell 已经 source 过 ROS overlay，Docker 启动脚本会从
+`COLCON_PREFIX_PATH` 和 `AMENT_PREFIX_PATH` 自动推断 workspace 根目录，并只读
+挂载进去。只有自动检测漏掉必需工作空间时，才需要手动填写
+`ROS_WORKSPACE_MOUNTS`。建议优先填写已经串起依赖链的最上层 overlay
+`install/setup.bash`。容器内会 source `ROS_SETUP`，不会直接复用宿主机的
+`PYTHONPATH` 或 `LD_LIBRARY_PATH`。
 
 ## 方式 B：本地脚本运行
 

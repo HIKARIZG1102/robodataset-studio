@@ -63,7 +63,7 @@ class RosPage(BasePage):
 
     def graph(self) -> None:
         self.status.setText("Refreshing ROS graph...")
-        self._start_worker(self.api.get, self._finish_graph, "/api/ros/graph", timeout=30.0)
+        self._start_worker(self.api.get, self._finish_graph, "/api/ros/graph", timeout=60.0)
 
     def _finish_graph(self, result: object, error: object) -> None:
         if error is not None:

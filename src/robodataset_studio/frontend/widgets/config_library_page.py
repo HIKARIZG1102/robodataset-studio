@@ -596,7 +596,7 @@ class ConfigLibraryPage(QWidget):
 
     def refresh_ros_graph(self) -> None:
         self.status.setText("Refreshing ROS graph...")
-        self.run_async(self.api.get, self.finish_ros_graph, "/api/ros/graph", timeout=30.0)
+        self.run_async(self.api.get, self.finish_ros_graph, "/api/ros/graph", timeout=60.0)
 
     def ensure_ros_graph_loaded(self) -> None:
         topics = self.graph_data.get("topics", []) if isinstance(self.graph_data, dict) else []
