@@ -38,7 +38,7 @@ cd robodataset-studio
 ```bash
 cd robodataset-studio
 docker pull ghcr.io/hikarizg1102/robodataset-studio:latest
-IMAGE_NAME=ghcr.io/hikarizg1102/robodataset-studio ./scripts/docker_run.sh
+./scripts/docker_run.sh
 ```
 
 `scripts/docker_run.sh` 会自动把当前 git clone 下来的仓库目录挂载到容器内：
@@ -85,11 +85,11 @@ ROS_WORKSPACE_MOUNTS=/path/to/overlay:/another/overlay \
 ```
 
 如果启动前的 shell 已经 source 过 ROS overlay，Docker 启动脚本会从
-`COLCON_PREFIX_PATH` 和 `AMENT_PREFIX_PATH` 自动推断 workspace 根目录，并只读
-挂载进去。只有自动检测漏掉必需工作空间时，才需要手动填写
-`ROS_WORKSPACE_MOUNTS`。建议优先填写已经串起依赖链的最上层 overlay
-`install/setup.bash`。容器内会 source `ROS_SETUP`，不会直接复用宿主机的
-`PYTHONPATH` 或 `LD_LIBRARY_PATH`。
+`COLCON_PREFIX_PATH` 和 `AMENT_PREFIX_PATH` 自动推断 workspace 根目录，只读挂载
+进去，并生成一个临时 setup chain：容器内会依次 source `/opt/ros` 和所有检测到
+的 overlay setup 文件。只有自动检测漏掉必需工作空间时，才需要手动填写
+`ROS_WORKSPACE_MOUNTS`。容器不会直接复用宿主机的 `PYTHONPATH` 或
+`LD_LIBRARY_PATH`，而是通过 source ROS setup 文件重建这些路径。
 
 ## 方式 B：本地脚本运行
 

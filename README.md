@@ -53,7 +53,7 @@ Or run the published image:
 ```bash
 cd robodataset-studio
 docker pull ghcr.io/hikarizg1102/robodataset-studio:latest
-IMAGE_NAME=ghcr.io/hikarizg1102/robodataset-studio ./scripts/docker_run.sh
+./scripts/docker_run.sh
 ```
 
 `scripts/docker_run.sh` computes the repository root from its own location and
@@ -86,10 +86,11 @@ ROS_WORKSPACE_MOUNTS=/path/to/overlay:/another/overlay \
 
 If the launch shell already sourced ROS overlay workspaces, the Docker wrapper
 auto-detects workspace roots from `COLCON_PREFIX_PATH` and `AMENT_PREFIX_PATH`
-and mounts them read-only. Set `ROS_WORKSPACE_MOUNTS` only when the automatic
-detection misses a required workspace. Prefer the top-level overlay setup file
-that already chains its dependencies. The container sources `ROS_SETUP`; it does
-not directly reuse host `PYTHONPATH` or `LD_LIBRARY_PATH`.
+and mounts them read-only. It also creates a temporary setup chain that sources
+`/opt/ros` and every detected overlay setup file inside the container. Set
+`ROS_WORKSPACE_MOUNTS` only when the automatic detection misses a required
+workspace. The container does not directly reuse host `PYTHONPATH` or
+`LD_LIBRARY_PATH`; it reconstructs them by sourcing ROS setup files.
 
 ### Local Runtime
 
