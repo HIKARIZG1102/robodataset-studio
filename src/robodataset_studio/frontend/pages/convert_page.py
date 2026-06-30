@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QApplication, QComboBox, QFileDialog, QFormLayout, QHeaderView, QHBoxLayout, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, QWidget
+from PySide6.QtWidgets import QApplication, QComboBox, QFileDialog, QFormLayout, QHeaderView, QHBoxLayout, QLineEdit, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QWidget
 
 from robodataset_studio.frontend.api_client import ApiClient, ProjectSummary
 from robodataset_studio.frontend.pages.base import BasePage
@@ -92,6 +92,11 @@ class ConvertPage(BasePage):
 
     def _convert(self, path: str, status: str) -> None:
         selected = self.selected_session_paths()
+        if not selected:
+            message = "No sessions selected. Click Scan Sessions first, then keep at least one session checked."
+            self.status.setText(message)
+            QMessageBox.warning(self, "Convert", message)
+            return
         payload = {"sessions": selected, "output_dir": self.output_dir.text().strip(), "output_name": self.output_name.text().strip()}
         self.status.setText(f"{status}...")
         self.run_async(self.api.post, lambda result, error: self._finish_convert_start(result, error, status), path, payload, timeout=20.0)
