@@ -1178,6 +1178,11 @@ class ConfigLibraryPage(QWidget):
         match = re.search(r"```(?:yaml|yml|json)?\s*(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
         if match:
             text = match.group(1).strip()
+        elif text.startswith("```"):
+            lines = text.splitlines()[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            text = "\n".join(lines).strip()
         try:
             config = yaml.safe_load(text)
             if not isinstance(config, dict):

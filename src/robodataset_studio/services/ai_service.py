@@ -60,8 +60,13 @@ class AiService:
         return "\n".join(
             [
                 "You are helping generate the dataset_config section for RoboDataset Studio.",
-                "Return valid YAML only.",
-                "Return only the dataset_config mapping. Do not wrap it under total_config.",
+                "Output contract: return plain YAML text only.",
+                "Do not use Markdown fences. Do not output ```yaml or ``` anywhere.",
+                "Do not add explanations, comments, prose, headings, or surrounding text.",
+                "The first non-empty character of your reply must be a YAML key character, not a backtick.",
+                "Return only the dataset_config mapping. Do not wrap it under total_config or dataset_config.",
+                "The first top-level key should be one of: environment, instruction, robot, cameras, streams, state, action, recording, dataset, warnings.",
+                "Return a complete YAML document with all opened lists and mappings closed.",
                 "Do not include project name or project version: those belong to the project, not the reusable config.",
                 "Use only selected ROS topics, topic info, echo samples, and hz checks to fill cameras/streams/state/action.",
                 "Selected/listener ROS topics belong to total_config.ros, not dataset_config. Do not include a ros section in the returned dataset_config.",
@@ -205,7 +210,7 @@ class AiService:
                     "model": model,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.1,
-                    "max_tokens": 2048,
+                    "max_tokens": 8192,
                 },
                 timeout=90.0,
             )
