@@ -39,21 +39,32 @@ Python/Qt environment. The repository folder is mounted into the container at
 `/workspace/robodataset-studio`, so project files created in Docker are normal
 host files under the checkout.
 
-Run Docker commands from the repository root, the directory that contains
-`Dockerfile`, `README.md`, and `scripts/`:
+Install Docker on Ubuntu if it is not already available:
 
 ```bash
-cd robodataset-studio
-./scripts/docker_build.sh
-./scripts/docker_run.sh
+sudo apt-get update
+sudo apt-get install -y docker.io
+sudo systemctl enable --now docker
+sudo usermod -aG docker "$USER"
 ```
 
-Or run the published image:
+Log out and log back in after `usermod`, or use the sudo command shown below for
+the current shell.
+
+Run the published image from the repository root, the directory that contains
+`Dockerfile`, `README.md`, and `scripts/`:
 
 ```bash
 cd robodataset-studio
 docker pull ghcr.io/hikarizg1102/robodataset-studio:latest
 ./scripts/docker_run.sh
+```
+
+If Docker still reports permission denied in the current login session:
+
+```bash
+cd robodataset-studio
+sudo -E env ./scripts/docker_run.sh
 ```
 
 `scripts/docker_run.sh` computes the repository root from its own location and
@@ -70,17 +81,19 @@ the mounted checkout. Use paths under:
 The wrapper also mounts `/opt/ros` read-only when it exists and starts Docker
 with host networking, host IPC, host PID, privileged mode, and shared
 `/dev/shm`. This matches ROS2/DDS discovery behavior on machines where FastDDS
-or camera/robot nodes rely on host shared memory and process namespace access:
+or camera/robot nodes rely on host shared memory and process namespace access.
+For ROS2, source the host ROS environment first, then run the same command:
 
 ```bash
-ROS_SETUP=/opt/ros/humble/setup.bash ./scripts/docker_run.sh
+source /opt/ros/humble/setup.bash
+./scripts/docker_run.sh
 ```
 
-For extra ROS overlay workspaces:
+For extra ROS overlay workspaces, source them before launch:
 
 ```bash
-ROS_SETUP=/path/to/overlay/install/setup.bash \
-ROS_WORKSPACE_MOUNTS=/path/to/overlay:/another/overlay \
+source /opt/ros/humble/setup.bash
+source /path/to/overlay/install/setup.bash
 ./scripts/docker_run.sh
 ```
 
@@ -91,6 +104,22 @@ and mounts them read-only. It also creates a temporary setup chain that sources
 `ROS_WORKSPACE_MOUNTS` only when the automatic detection misses a required
 workspace. The container does not directly reuse host `PYTHONPATH` or
 `LD_LIBRARY_PATH`; it reconstructs them by sourcing ROS setup files.
+
+Manual override is still available when a workspace is not visible in the
+current shell:
+
+```bash
+ROS_WORKSPACE_MOUNTS=/path/to/ws1:/path/to/ws2 \
+RMW_IMPLEMENTATION=rmw_fastrtps_cpp \
+./scripts/docker_run.sh
+```
+
+To build the image locally instead of using the published image:
+
+```bash
+./scripts/docker_build.sh
+./scripts/docker_run.sh
+```
 
 ### Local Runtime
 

@@ -24,21 +24,32 @@ Docker 安装和本地脚本安装二选一即可。
 Docker 适合新机器快速启动，因为 Python、Qt、FastAPI 等软件依赖都在镜像里。
 宿主机仍需要 Docker、图形桌面，以及用于 ROS 发现的 ROS2 环境。
 
-Docker 命令需要在 git clone 下来的仓库根目录运行，也就是包含 `Dockerfile`、
-`README.md`、`scripts/` 的目录：
+如果机器还没有 Docker，先安装：
 
 ```bash
-cd robodataset-studio
-./scripts/docker_build.sh
-./scripts/docker_run.sh
+sudo apt-get update
+sudo apt-get install -y docker.io
+sudo systemctl enable --now docker
+sudo usermod -aG docker "$USER"
 ```
 
-如果使用已经发布的镜像：
+执行 `usermod` 后需要注销并重新登录；当前 shell 里还没有 Docker 权限时，可以
+先用下面的 sudo 运行命令。
+
+Docker 命令需要在 git clone 下来的仓库根目录运行，也就是包含 `Dockerfile`、
+`README.md`、`scripts/` 的目录。使用已经发布的镜像：
 
 ```bash
 cd robodataset-studio
 docker pull ghcr.io/hikarizg1102/robodataset-studio:latest
 ./scripts/docker_run.sh
+```
+
+如果当前登录会话仍然提示没有 Docker 权限：
+
+```bash
+cd robodataset-studio
+sudo -E env ./scripts/docker_run.sh
 ```
 
 `scripts/docker_run.sh` 会自动把当前 git clone 下来的仓库目录挂载到容器内：
@@ -70,17 +81,18 @@ Docker 模式为了避免“容器里看不见宿主机路径”的黑盒问题�
 如果需要使用 ROS2，启动脚本会尽量挂载 `/opt/ros`，并默认使用 host network、
 host IPC、host PID、privileged 模式和共享 `/dev/shm`。这可以贴近宿主机
 ROS2/DDS 发现行为，适配依赖 FastDDS 共享内存、相机节点或机器人节点进程命名空间
-访问的环境：
+访问的环境。使用 ROS2 时，先在宿主机 source ROS，再运行同一个启动命令：
 
 ```bash
-ROS_SETUP=/opt/ros/humble/setup.bash ./scripts/docker_run.sh
+source /opt/ros/humble/setup.bash
+./scripts/docker_run.sh
 ```
 
-如果机器人或相机消息包在额外 overlay 工作空间里，把 overlay 只读挂进去：
+如果机器人或相机消息包在额外 overlay 工作空间里，启动前先 source overlay：
 
 ```bash
-ROS_SETUP=/path/to/overlay/install/setup.bash \
-ROS_WORKSPACE_MOUNTS=/path/to/overlay:/another/overlay \
+source /opt/ros/humble/setup.bash
+source /path/to/overlay/install/setup.bash
 ./scripts/docker_run.sh
 ```
 
@@ -90,6 +102,21 @@ ROS_WORKSPACE_MOUNTS=/path/to/overlay:/another/overlay \
 的 overlay setup 文件。只有自动检测漏掉必需工作空间时，才需要手动填写
 `ROS_WORKSPACE_MOUNTS`。容器不会直接复用宿主机的 `PYTHONPATH` 或
 `LD_LIBRARY_PATH`，而是通过 source ROS setup 文件重建这些路径。
+
+如果自动检测漏掉了某个 workspace，仍然可以手动覆盖：
+
+```bash
+ROS_WORKSPACE_MOUNTS=/path/to/ws1:/path/to/ws2 \
+RMW_IMPLEMENTATION=rmw_fastrtps_cpp \
+./scripts/docker_run.sh
+```
+
+如果想在本机重新构建镜像，而不是使用发布镜像：
+
+```bash
+./scripts/docker_build.sh
+./scripts/docker_run.sh
+```
 
 ## 方式 B：本地脚本运行
 
