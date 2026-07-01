@@ -5,7 +5,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from threading import Event
 from uuid import uuid4
 
@@ -86,79 +86,22 @@ class RosEpisodeRecorder:
             duration = float(duration_sec if duration_sec is not None else recording.get("episode_duration_sec") or 2.0)
             steps = max(int(round(sample_rate * duration)), min_steps)
 
-        frames, states, diagnostics = self._capture_streams(
-            image_streams,
-            joint_streams,
-            generic_streams,
-            steps,
-            sample_rate,
-            min_steps=min_steps,
-            cancel_event=cancel_event,
-        )
-        warnings: list[str] = list(diagnostics.get("warnings", []))
-        arrays: dict[str, np.ndarray] = {}
-        for stream in image_streams:
-            name = str(stream.get("name") or stream.get("topic") or "image").strip("/")
-            output_key = self._stream_output_key(stream)
-            stream_frames = frames.get(name, [])
-            if not stream_frames:
-                warnings.append(f"no frames captured for {name}")
-                continue
-            arrays[output_key] = np.stack(stream_frames, axis=0)
-        for stream in generic_streams:
-            name = str(stream.get("name") or stream.get("topic") or "stream").strip("/")
-            output_key = self._stream_output_key(stream)
-            values = frames.get(name, [])
-            if not values:
-                warnings.append(f"no messages captured for {name} [{stream.get('message_type', '')}]")
-                continue
-            try:
-                arrays[output_key] = np.stack(values, axis=0)
-            except ValueError as exc:
-                raise RuntimeError(f"inconsistent sample shape for {name} [{stream.get('message_type', '')}]: {exc}") from exc
-
-        captured_state_names: list[str] = []
-        for stream in joint_streams:
-            name = str(stream.get("name") or "robot_obs")
-            values = states.get(name, [])
-            if values:
-                arrays[name] = np.stack(values, axis=0).astype(np.float32)
-                captured_state_names.append(name)
-            else:
-                warnings.append(f"no JointState messages captured for {stream.get('source_topic')}")
-
-        if not arrays:
-            raise RuntimeError("no samples were captured from configured ROS2 streams; " + "; ".join(warnings))
-
-        actual_steps = min(array.shape[0] for array in arrays.values())
-        for name, array in list(arrays.items()):
-            arrays[name] = array[:actual_steps]
-
+        warnings: list[str] = []
         dataset_cfg = config.get("dataset", {})
         requires_actions = bool(dataset_cfg.get("requires_actions", True))
-        primary_state_name = self._action_source_state_name(config, joint_streams, captured_state_names)
+        primary_state_name = self._action_source_state_name(config, joint_streams, [str(stream.get("name") or "robot_obs") for stream in joint_streams])
         if requires_actions and not primary_state_name:
             state_dim = int(config.get("action", {}).get("dim") or 0)
-            arrays["robot_obs"] = np.zeros((actual_steps, max(state_dim, 1)), dtype=np.float32)
             primary_state_name = "robot_obs"
-            warnings.append("no JointState state stream captured; placeholder robot_obs/actions were generated")
-        if requires_actions and primary_state_name in arrays:
-            actions = self._derive_actions(config, arrays[primary_state_name], actual_steps)
-            arrays["rel_actions"] = actions
-            arrays["actions"] = actions.copy()
+            warnings.append("no JointState state stream configured; placeholder robot_obs/actions were generated")
 
-        metadata = self._metadata_payload(config, actual_steps, image_streams, joint_streams, generic_streams, warnings)
-        metadata["steps"] = actual_steps
-        metadata["captured_streams"] = list(arrays)
-        metadata["state_topics"] = [stream.get("source_topic", "") for stream in joint_streams]
-        metadata["warnings"] = warnings
-        metadata["diagnostics"] = self._json_clean(diagnostics)
+        metadata = self._metadata_payload(config, 0, image_streams, joint_streams, generic_streams, warnings)
         metadata["source"] = "ros2_listener"
         metadata["mock"] = False
         metadata["runtime"] = config.get("runtime", {})
         legacy_metadata = {
             "mock": False,
-            "steps": actual_steps,
+            "steps": 0,
             "source": "ros2_listener",
             "streams": [stream.get("name", "") for stream in image_streams],
             "state_topics": [stream.get("source_topic", "") for stream in joint_streams],
@@ -169,29 +112,101 @@ class RosEpisodeRecorder:
             "instruction": config.get("instruction", {}),
             "dataset": config.get("dataset", {}),
             "warnings": warnings,
-            "diagnostics": self._json_clean(diagnostics),
+            "diagnostics": {},
         }
         metadata.setdefault("legacy", legacy_metadata)
+
         episodes_dir.mkdir(parents=True, exist_ok=True)
-        transition_count = max(actual_steps - 1, 0) if requires_actions else actual_steps
-        if transition_count <= 0:
-            raise RuntimeError("at least 1 synchronized sample is required to write dataset files")
         first_path = episodes_dir / f"episode_{episode_index:07d}.npz"
-        for offset in range(transition_count):
-            transition = {
-                name: array[offset]
-                for name, array in arrays.items()
-                if name not in {"rel_actions", "actions"}
-            }
+        written_count = 0
+        captured_stream_names: set[str] = set()
+        previous_sample: dict[str, np.ndarray] | None = None
+
+        def sample_to_transition(sample: dict[str, np.ndarray], next_sample: dict[str, np.ndarray] | None) -> dict[str, np.ndarray] | None:
+            nonlocal written_count
+            arrays = dict(sample)
             if requires_actions:
-                transition["rel_actions"] = arrays["rel_actions"][offset]
-                transition["actions"] = arrays["actions"][offset]
-            transition.update(self._metadata_npz_fields(metadata, offset))
-            path = episodes_dir / f"episode_{episode_index + offset:07d}.npz"
+                if primary_state_name not in arrays:
+                    state_dim = int(config.get("action", {}).get("dim") or 0)
+                    arrays[primary_state_name] = np.zeros((max(state_dim, 1),), dtype=np.float32)
+                if next_sample is None:
+                    return None
+                if primary_state_name not in next_sample:
+                    state_dim = int(config.get("action", {}).get("dim") or 0)
+                    next_state = np.zeros((max(state_dim, 1),), dtype=np.float32)
+                else:
+                    next_state = next_sample[primary_state_name]
+                pair = np.stack([arrays[primary_state_name], next_state], axis=0).astype(np.float32)
+                action = self._derive_actions(config, pair, 2)[0]
+                arrays["rel_actions"] = action
+                arrays["actions"] = action.copy()
+            return arrays
+
+        def write_transition(arrays: dict[str, np.ndarray]) -> None:
+            nonlocal written_count
+            captured_stream_names.update(arrays)
+            arrays = {
+                name: value
+                for name, value in arrays.items()
+                if name not in {"rel_actions", "actions"}
+            } | {
+                name: value
+                for name, value in arrays.items()
+                if name in {"rel_actions", "actions"}
+            }
+            metadata["captured_streams"] = list(captured_stream_names)
+            metadata["state_topics"] = [stream.get("source_topic", "") for stream in joint_streams]
+            metadata["warnings"] = warnings
+            metadata["steps"] = written_count + 1
+            metadata["stats"]["synchronized_samples"] = written_count + 1
+            legacy = metadata.get("legacy")
+            if isinstance(legacy, dict):
+                legacy["steps"] = written_count + 1
+                legacy["warnings"] = warnings
+            transition = dict(arrays)
+            transition.update(self._metadata_npz_fields(metadata, written_count))
+            path = episodes_dir / f"episode_{episode_index + written_count:07d}.npz"
             self._write_npz_atomic(path, transition)
-        self._write_session_metadata(config, episodes_dir, metadata, episode_index, episode_index + transition_count - 1)
-        self._write_language_annotations(config, episodes_dir, episode_index, episode_index + transition_count - 1)
-        return RosEpisodeResult(path=first_path, steps=transition_count, streams=list(arrays), warnings=warnings)
+            written_count += 1
+
+        def on_sample(sample: dict[str, np.ndarray]) -> None:
+            nonlocal previous_sample
+            if requires_actions:
+                if previous_sample is not None:
+                    transition = sample_to_transition(previous_sample, sample)
+                    if transition is not None:
+                        write_transition(transition)
+                previous_sample = sample
+                return
+            write_transition(sample)
+
+        diagnostics = self._capture_streams(
+            image_streams,
+            joint_streams,
+            generic_streams,
+            steps,
+            sample_rate,
+            min_steps=min_steps,
+            cancel_event=cancel_event,
+            on_sample=on_sample,
+        )
+        warnings.extend(str(item) for item in diagnostics.get("warnings", []) if str(item) not in warnings)
+        if written_count <= 0:
+            raise RuntimeError("at least 1 synchronized sample is required to write dataset files; " + "; ".join(warnings))
+        metadata["steps"] = written_count
+        metadata["captured_streams"] = list(captured_stream_names)
+        metadata["state_topics"] = [stream.get("source_topic", "") for stream in joint_streams]
+        metadata["warnings"] = warnings
+        metadata["diagnostics"] = self._json_clean(diagnostics)
+        metadata["stats"]["synchronized_samples"] = written_count
+        legacy = metadata.get("legacy")
+        if isinstance(legacy, dict):
+            legacy["steps"] = written_count
+            legacy["warnings"] = warnings
+            legacy["diagnostics"] = self._json_clean(diagnostics)
+        self._write_session_metadata(config, episodes_dir, metadata, episode_index, episode_index + written_count - 1)
+        self._write_language_annotations(config, episodes_dir, episode_index, episode_index + written_count - 1)
+        return RosEpisodeResult(path=first_path, steps=written_count, streams=list(captured_stream_names), warnings=warnings)
 
     def _sync_core_schema(self, config: dict) -> None:
         for stream in config.get("streams", []):
@@ -412,7 +427,8 @@ class RosEpisodeRecorder:
         *,
         min_steps: int = 1,
         cancel_event: Event | None = None,
-    ) -> tuple[dict[str, list[np.ndarray]], dict[str, list[np.ndarray]], dict[str, object]]:
+        on_sample: Callable[[dict[str, np.ndarray]], None] | None = None,
+    ) -> dict[str, object]:
         if os.environ.get("ROBODATASET_DISABLE_FASTDDS_SHM", "1") == "1":
             profile = Path(__file__).resolve().parents[3] / "config" / "fastdds_no_shm.xml"
             if profile.exists():
@@ -435,11 +451,11 @@ class RosEpisodeRecorder:
         executor = SingleThreadedExecutor(context=context)
         executor.add_node(node)
         latest: dict[str, tuple[bytes, dict[str, object]]] = {}
-        captured: dict[str, list[np.ndarray]] = {str(stream.get("name") or stream.get("topic")): [] for stream in image_streams}
+        captured_counts: dict[str, int] = {str(stream.get("name") or stream.get("topic")): 0 for stream in image_streams}
         latest_generic: dict[str, object] = {}
-        captured_generic: dict[str, list[np.ndarray]] = {str(stream.get("name") or stream.get("topic")): [] for stream in generic_streams}
+        captured_generic_counts: dict[str, int] = {str(stream.get("name") or stream.get("topic")): 0 for stream in generic_streams}
         latest_states: dict[str, np.ndarray] = {}
-        captured_states: dict[str, list[np.ndarray]] = {str(stream.get("name") or "robot_obs"): [] for stream in joint_streams}
+        captured_state_counts: dict[str, int] = {str(stream.get("name") or "robot_obs"): 0 for stream in joint_streams}
         diagnostics: dict[str, object] = {"warnings": [], "decode_errors": {}, "subscribed": []}
 
         def warn_once(text: str) -> None:
@@ -550,43 +566,64 @@ class RosEpisodeRecorder:
                 now = time.time()
                 if now < next_sample_at:
                     continue
-                for stream_name in list(captured):
-                    sample = latest.get(stream_name)
-                    if sample is None:
+                sample: dict[str, np.ndarray] = {}
+                sample_ready = True
+                for stream in image_streams:
+                    stream_name = str(stream.get("name") or stream.get("topic"))
+                    output_key = self._stream_output_key(stream)
+                    image_sample = latest.get(stream_name)
+                    if image_sample is None:
+                        sample_ready = False
                         continue
-                    data, meta = sample
+                    data, meta = image_sample
                     frame = (
                         compressed_image_to_rgb(data, meta)
                         if meta.get("message_type") == "sensor_msgs/msg/CompressedImage"
                         else image_bytes_to_array(data, meta)
                     )
                     if frame is not None:
-                        captured[stream_name].append(frame)
+                        sample[output_key] = frame
                     else:
+                        sample_ready = False
                         add_decode_error(
                             stream_name,
                             f"image decode failed for encoding={meta.get('encoding') or meta.get('format')} type={meta.get('message_type')}",
                         )
                 for stream in generic_streams:
                     stream_name = str(stream.get("name") or stream.get("topic"))
+                    output_key = self._stream_output_key(stream)
                     message = latest_generic.get(stream_name)
                     if message is None:
+                        sample_ready = False
                         continue
                     result = ros_message_to_array(message, str(stream.get("message_type") or ""))
                     if result.array is not None:
-                        captured_generic[stream_name].append(result.array)
+                        sample[output_key] = result.array
+                    else:
+                        sample_ready = False
                     if result.error:
                         add_decode_error(stream_name, result.error)
                     if result.warning:
                         warn_once(result.warning)
-                for stream_name in list(captured_states):
+                for stream_name in list(captured_state_counts):
                     state = latest_states.get(stream_name)
                     if state is not None:
-                        captured_states[stream_name].append(state.copy())
+                        sample[stream_name] = state.copy()
+                    else:
+                        sample_ready = False
+                if sample_ready and sample:
+                    if on_sample is not None:
+                        on_sample(sample)
+                    for stream_name in captured_counts:
+                        captured_counts[stream_name] += 1
+                    for stream_name in captured_generic_counts:
+                        captured_generic_counts[stream_name] += 1
+                    for stream_name in captured_state_counts:
+                        captured_state_counts[stream_name] += 1
                 target = steps if steps is not None else min_steps
-                image_ready = all(len(values) >= target for values in captured.values() if values is not None)
-                generic_ready = all(len(values) >= target for values in captured_generic.values() if values is not None)
-                state_ready = all(len(values) >= target for values in captured_states.values() if values is not None)
+                image_ready = all(count >= target for count in captured_counts.values())
+                generic_ready = all(count >= target for count in captured_generic_counts.values())
+                state_ready = all(count >= target for count in captured_state_counts.values())
                 if steps is not None and image_ready and generic_ready and state_ready:
                     break
                 next_sample_at = now + 1.0 / max(sample_rate, 1.0)
@@ -598,13 +635,22 @@ class RosEpisodeRecorder:
             node.destroy_node()
             context.try_shutdown()
 
-        for stream in generic_streams:
-            stream_name = str(stream.get("name") or stream.get("topic"))
-            captured[stream_name] = captured_generic.get(stream_name, [])
         for stream_name, errors in (diagnostics.get("decode_errors", {}) if isinstance(diagnostics.get("decode_errors"), dict) else {}).items():
             if errors:
                 warn_once(f"{stream_name}: " + "; ".join(str(item) for item in errors[:3]))
-        return captured, captured_states, diagnostics
+        for stream_name, count in {
+            **captured_counts,
+            **captured_generic_counts,
+            **captured_state_counts,
+        }.items():
+            if count <= 0:
+                warn_once(f"no samples captured for {stream_name}")
+        diagnostics["captured_counts"] = {
+            **captured_counts,
+            **captured_generic_counts,
+            **captured_state_counts,
+        }
+        return diagnostics
 
 
 def joint_state_to_robot_obs(
